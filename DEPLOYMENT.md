@@ -107,7 +107,7 @@ Replace `<YOUR_USERNAME>/<YOUR_REPO>` with your actual GitHub path.
 cd backend
 docker compose up -d --build
 ```
-
+ 
 - `-d` runs containers in the background (detached mode)
 - `--build` rebuilds the image from the Dockerfile
 
