@@ -3,7 +3,7 @@ name: Deploy to EC2
 on:
   push:
     branches:
-      - vyach
+      - main
 
 jobs:
   deploy:
@@ -19,11 +19,11 @@ jobs:
         script: |
           # Navigate to the project directory
           # Ensure this path matches where you cloned the repo on the server
-          cd ~/football-analytics-hackathon
+          cd ~/tumai-makeathon-2026
 
           # Pull the latest changes from the main branch
           git fetch origin
-          git reset --hard origin/vyach
+          git reset --hard origin/main
           
           # Navigate to backend directory
           cd backend
