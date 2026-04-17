@@ -1,0 +1,22 @@
+# Data Analysis
+pandas>=2.0.0
+numpy>=1.24.0
+
+# Visualization
+matplotlib>=3.7.0
+seaborn>=0.12.0
+plotly>=5.15.0
+
+# Jupyter Notebooks
+jupyter>=1.0.0
+jupyterlab>=4.0.0
+
+# Data Loading
+requests>=2.31.0
+
+# Testing
+pytest>=7.4.0
+
+# Optional: Advanced Football Analytics
+mplsoccer>=1.1.0  # Football pitch visualizations
+# statsbombpy>=1.0.0  # StatsBomb data API

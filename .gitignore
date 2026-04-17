@@ -1,0 +1,63 @@
+# Virtual enviroments
+venv/
+ENV/
+env/
+
+# Cache
+**/__pycache__/
+*.py[cod]
+*$py.class
+
+# JetBrains stuff
+.idea/
+
+# Data
+*.parquet
+*.zip
+*.csv
+data/
+
+# OS Files
+.DS_Store
+thumbs.db
+
+# Logs and temproraries
+*.log
+
+*.pem
+*.pub
+
+# SSH keys
+.ssh
+# Virtual environment
+venv/
+.venv/
+env/
+
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+.Python
+*.egg-info/
+dist/
+build/
+
+# IDE
+.idea/
+.vscode/
+*.swp
+*.swo
+
+# Jupyter
+.ipynb_checkpoints/
+
+# Data files (large)
+data/*.xml
+data/*.csv
+
+# OS
+.DS_Store
+Thumbs.db
+
