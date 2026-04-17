@@ -22,7 +22,7 @@ For security, we don't put credentials in the code. We use GitHub Secrets.
 | `EC2_SSH_KEY` | The **entire content** of your `.pem` private key file. Open it with a text editor and copy everything, including `-----BEGIN RSA PRIVATE KEY-----` and `-----END RSA PRIVATE KEY-----`. |
 
 ## Step 2: Create the Workflow File
-
+ 
 1.  In your project root, create a directory named `.github/workflows` if it doesn't exist.
 2.  Create a file named `deploy.yml` inside it (`.github/workflows/deploy.yml`).
 3.  Paste the following content:
