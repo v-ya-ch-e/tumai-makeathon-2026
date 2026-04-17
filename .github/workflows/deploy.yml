@@ -12,25 +12,26 @@ jobs:
     steps:
     - name: Deploy to EC2
       uses: appleboy/ssh-action@v1.0.3
+      env:
+        GH_TOKEN: ${{ github.token }}
+        REPO: ${{ github.repository }}
       with:
         host: ${{ secrets.EC2_HOST }}
         username: ${{ secrets.EC2_USERNAME }}
         key: ${{ secrets.EC2_SSH_KEY }}
+        envs: GH_TOKEN,REPO
+        script_stop: true
         script: |
-          # Navigate to the project directory
-          # Ensure this path matches where you cloned the repo on the server
           cd ~/tumai-makeathon-2026
 
-          # Pull the latest changes from the main branch
+          git remote set-url origin "https://x-access-token:${GH_TOKEN}@github.com/${REPO}.git"
           git fetch origin
           git reset --hard origin/main
-          
-          # Navigate to backend directory
+          git remote set-url origin "https://github.com/${REPO}.git"
+
           cd backend
 
-          # Rebuild and restart containers
           docker compose down
           docker compose up -d --build
           
-          # Clean up unused images to save space
           docker image prune -f
