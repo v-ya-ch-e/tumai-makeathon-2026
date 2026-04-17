@@ -1,6 +1,23 @@
 # CLAUDE.md
 
-Behavioral guidelines to reduce common LLM coding mistakes. Merge with project-specific instructions as needed.
+## Project context
+
+This repository is our **TUM.ai Makeathon 2026** submission for Reply's [*The Campus Co-Pilot Suite*](context/CHALLENGE_BRIEF.md) challenge: build an autonomous AI agent (or multi-agent system) that takes concrete actions across TUM's fragmented digital ecosystem (TUMonline, Moodle, ZHS, Mensa, Matrix, Confluence, …) using AWS Bedrock. The code is a FastAPI backend under [`backend/`](backend/) ([`backend/app/main.py`](backend/app/main.py)) deployed per the recipes in [`DEPLOYMENT.md`](DEPLOYMENT.md) and [`CI-CONFIGURATION.md`](CI-CONFIGURATION.md).
+
+### Context files (`context/`)
+
+Read these in order when picking up the project:
+
+- [`context/CHALLENGE_OVERVIEW.md`](context/CHALLENGE_OVERVIEW.md) — one-page orientation: sponsor, Reply room 1100, Discord, deadlines.
+- [`context/CHALLENGE_BRIEF.md`](context/CHALLENGE_BRIEF.md) — **primary** — verbatim Reply challenge description from [`DataReply/makeathon`](https://github.com/DataReply/makeathon).
+- [`context/TUM_SYSTEMS.md`](context/TUM_SYSTEMS.md) — APIs and scraping approaches for every TUM system the agent may touch.
+- [`context/AWS_RESOURCES.md`](context/AWS_RESOURCES.md) — Bedrock models, `eu.` inference profiles, S3 / S3 Vectors, credentials, troubleshooting.
+- [`context/CODE_EXAMPLES.md`](context/CODE_EXAMPLES.md) — copy-paste-ready Python + TypeScript snippets plus a FastAPI port of the reference RAG server.
+- [`context/EVENT_LOGISTICS.md`](context/EVENT_LOGISTICS.md) — timetable, rooms, food, overnight rules.
+
+## Behavioral guidelines
+
+Guidelines to reduce common LLM coding mistakes. Merge with project-specific instructions as needed.
 
 **Tradeoff:** These guidelines bias toward caution over speed. For trivial tasks, use judgment.
 
