@@ -1,0 +1,85 @@
+{% extends "base.html" %}
+{% block title %}WG Hunter · start a hunt{% endblock %}
+{% block body %}
+<section class="hero">
+  <h1>Find me a room.</h1>
+  <p class="lead">
+    The agent logs into <code>wg-gesucht.de</code>, searches listings that match your
+    requirements, contacts landlords in their own language, and confirms a viewing
+    appointment when they propose one. You stay informed via a live action log.
+  </p>
+</section>
+
+<section class="card">
+  <h2>Start a new hunt</h2>
+  <form id="hunt-form">
+    <fieldset>
+      <legend>Room</legend>
+      <div class="grid">
+        <label>City<input name="city" value="München" required /></label>
+        <label>Max rent (€)<input name="max_rent_eur" type="number" value="700" min="100" max="3000" required /></label>
+        <label>Min size (m²)<input name="min_size_m2" type="number" value="12" min="5" max="80" /></label>
+        <label>Max size (m²)<input name="max_size_m2" type="number" value="40" min="5" max="200" /></label>
+        <label>Min WG size<input name="min_wg_size" type="number" value="2" min="1" max="12" /></label>
+        <label>Max WG size<input name="max_wg_size" type="number" value="8" min="1" max="20" /></label>
+        <label class="full">Preferred districts (comma-separated)<input name="preferred_districts" placeholder="Maxvorstadt, Schwabing" /></label>
+        <label class="full">Notes for the agent
+          <textarea name="notes" rows="2" placeholder="I'm an MSc CS student at TUM, I like climbing and cooking."></textarea>
+        </label>
+      </div>
+    </fieldset>
+
+    <fieldset>
+      <legend>Student profile</legend>
+      <div class="grid">
+        <label>First name<input name="first_name" required /></label>
+        <label>Last name<input name="last_name" /></label>
+        <label>Age<input name="age" type="number" min="16" max="99" value="23" required /></label>
+        <label>Email<input name="email" type="email" required /></label>
+        <label>Phone<input name="phone" /></label>
+        <label>Occupation<input name="occupation" value="MSc Informatics, TU Munich" /></label>
+        <label class="full">Bio (optional)<textarea name="bio" rows="2"></textarea></label>
+      </div>
+    </fieldset>
+
+    <fieldset>
+      <legend>wg-gesucht credentials</legend>
+      <div class="grid">
+        <label>Username / email<input name="wg_username" required autocomplete="off" /></label>
+        <label>Password<input name="wg_password" type="password" required autocomplete="new-password" /></label>
+        <label class="full">Playwright storage_state.json path (optional, recommended)
+          <input name="storage_state_path" placeholder="/absolute/path/to/wg_state.json" />
+        </label>
+      </div>
+    </fieldset>
+
+    <fieldset>
+      <legend>Execution</legend>
+      <div class="row">
+        <label class="checkbox"><input type="checkbox" name="dry_run" checked /> Dry run (don't actually send messages)</label>
+        <label class="checkbox"><input type="checkbox" name="headless" /> Headless browser</label>
+        <label>Max messages<input name="max_messages_to_send" type="number" value="5" min="1" max="15" /></label>
+        <label>Max listings<input name="max_listings_to_consider" type="number" value="20" min="1" max="100" /></label>
+      </div>
+    </fieldset>
+
+    <button type="submit" class="primary">Start autonomous hunt</button>
+  </form>
+</section>
+
+{% if runs %}
+<section class="card">
+  <h2>Recent runs</h2>
+  <ul class="runs">
+    {% for run in runs|reverse %}
+      <li>
+        <a href="/wg/runs/{{ run.id }}">{{ run.requirements.city }} · ≤{{ run.requirements.max_rent_eur }}€ · {{ run.status.value }}</a>
+        <span class="muted">{{ run.started_at.isoformat() }}</span>
+      </li>
+    {% endfor %}
+  </ul>
+</section>
+{% endif %}
+
+<script src="/wg/static/app.js"></script>
+{% endblock %}

@@ -1,0 +1,78 @@
+{% extends "base.html" %}
+{% block title %}Run {{ run.id }} · WG Hunter{% endblock %}
+{% block body %}
+<section class="hero">
+  <h1>Hunt <code>{{ run.id }}</code></h1>
+  <p class="lead">
+    <span id="run-status" class="status-{{ run.status.value }}">{{ run.status.value }}</span>
+    · {{ run.requirements.city }} · ≤ {{ run.requirements.max_rent_eur }}€
+    {% if run.dry_run %}<span class="badge">DRY RUN</span>{% endif %}
+  </p>
+</section>
+
+<div class="split">
+  <section class="card">
+    <h2>Action log</h2>
+    <ol id="action-log" class="log">
+      {% for action in run.actions %}
+        <li data-kind="{{ action.kind.value }}">
+          <span class="kind">{{ action.kind.value }}</span>
+          <span class="summary">{{ action.summary }}</span>
+          {% if action.detail %}<pre>{{ action.detail }}</pre>{% endif %}
+        </li>
+      {% endfor %}
+    </ol>
+  </section>
+
+  <section class="card">
+    <h2>Listings considered</h2>
+    <ul id="listing-list" class="listings">
+      {% for listing in run.listings|sort(attribute='score', reverse=True) %}
+        <li>
+          <div class="listing-row">
+            <div class="score score-{{ (listing.score or 0) * 10 | round(0, 'floor') | int }}">
+              {% if listing.score is not none %}{{ (listing.score * 100) | round(0, 'floor') | int }}{% else %}—{% endif %}
+            </div>
+            <div class="listing-body">
+              <a href="{{ listing.url }}" target="_blank" rel="noopener">{{ listing.title }}</a>
+              <div class="muted">
+                {{ listing.price_eur or '?' }} € · {{ listing.size_m2 or '?' }} m² ·
+                {{ listing.wg_size or '?' }}er WG · {{ listing.district or '?' }}
+              </div>
+              {% if listing.score_reason %}<p class="muted">{{ listing.score_reason }}</p>{% endif %}
+            </div>
+          </div>
+        </li>
+      {% endfor %}
+    </ul>
+  </section>
+</div>
+
+<section class="card">
+  <h2>Messages</h2>
+  <ul class="messages">
+    {% for message in run.messages %}
+      <li class="msg msg-{{ message.direction.value }}">
+        <div class="muted">
+          {{ message.direction.value }} · listing <a href="https://www.wg-gesucht.de/{{ message.listing_id }}.html" target="_blank" rel="noopener">{{ message.listing_id }}</a> · {{ message.sent_at.isoformat() }}
+        </div>
+        <pre>{{ message.text }}</pre>
+      </li>
+    {% endfor %}
+  </ul>
+</section>
+
+{% if run.viewings %}
+<section class="card highlight">
+  <h2>Viewings secured</h2>
+  <ul>
+    {% for v in run.viewings %}<li>{{ v }}</li>{% endfor %}
+  </ul>
+</section>
+{% endif %}
+
+<script>
+  window.__RUN_ID__ = "{{ run.id }}";
+</script>
+<script src="/wg/static/run.js"></script>
+{% endblock %}
