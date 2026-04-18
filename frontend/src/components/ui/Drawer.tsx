@@ -69,7 +69,7 @@ export function Drawer({
         aria-modal
         role="dialog"
         className={clsx(
-          'fixed top-0 right-0 z-50 flex h-full flex-col rounded-l-drawer border-l border-hairline bg-surface-raised shadow-[0_24px_80px_rgba(39,33,29,0.16)] transition-transform duration-[220ms] ease-in-out',
+          'fixed top-0 right-0 z-50 flex h-full flex-col rounded-l-drawer border-l border-hairline bg-surface shadow-drawer transition-transform duration-[220ms] ease-in-out',
           widthClass,
           entered ? 'translate-x-0' : 'translate-x-full',
         )}
@@ -83,7 +83,7 @@ export function Drawer({
           <button
             type="button"
             onClick={onClose}
-            className="inline-flex h-8 w-8 shrink-0 items-center justify-center rounded text-ink-muted transition-colors duration-150 ease-out hover:bg-surface hover:text-ink"
+            className="inline-flex h-8 w-8 shrink-0 items-center justify-center rounded text-ink-muted transition-colors duration-150 ease-out hover:bg-surface-raised hover:text-ink"
             aria-label="Close"
           >
             <span className="text-lg leading-none">✕</span>

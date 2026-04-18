@@ -48,9 +48,8 @@ export function ProgressSteps({
     )
     if (i > 0) {
       parts.push(
-        <span key={`sep-${i}`} className="text-ink-muted">
-          {' '}
-          /{' '}
+        <span key={`sep-${i}`} className="text-ink-muted/70">
+          ·
         </span>,
       )
     }
@@ -81,5 +80,5 @@ export function ProgressSteps({
       ),
     )
   }
-  return <p className={clsx('font-sans text-[13px] tracking-[0.08em]', className)}>{parts}</p>
+  return <p className={clsx('flex flex-wrap items-center gap-2 text-[13px]', className)}>{parts}</p>
 }
