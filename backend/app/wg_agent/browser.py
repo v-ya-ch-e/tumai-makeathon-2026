@@ -3,7 +3,7 @@
 Defensive parsing: regex + BeautifulSoup over the HTML the browser renders, so
 small DOM changes on the site don't kill the agent.
 
-See ./WG_GESUCHT.md for the recon notes that justify every selector here.
+See docs/WG_GESUCHT.md for the recon notes that justify every selector here.
 """
 
 from __future__ import annotations

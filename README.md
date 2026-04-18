@@ -1,32 +1,20 @@
 # TUM.ai Makeathon 2026 · Campus Co-Pilot
 
-Our submission for Reply's **The Campus Co-Pilot Suite** challenge: autonomous
-agents that take concrete actions across the university's fragmented digital
-ecosystem so that students can stop acting as human APIs.
+Our submission for Reply's **The Campus Co-Pilot Suite** challenge: autonomous agents that take concrete actions across the university's fragmented digital ecosystem so that students can stop acting as human APIs.
 
-## What's in this repo
+The active workstream is **WG Hunter** — a fully autonomous `wg-gesucht.de` room hunt that searches, ranks, and surfaces listings via a live React dashboard.
 
-| Path | What it is |
-|------|------------|
-| [`backend/`](./backend) | FastAPI backend. |
-| [`backend/app/wg_agent/`](./backend/app/wg_agent) | **The WG Hunter agent** — fully autonomous `wg-gesucht.de` room hunt: search → rank → message → schedule viewing. |
-| [`context/`](./context) | Verbatim challenge brief, TUM-systems inventory, AWS resources, code examples. |
-| [`CLAUDE.md`](./CLAUDE.md), [`AGENTS.md`](./AGENTS.md) | Coding guidelines for humans and LLM agents collaborating on this repo. |
+## Documentation
 
-## Quickstart
+All developer docs live under **[`docs/`](./docs/README.md)**. Start there:
 
-```bash
-cp .env.example .env            # fill in OPENAI_API_KEY
-cd backend
-python3 -m venv venv && source venv/bin/activate
-pip install -r requirements.txt
-python -m playwright install chromium
-uvicorn app.main:app --reload
-```
+1. [`docs/SETUP.md`](./docs/SETUP.md) — clone to running in 30 min.
+2. [`docs/ARCHITECTURE.md`](./docs/ARCHITECTURE.md) — runtime shape + request flow.
+3. [`docs/DATA_MODEL.md`](./docs/DATA_MODEL.md) — entities, ER diagram, the three-layer rule.
+4. [`docs/BACKEND.md`](./docs/BACKEND.md), [`docs/FRONTEND.md`](./docs/FRONTEND.md), [`docs/AGENT_LOOP.md`](./docs/AGENT_LOOP.md) — walkthroughs.
+5. [`docs/DESIGN.md`](./docs/DESIGN.md), [`docs/DECISIONS.md`](./docs/DECISIONS.md), [`docs/WG_GESUCHT.md`](./docs/WG_GESUCHT.md).
+6. [`docs/_generated/openapi.json`](./docs/_generated/openapi.json) — OpenAPI spec (regenerated after API changes).
 
-Open [http://127.0.0.1:8000/wg/](http://127.0.0.1:8000/wg/), fill in the hunt
-form, click **Start autonomous hunt**, and watch the live action log.
+Project context (challenge brief, TUM systems inventory, AWS notes) lives under [`context/`](./context).
 
-See [`backend/README.md`](./backend/README.md) for the full walkthrough and
-[`backend/app/wg_agent/WG_GESUCHT.md`](./backend/app/wg_agent/WG_GESUCHT.md) for
-the site-reconnaissance notes that ground the scraper.
+Coding guidelines for humans and LLM agents are in [`CLAUDE.md`](./CLAUDE.md) and [`AGENTS.md`](./AGENTS.md). Both point at `docs/README.md` first.
