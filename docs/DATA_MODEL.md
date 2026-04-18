@@ -84,8 +84,8 @@ Normalized wg-gesucht listing **for one hunt**. Composite PK `(id, hunt_id)` so 
 | `size_m2` | `Optional[float]` | |
 | `wg_size` | `Optional[int]` | |
 | `district` | `Optional[str]` | |
-| `lat` | `Optional[float]` | Filled during `anonymous_scrape_listing` by [`geocoder.geocode`](../backend/app/wg_agent/geocoder.py); `None` when the geocoder is skipped or yields no result. |
-| `lng` | `Optional[float]` | Same origin as `lat`; paired with it for future commute-based scoring. |
+| `lat` | `Optional[float]` | Populated during `anonymous_scrape_listing`: first from the listing's `map_config.markers` script block via `browser._parse_map_lat_lng` (no external call, landlord-precise), falling back to [`geocoder.geocode`](../backend/app/wg_agent/geocoder.py) for listings that don't ship a map pin. `None` when both paths are unavailable. |
+| `lng` | `Optional[float]` | Same origin as `lat`; paired with it for commute-aware scoring. |
 | `available_from` | `Optional[date]` | |
 | `available_to` | `Optional[date]` | |
 | `description` | `Optional[str]` | Filled after deep scrape. |

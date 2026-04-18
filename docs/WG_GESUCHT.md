@@ -76,11 +76,26 @@ Canonical URL `https://www.wg-gesucht.de/<id>.html` renders:
 - Address block (`Adresse`): street + postal code + Bezirk.
 - Cost table (`## Kosten`): `Miete`, `Nebenkosten`, `Sonstige Kosten`, `Kaution`, `Ablösevereinbarung`.
 - Availability table (`## Verfügbarkeit`): `frei ab`, `frei bis`.
-- Long description `<div id="freitext_description">` (bilingual in Munich).
+- Long description `<div id="ad_description_text">` wrapping ordered freitext tabs (`#freitext_0..3` = Zimmer / Lage / WG-Leben / Sonstiges); bilingual in Munich.
 - WG-Details: flatmates, ages, smoking, pets, spoken languages.
 - **Contact button** (only when logged-in): green "Nachricht senden" button → links to `/nachricht-senden/<listingId>,<offerType>,<deactivated>.html`.
 
 We scrape the listing page once per new listing to get the real description (the card text is truncated).
+
+### Stable DOM anchors
+
+[`parse_listing_page`](../backend/app/wg_agent/browser.py) prefers these anchors over `get_text` regex — the site ships a very stable pattern:
+
+| Field(s) | Anchor |
+| --- | --- |
+| `price_eur`, `Nebenkosten`, `Kaution`, etc. | `<h2>Kosten</h2>`, then rows of `span.section_panel_detail` + sibling `span.section_panel_value` inside `div.row` until the next `<h2>`. |
+| `available_from`, `available_to` | `<h2>Verfügbarkeit</h2>`, same label/value row shape. |
+| `address`, `postal_code`, `city`, `district` | `<h2>Adresse</h2>` → its `col-sm-6` wrapper → first `.section_panel_detail` (two lines: `"Straße Nr"` then `"<PLZ> <City> <District>"`). |
+| `languages`, `pets_allowed`, `smoking_ok` | `<h2>WG-Details</h2>` → `panel.panel` → `li` rows, one signal per line. |
+| `furnished` | Same WG-Details `<li>`s, plus `div.utility_icons > div.text-center` quick-facts tiles. Negations (`nicht`, `un-`, `teilweise`) are colocated on short lines, so a same-line check is reliable. |
+| `lat`, `lng` | The map snippet at the bottom of the page ships `var map_config = { ... markers: [{"lat":48.09,"lng":11.64,...}] }`. A tight regex in `browser._parse_map_lat_lng` reads the first marker; no external API call. |
+
+Every DOM path degrades to the pre-existing full-text regex if an anchor goes missing so the parser never returns `None` for a field the page actually has.
 
 ## 4. Login
 

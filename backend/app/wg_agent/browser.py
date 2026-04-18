@@ -20,7 +20,7 @@ from typing import Optional
 from urllib.parse import urlencode
 
 import httpx
-from bs4 import BeautifulSoup
+from bs4 import BeautifulSoup, Tag
 from playwright.async_api import (
     Browser,
     BrowserContext,
@@ -219,85 +219,285 @@ def parse_search_page(html: str, seen_ids: set[str] | None = None) -> list[Listi
     return out
 
 
+def _section_pairs(soup: BeautifulSoup, heading: str) -> dict[str, str]:
+    """Return `{label: value}` pairs from the panel whose `<h2>` matches `heading`.
+
+    wg-gesucht lays every "section_panel" out as `<h2>Kosten</h2>` followed by
+    rows of `<span class="section_panel_detail">Miete:</span>` +
+    `<span class="section_panel_value">995€</span>`. The `Adresse` / `Verfügbarkeit`
+    pair share a single `div.panel` parent, so we can't scope by parent; instead
+    we walk forward from the h2 until the next h2 appears.
+    """
+    h2 = soup.find(
+        "h2", string=re.compile(rf"^\s*{re.escape(heading)}\s*$")
+    )
+    if h2 is None:
+        return {}
+    out: dict[str, str] = {}
+    for node in h2.find_all_next():
+        if node is h2:
+            continue
+        if getattr(node, "name", None) == "h2":
+            break
+        if not isinstance(node, Tag):
+            continue
+        if "section_panel_detail" not in (node.get("class") or []):
+            continue
+        row = node.find_parent("div", class_="row")
+        if row is None:
+            continue
+        value = row.select_one(".section_panel_value")
+        if value is None:
+            continue
+        key = _clean(node.get_text(" ")).rstrip(":").strip()
+        out[key] = _clean(value.get_text(" "))
+    return out
+
+
+def _wg_details_lines(soup: BeautifulSoup) -> list[str]:
+    """Return the WG-Details bullet lines (one per `<li>`), empty on no panel."""
+    h2 = soup.find("h2", string=re.compile(r"^\s*WG-Details\s*$"))
+    if h2 is None:
+        return []
+    panel = h2.find_parent("div", class_="panel")
+    if panel is None:
+        return []
+    return [
+        _clean(li.get_text(" "))
+        for li in panel.select("li")
+        if _clean(li.get_text(" "))
+    ]
+
+
+def _parse_address_panel(soup: BeautifulSoup) -> tuple[
+    Optional[str], Optional[str], Optional[str], Optional[str]
+]:
+    """Return `(street, postal_code, city, district)` from the Adresse panel.
+
+    The detail span renders two lines separated by `<br/>`:
+      line 1 = street (e.g. "Fritz-Erler-Straße 32"),
+      line 2 = "<PLZ> <City> <District>" (e.g. "81737 München Ramersdorf-Perlach").
+    When the district is absent the second line is "<PLZ> <City>".
+    """
+    h2 = soup.find("h2", string=re.compile(r"^\s*Adresse\s*$"))
+    if h2 is None:
+        return None, None, None, None
+    col = h2.find_parent("div", class_="col-sm-6") or h2.find_parent("div")
+    if col is None:
+        return None, None, None, None
+    detail = col.select_one(".section_panel_detail")
+    if detail is None:
+        return None, None, None, None
+    lines = [
+        _clean(part)
+        for part in detail.get_text("\n", strip=True).split("\n")
+        if _clean(part)
+    ]
+    street = lines[0] if lines else None
+    postal_code: Optional[str] = None
+    city: Optional[str] = None
+    district: Optional[str] = None
+    if len(lines) >= 2:
+        m = re.match(r"(\d{5})\s+(\S+)(?:\s+(.+))?$", lines[1])
+        if m:
+            postal_code, city, district = m.group(1), m.group(2), m.group(3)
+    return street, postal_code, city, district
+
+
+_MAP_MARKERS_RE = re.compile(
+    r"markers\s*:\s*\[\s*\{[^}]*?\"lat\"\s*:\s*(-?\d+(?:\.\d+)?)\s*,"
+    r"\s*\"lng\"\s*:\s*(-?\d+(?:\.\d+)?)",
+    re.DOTALL,
+)
+
+
+def _parse_map_lat_lng(html: str) -> Optional[tuple[float, float]]:
+    """Extract the listing's `(lat, lng)` from the `map_config` script block.
+
+    Every detail page that renders a Leaflet map ships a JS snippet of the
+    form `var map_config = { ... markers: [{"lat":48.09, "lng":11.64, ...}] }`.
+    Reading those coords directly is more precise than the Geocoding API (we
+    get the landlord's own pin, not a best-guess geocode) and costs zero
+    external calls. Returns `None` when the block is absent or malformed.
+    """
+    match = _MAP_MARKERS_RE.search(html)
+    if not match:
+        return None
+    try:
+        return float(match.group(1)), float(match.group(2))
+    except ValueError:
+        return None
+
+
 def parse_listing_page(html: str, listing: Listing) -> Listing:
-    """Fill in long-form fields by parsing the detail page HTML."""
+    """Fill in long-form fields by parsing the detail page HTML.
+
+    Prefers scoped DOM selectors (section_panel rows, WG-Details `<li>`s,
+    Adresse detail span, `ad_description_text` container) to avoid the
+    false-positives you get when grepping the whole page text. Every DOM
+    lookup falls back to the previous regex-on-full-text behavior so a
+    future layout tweak degrades gracefully instead of returning None.
+    """
     soup = BeautifulSoup(html, "html.parser")
     full_text = _clean(soup.get_text(" "))
 
-    # Title
     h1 = soup.find("h1")
     if h1:
         listing.title = _clean(h1.get_text()) or listing.title
 
-    # Description: prefer the dedicated blocks, fall back to a big substring.
-    description_blocks: list[str] = []
-    for selector in [
-        "#freitext_description",
-        "#ad_description_text",
-        "[id^='freitext_']",
-    ]:
-        for el in soup.select(selector):
-            description_blocks.append(_clean(el.get_text(" ")))
-    if description_blocks:
-        listing.description = "\n\n".join(dict.fromkeys(description_blocks))
-    else:
-        listing.description = full_text[:4000]
+    # Description: prefer the structured container, strip embedded ad slots
+    # and scripts so the scorer doesn't see googletag/iframe noise. Never
+    # fall back to `full_text[:4000]` -- that poisons the LLM prompt with
+    # cookie banners and the login modal markup.
+    desc_parts: list[str] = []
+    desc_root = soup.select_one("#ad_description_text")
+    if desc_root is not None:
+        scrub = BeautifulSoup(str(desc_root), "html.parser")
+        for junk in scrub.select('script, iframe, [id^="div-gpt-ad-"]'):
+            junk.decompose()
+        text = scrub.get_text("\n", strip=True)
+        if text:
+            desc_parts.append(text)
+    if not desc_parts:
+        for el in soup.select("#freitext_description, [id^='freitext_']"):
+            chunk = _clean(el.get_text(" "))
+            if chunk:
+                desc_parts.append(chunk)
+    if desc_parts:
+        listing.description = "\n\n".join(dict.fromkeys(desc_parts))
 
-    # Address
-    address_heading = soup.find(string=re.compile(r"Adresse", re.I))
-    if address_heading:
-        parent = address_heading.find_parent()
-        if parent:
-            listing.address = _clean(parent.get_text(" ").replace("Adresse", ""))
+    kosten = _section_pairs(soup, "Kosten")
+    verfuegbar = _section_pairs(soup, "Verfügbarkeit")
 
-    # Availability: the labels "frei ab:" / "frei bis:" sit in one column and
-    # the date sits in the next column. We match by looking for the label and
-    # then the first date in the subsequent ~500 characters.
-    for label, attr in [
-        (r"frei\s+ab\s*:", "available_from"),
-        (r"frei\s+bis\s*:", "available_to"),
-    ]:
-        label_match = re.search(label, full_text, re.I)
+    miete_raw = kosten.get("Miete")
+    if miete_raw and not listing.price_eur:
+        price = _parse_int(miete_raw)
+        if price:
+            listing.price_eur = price
+    if not listing.price_eur:
+        miete_match = re.search(r"Miete[:\s]+(\d+(?:\.\d+)?)\s*€", full_text)
+        if miete_match:
+            listing.price_eur = int(float(miete_match.group(1)))
+
+    for label, attr in (("frei ab", "available_from"), ("frei bis", "available_to")):
+        raw = verfuegbar.get(label)
+        if raw:
+            parsed = _parse_date(raw)
+            if parsed:
+                setattr(listing, attr, parsed)
+
+    if not listing.available_from:
+        label_match = re.search(r"frei\s+ab\s*:", full_text, re.I)
         if label_match:
             tail = full_text[label_match.end() : label_match.end() + 200]
             parsed = _parse_date(tail)
             if parsed:
-                setattr(listing, attr, parsed)
+                listing.available_from = parsed
+    if not listing.available_to:
+        label_match = re.search(r"frei\s+bis\s*:", full_text, re.I)
+        if label_match:
+            tail = full_text[label_match.end() : label_match.end() + 200]
+            parsed = _parse_date(tail)
+            if parsed:
+                listing.available_to = parsed
 
-    # Rent
-    miete_match = re.search(r"Miete[:\s]+(\d+(?:\.\d+)?)\s*€", full_text)
-    if miete_match and not listing.price_eur:
-        listing.price_eur = int(float(miete_match.group(1)))
+    street, _postal, addr_city, addr_district = _parse_address_panel(soup)
+    if street:
+        listing.address = street
+    if addr_city and not listing.city:
+        listing.city = addr_city
+    if addr_district and not listing.district:
+        listing.district = addr_district
+    if not listing.address:
+        address_heading = soup.find(string=re.compile(r"Adresse", re.I))
+        if address_heading:
+            parent = address_heading.find_parent()
+            if parent:
+                listing.address = _clean(
+                    parent.get_text(" ").replace("Adresse", "")
+                )
 
-    # Size
     size_match = re.search(r"Zimmergröße\s*[:\s]+(\d+(?:[.,]\d+)?)", full_text)
     if size_match and not listing.size_m2:
         listing.size_m2 = float(size_match.group(1).replace(",", "."))
 
-    # Languages spoken
-    lang_match = re.search(r"Sprache/?n?\s*[:\s]+([A-Za-zäöüÄÖÜß,\s]+?)(?:Haustiere|Bewohner|$)", full_text)
-    if lang_match:
-        listing.languages = [
-            _clean(x) for x in re.split(r"[,/]", lang_match.group(1)) if _clean(x)
+    details = _wg_details_lines(soup)
+
+    languages: list[str] = []
+    for line in details:
+        lang_match = re.match(r"Sprache/?n?\s*:\s*(.+)$", line)
+        if lang_match:
+            languages = [
+                _clean(part)
+                for part in re.split(r"[,/]", lang_match.group(1))
+                if _clean(part)
+            ]
+            break
+    if languages:
+        listing.languages = languages
+    elif not listing.languages:
+        lang_match = re.search(
+            r"Sprache/?n?\s*[:\s]+([A-Za-zäöüÄÖÜß,\s]+?)(?:Haustiere|Bewohner|$)",
+            full_text,
+        )
+        if lang_match:
+            listing.languages = [
+                _clean(x)
+                for x in re.split(r"[,/]", lang_match.group(1))
+                if _clean(x)
+            ]
+
+    for line in details:
+        pets = re.match(r"Haustiere\s+vorhanden:\s*(Ja|Nein)\s*$", line, re.I)
+        if pets:
+            listing.pets_allowed = pets.group(1).lower() == "ja"
+            break
+        smoking_no = re.match(r"Rauchen\s+nicht\s+erw(ü|ue)nscht\s*$", line, re.I)
+        smoking_yes = re.match(r"Rauchen\s+erw(ü|ue)nscht\s*$", line, re.I)
+        if smoking_no:
+            listing.smoking_ok = False
+        elif smoking_yes:
+            listing.smoking_ok = True
+
+    if listing.pets_allowed is None:
+        if re.search(r"Haustiere[^:]*:\s*Ja", full_text, re.I):
+            listing.pets_allowed = True
+        elif re.search(r"Haustiere[^:]*:\s*Nein", full_text, re.I):
+            listing.pets_allowed = False
+    if listing.smoking_ok is None:
+        if re.search(r"Rauchen\s+nicht\s+erwünscht", full_text, re.I):
+            listing.smoking_ok = False
+        elif re.search(r"Rauchen\s+erwünscht", full_text, re.I):
+            listing.smoking_ok = True
+
+    # Furnished: only trust explicit structured signals. The old
+    # `re.search("möbliert", full_text)` triggered True on "nicht möbliert"
+    # because the negation lives 40+ chars before the keyword.
+    #
+    # The reliable sources are (a) a "möbliert" line in WG-Details and
+    # (b) a tile in the `div.utility_icons` quick-facts strip at the top
+    # of the listing. Both are short labels, so any negation adverb
+    # (`nicht`, `un-`, `teilweise`) appears on the same line.
+    if listing.furnished is None:
+        utility_tiles = [
+            _clean(tile.get_text(" "))
+            for tile in soup.select("div.utility_icons > div.text-center")
         ]
+        for line in (*details, *utility_tiles):
+            if re.search(r"m(ö|oe)bliert", line, re.I) and not re.search(
+                r"(nicht|un|teilweise)", line, re.I
+            ):
+                listing.furnished = True
+                break
 
-    # Flags
-    if re.search(r"möbliert", full_text, re.I):
-        listing.furnished = True
-    if re.search(r"Rauchen\s+nicht\s+erwünscht", full_text, re.I):
-        listing.smoking_ok = False
-    elif re.search(r"Rauchen\s+erwünscht", full_text, re.I):
-        listing.smoking_ok = True
-    if re.search(r"Haustiere[^:]*:\s*Ja", full_text, re.I):
-        listing.pets_allowed = True
-    elif re.search(r"Haustiere[^:]*:\s*Nein", full_text, re.I):
-        listing.pets_allowed = False
-
-    # WG size fallback
     if not listing.wg_size:
         wg_match = re.search(r"(\d+)er WG", full_text)
         if wg_match:
             listing.wg_size = int(wg_match.group(1))
+
+    coords = _parse_map_lat_lng(html)
+    if coords is not None:
+        listing.lat, listing.lng = coords
 
     return listing
 
@@ -549,15 +749,18 @@ async def anonymous_scrape_listing(
 ) -> Listing:
     """Deep-scrape a listing's public detail page using httpx + parse_listing_page.
 
-    After parsing, geocode the best-available address string via
-    `geocoder.geocode` so the listing carries `(lat, lng)` for future
-    commute-aware scoring. `req_city` is the search profile city used
-    as a fallback when the listing's own `city` wasn't parsed.
+    `parse_listing_page` already reads the landlord's own map pin from the
+    page's `map_config.markers` block when available. We only hit the
+    Google Geocoding API as a fallback for listings without a map pin,
+    which keeps geocoder spend close to zero on typical hunts.
     """
     async with _anon_client() as client:
         response = await client.get(str(listing.url))
         response.raise_for_status()
     parse_listing_page(response.text, listing)
+
+    if listing.lat is not None and listing.lng is not None:
+        return listing
 
     query: Optional[str] = None
     if listing.address:

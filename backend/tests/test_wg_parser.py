@@ -75,7 +75,51 @@ def test_parse_listing_page() -> None:
     assert enriched.furnished is True
 
 
+def test_parse_listing_structured_fields() -> None:
+    """The listing fixture exposes every structured field we now read
+    from section panels. Locking these down catches DOM regressions on
+    the fields the LLM scorer relies on (address, commute, dates,
+    languages, pets/smoking flags)."""
+    stub = Listing(id="13115694", url=LISTING_URL, title="stub")
+    html = _cached_fetch(LISTING_URL, "listing_13115694.html")
+    enriched = parse_listing_page(html, stub)
+
+    assert enriched.address == "Fritz-Erler-Straße 32"
+    assert enriched.city == "München"
+    assert enriched.district == "Ramersdorf-Perlach"
+
+    assert enriched.available_from.isoformat() == "2026-05-01"
+    assert enriched.available_to is not None
+    assert enriched.available_to.isoformat() == "2026-10-31"
+
+    assert enriched.languages == ["Deutsch", "Englisch"]
+    assert enriched.pets_allowed is False
+    assert enriched.smoking_ok is False
+
+    # map_config.markers ships the landlord's own pin, ~48.097/11.646.
+    assert enriched.lat is not None and enriched.lng is not None
+    assert 48.0 < enriched.lat < 48.2
+    assert 11.5 < enriched.lng < 11.8
+
+
+def test_parse_listing_description_is_not_page_chrome() -> None:
+    """The old fallback dumped `soup.get_text()[:4000]` which meant the
+    registration/login modal text and cookie banner text ended up in the
+    scoring prompt. We should only ever see the freitext container."""
+    stub = Listing(id="13115694", url=LISTING_URL, title="stub")
+    html = _cached_fetch(LISTING_URL, "listing_13115694.html")
+    enriched = parse_listing_page(html, stub)
+
+    assert enriched.description is not None
+    # Login modal boilerplate from /mein-wg-gesucht login form.
+    assert "Kostenfrei registrieren" not in enriched.description
+    # Cookie consent sentinel from the CMP banner.
+    assert "Alle akzeptieren" not in enriched.description
+
+
 if __name__ == "__main__":
     test_parse_search_page()
     test_parse_listing_page()
+    test_parse_listing_structured_fields()
+    test_parse_listing_description_is_not_page_chrome()
     print("parser smoke tests passed")

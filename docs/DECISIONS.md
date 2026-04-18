@@ -196,3 +196,18 @@ ADR index for WG Hunter. Each entry lists context, decision, consequences, and t
 **Consequences:** The three-layer pipeline changes in one coherent way — `models.py` + `dto.py` + `db_models.py` + `repo.py` all reshape the same two JSON payloads — so the grep-level footprint for "how weights flow" is small. `repo.get_search_profile` parses both new `{key, weight}` dicts and legacy bare strings (weight-3 fallback), so dev DBs that already hold pre-0005 rows don't break during migration. We add no deterministic cap on the LLM score; behaviour still depends on prompt discipline. If hackathon testing shows the LLM disregarding weight-5 items or budgets, a follow-up can add a deterministic veto on top of the current score (a natural extension of ADR-012's "follow-up if noisy" escape hatch).
 
 **Introduced in:** this commit
+
+---
+
+## ADR-014: Structured DOM selectors + `map_config.markers` coords in `parse_listing_page`
+
+- **Date:** 2026-04-18  
+- **Status:** Accepted  
+
+**Context:** The original `parse_listing_page` ran `re.search` over `soup.get_text()` for every field, and the description fallback was `full_text[:4000]`. Three problems showed up while bringing up the scorer: (a) `furnished` flipped to `True` on any listing that said "nicht möbliert" in the description (the negation lives 40+ chars before the keyword, outside the regex's reach); (b) `languages` and `pets_allowed` misfired whenever a free-text paragraph contained the label words; (c) the 4000-char fallback dumped cookie-consent markup, login-modal copy, and footer navigation into the LLM prompt. Separately, the geocoder step sat on the critical path for every listing even though the detail page already ships the landlord's own map pin inside a `map_config.markers` script block.
+
+**Decision:** Refactor `parse_listing_page` to prefer scoped DOM lookups with explicit fallbacks to the original full-text regexes. Add three helpers in [`browser.py`](../backend/app/wg_agent/browser.py): `_section_pairs` (walks forward from a section `<h2>` until the next `<h2>` to collect label/value rows — scoped enough to separate Kosten from Verfügbarkeit even though they share a `div.panel`); `_wg_details_lines` (returns the WG-Details `<li>` text in order for languages/pets/smoking); `_parse_address_panel` (splits the Adresse detail into `(street, postal_code, city, district)`); `_parse_map_lat_lng` (extracts `(lat, lng)` from the `map_config.markers` script via a narrow regex). Pull the description from `#ad_description_text` with embedded `<script>`/`<iframe>`/`div-gpt-ad-*` stripped, and never fall back to the full-page text dump. Have `anonymous_scrape_listing` trust the map-pin coordinates when present and only call the Geocoding API when they're missing. Lock every new assertion down in [`test_wg_parser.py`](../backend/tests/test_wg_parser.py) against the committed fixtures.
+
+**Consequences:** The scoring prompt now sees clean listing fields instead of menu chrome, so `brain.score_listing` has less noise to filter. `furnished` / `pets_allowed` / `smoking_ok` become trustworthy enough that a future deterministic pre-filter (see ADR-013 escape hatch) can rely on them. `listing.lat` / `listing.lng` come for free on every listing that renders a map (≈all of them), reducing Geocoding API calls to near-zero in typical hunts — the geocoder stays wired as a fallback, not a hot-path dependency. The parser still degrades gracefully when wg-gesucht tweaks a selector because each DOM path preserves its pre-existing regex fallback. No schema change, no dependency change, no new prompts or scoring logic.
+
+**Introduced in:** this commit

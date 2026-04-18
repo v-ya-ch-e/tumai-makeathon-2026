@@ -48,7 +48,7 @@ sequenceDiagram
     Engine->>Q: put_nowait(new_listing)
     API-->>SPA: SSE data: new_listing
     Engine->>WG: anonymous_scrape_listing
-    WG-->>Engine: detail HTML → enriched Listing (lat/lng via Geocoding)
+    WG-->>Engine: detail HTML → enriched Listing (lat/lng from map_config.markers, Geocoding fallback)
     opt listing.lat is not None and sp.main_locations
       Engine->>GMAPS: commute.travel_times (computeRouteMatrix, one POST per mode)
       GMAPS-->>Engine: {(place_id, mode): seconds}

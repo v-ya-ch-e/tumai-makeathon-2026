@@ -133,13 +133,13 @@ Internal helpers: `_listing_from_row`, `_default_requirements`.
 
 ## `browser.py`
 
-1. **Pure parsing** — `build_search_url`, `parse_search_page`, `parse_listing_page` (unit-tested via fixtures and `test_wg_parser`).
-2. **Anonymous httpx** — `anonymous_search`, `anonymous_scrape_listing` using shared headers, timeouts, and polite delays (`ANONYMOUS_PAGE_DELAY_SECONDS`). After parsing the detail page, `anonymous_scrape_listing` calls [`geocoder.geocode`](../backend/app/wg_agent/geocoder.py) with the best available string (`listing.address` → `"{district}, {city or req_city}"` fallback) so `listing.lat` / `listing.lng` are populated before `repo.upsert_listing` persists the row.
+1. **Pure parsing** — `build_search_url`, `parse_search_page`, `parse_listing_page` (unit-tested via fixtures and `test_wg_parser`). The detail parser prefers scoped DOM selectors over `get_text` regex: `_section_pairs` walks forward from a section `<h2>` until the next `<h2>` to collect `{label: value}` rows (Kosten, Verfügbarkeit), `_wg_details_lines` returns the WG-Details `<li>`s for languages/pets/smoking, `_parse_address_panel` splits the Adresse detail into `(street, postal_code, city, district)`, and the description comes from `#ad_description_text` with embedded `<script>`/`<iframe>`/`div-gpt-ad-*` stripped. Every DOM path falls back to the original full-text regex so a DOM shift degrades gracefully instead of nulling fields. `_parse_map_lat_lng` extracts the listing's own map pin from the `map_config.markers` script block, giving `(lat, lng)` for free (see ADR-014).
+2. **Anonymous httpx** — `anonymous_search`, `anonymous_scrape_listing` using shared headers, timeouts, and polite delays (`ANONYMOUS_PAGE_DELAY_SECONDS`). `anonymous_scrape_listing` trusts the map-pin coordinates produced by `parse_listing_page` when present and only calls [`geocoder.geocode`](../backend/app/wg_agent/geocoder.py) as a fallback (best string: `listing.address` → `"{district}, {city or req_city}"`), so `listing.lat` / `listing.lng` are populated before `repo.upsert_listing` persists the row.
 3. **Playwright driver** — `WGBrowser` (`search`, `scrape_listing`, `send_message`, `fetch_inbox`) plus `launch_browser` for authenticated flows retained for future messaging.
 
 ## `geocoder.py`
 
-Thin async client around the Google Geocoding API. `geocode(address)` returns `(lat, lng)` or `None` and never raises. Reads `GOOGLE_MAPS_SERVER_KEY` from the environment; if unset, returns `None` without touching the network so local dev works without the key. An in-process dict caches results keyed on `address.strip().lower()` (cleared when it passes 1024 entries) so rescans of the same listing don't re-bill the same string.
+Thin async client around the Google Geocoding API, used only as a fallback when `browser._parse_map_lat_lng` didn't find a map pin on the detail page (ADR-014). `geocode(address)` returns `(lat, lng)` or `None` and never raises. Reads `GOOGLE_MAPS_SERVER_KEY` from the environment; if unset, returns `None` without touching the network so local dev works without the key. An in-process dict caches results keyed on `address.strip().lower()` (cleared when it passes 1024 entries) so rescans of the same listing don't re-bill the same string.
 
 ## `commute.py`
 
@@ -160,7 +160,7 @@ Thin async client around the Google Routes API's `computeRouteMatrix`. `travel_t
 
 | File | Role | Command |
 | --- | --- | --- |
-| [`test_wg_parser.py`](../backend/tests/test_wg_parser.py) | Cached HTML fixtures; asserts parser output shape | `cd backend && python tests/test_wg_parser.py` (or `pytest tests/test_wg_parser.py`) |
+| [`test_wg_parser.py`](../backend/tests/test_wg_parser.py) | Cached HTML fixtures under `tests/fixtures/`; asserts parser output shape and locks down the structured fields the scorer relies on (address split, available-from/to, languages, pets/smoking, description-doesn't-leak-page-chrome, map-pin lat/lng) | `cd backend && python tests/test_wg_parser.py` (or `pytest tests/test_wg_parser.py`) |
 | [`test_orchestrator.py`](../backend/tests/test_orchestrator.py) | Mock browser/brain end-to-end orchestrator run | `cd backend && python tests/test_orchestrator.py` (or `pytest tests/test_orchestrator.py`) |
 | [`test_repo.py`](../backend/tests/test_repo.py) | In-memory SQLite round-trip for `repo` + crypto | `cd backend && pytest tests/test_repo.py` |
 | [`test_periodic.py`](../backend/tests/test_periodic.py) | `HuntEngine` / `PeriodicHunter` with mocked I/O (includes the commute-reaches-score and lat-missing guard cases) | `cd backend && pytest tests/test_periodic.py` |
