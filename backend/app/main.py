@@ -26,6 +26,11 @@ def healthz():
     return {"status": "ok"}
 
 
+@app.get("/api/health")
+def api_healthz():
+    return {"status": "ok"}
+
+
 @app.get("/items/{item_id}")
 def read_item(item_id: int, q: Optional[str] = None):
     return {"item_id": item_id, "q": q}
