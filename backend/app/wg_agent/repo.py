@@ -24,6 +24,7 @@ from .db_models import (
     ListingScoreRow,
     PhotoRow,
     SearchProfileRow,
+    UserNotifyRow,
     UserRow,
     WgCredentialsRow,
 )
@@ -579,3 +580,14 @@ def _best_commute_minutes(score_row: Optional[ListingScoreRow]) -> Optional[int]
         if best is None or minutes < best:
             best = minutes
     return best
+
+
+def get_notify_email(session: Session, username: str) -> Optional[str]:
+    row = session.get(UserNotifyRow, username)
+    return row.notify_email if row is not None else None
+
+
+def set_notify_email(session: Session, username: str, email: str) -> None:
+    row = UserNotifyRow(username=username, notify_email=email)
+    session.merge(row)
+    session.commit()

@@ -15,7 +15,7 @@ from typing import Optional
 
 from sqlmodel import Session
 
-from . import commute, evaluator, places, repo
+from . import commute, evaluator, notifier, places, repo
 from . import db as db_module
 from .db_models import HuntRow
 from .models import ActionKind, AgentAction, HuntStatus, NearbyPlace, SearchProfile
@@ -218,6 +218,17 @@ class HuntEngine:
                     veto_reason=listing.veto_reason,
                     scored_against_scraped_at=row.scraped_at,
                 )
+
+            with Session(db_module.engine) as session:
+                notify_email = repo.get_notify_email(session, self._username)
+            notifier.notify_if_high_score(
+                to_email=notify_email,
+                listing_title=listing.title or "",
+                listing_url=str(listing.url),
+                score=float(listing.score or 0.0),
+                match_reasons=list(listing.match_reasons),
+                hunt_id=self._hunt_id,
+            )
 
             if result.veto_reason is not None:
                 ev = AgentAction(

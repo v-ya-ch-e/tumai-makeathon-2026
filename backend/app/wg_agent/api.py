@@ -221,6 +221,8 @@ def create_user(
         gender=Gender(body.gender),
     )
     repo.create_user(session, profile=profile)
+    if body.notify_email:
+        repo.set_notify_email(session, username=body.username, email=str(body.notify_email))
     return user_to_dto(profile)
 
 
@@ -251,6 +253,8 @@ def update_user(
             created_at=existing.created_at,
         ),
     )
+    if body.notify_email:
+        repo.set_notify_email(session, username=username, email=str(body.notify_email))
     return user_to_dto(updated)
 
 

@@ -17,6 +17,12 @@ class UserRow(SQLModel, table=True):
     created_at: datetime
 
 
+class UserNotifyRow(SQLModel, table=True):
+    __tablename__ = "usernotifyrow"
+    username: str = Field(primary_key=True, foreign_key="userrow.username")
+    notify_email: str
+
+
 class WgCredentialsRow(SQLModel, table=True):
     __tablename__ = "wgcredentialsrow"
     username: str = Field(primary_key=True, foreign_key="userrow.username")

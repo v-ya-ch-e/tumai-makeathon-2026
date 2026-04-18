@@ -31,11 +31,13 @@ class CreateUserBody(BaseModel):
     username: str = Field(..., min_length=1, max_length=40)
     age: int = Field(..., ge=16, le=99)
     gender: str = Field(..., pattern=r"^(female|male|diverse|prefer_not_to_say)$")
+    notify_email: Optional[EmailStr] = None
 
 
 class UpdateUserBody(BaseModel):
     age: int = Field(..., ge=16, le=99)
     gender: str = Field(..., pattern=r"^(female|male|diverse|prefer_not_to_say)$")
+    notify_email: Optional[EmailStr] = None
 
 
 class SearchProfileDTO(BaseModel):
