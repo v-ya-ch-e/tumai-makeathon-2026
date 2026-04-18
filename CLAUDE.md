@@ -4,19 +4,20 @@ Single-page orientation for coding agents picking up this repo. Read the "Docume
 
 ## What this repo is
 
-**TUM.ai Makeathon 2026** submission for Reply's [*Campus Co-Pilot Suite*](context/CHALLENGE_BRIEF.md) challenge. The active workstream is **WG Hunter**: an autonomous `wg-gesucht.de` room-hunting agent that searches, scrapes, scores, and surfaces listings through a live React dashboard.
+**TUM.ai Makeathon 2026** submission for Reply's [*Campus Co-Pilot Suite*](context/CHALLENGE_BRIEF.md) challenge. The active workstream is **WG Hunter**: an autonomous room-and-flat-hunting agent that searches, scrapes, scores, and surfaces listings from `wg-gesucht.de`, `living.tum.de`, and `kleinanzeigen.de` through a live React dashboard.
 
-- **Backend:** FastAPI (Python 3.11+) under [`backend/`](./backend/), entrypoint [`backend/app/main.py`](./backend/app/main.py). One process hosts JSON API, SSE stream, Alembic-managed SQLite, the built SPA, and the `PeriodicHunter` agent loop.
+- **Backend:** FastAPI (Python 3.11+) under [`backend/`](./backend/), entrypoint [`backend/app/main.py`](./backend/app/main.py). One process hosts JSON API, SSE stream, the built SPA, and per-user `PeriodicUserMatcher` matcher loops. Schema is bootstrapped via `SQLModel.metadata.create_all` on MySQL (no Alembic — see [ADR-019](./docs/DECISIONS.md#adr-019-drop-alembic-use-sqlmodelmetadatacreate_all)).
+- **Scraper:** Standalone Python container ([`backend/app/scraper/`](./backend/app/scraper/)). Drives a registry of `Source` plugins ([`backend/app/scraper/sources/`](./backend/app/scraper/sources/)) — wg-gesucht (default), TUM Living, Kleinanzeigen — selectable via `SCRAPER_ENABLED_SOURCES`. Sole writer of `ListingRow` + `PhotoRow`. See [ADR-020](./docs/DECISIONS.md#adr-020-multi-source-listing-identifiers-via-string-namespacing) and [ADR-021](./docs/DECISIONS.md#adr-021-listing-kind-as-a-first-class-column).
 - **Frontend:** Vite + React 19 + TypeScript + Tailwind 3 under [`frontend/`](./frontend/), entrypoint [`frontend/src/App.tsx`](./frontend/src/App.tsx). Built output (`frontend/dist/`) is served by FastAPI.
-- **External services:** `wg-gesucht.de` (httpx scrape, no API), OpenAI (narrow `vibe_score` LLM call in the scorecard evaluator), Google Maps Platform (browser Places Autocomplete + backend Geocoding / Distance Matrix / Places (New)).
+- **External services:** `wg-gesucht.de` / `living.tum.de` / `kleinanzeigen.de` (httpx + GraphQL/HTML scraping, no first-party APIs), OpenAI (narrow `vibe_score` LLM call in the scorecard evaluator), Google Maps Platform (browser Places Autocomplete + backend Geocoding / Distance Matrix / Places (New)).
 - **Deploy:** Docker Compose on AWS EC2, CI via GitHub Actions. See [`DEPLOYMENT.md`](./DEPLOYMENT.md) and [`CI-CONFIGURATION.md`](./CI-CONFIGURATION.md).
 
 ```text
-┌──────────────┐          ┌──────────────────────────┐          ┌────────────────┐
-│ React SPA    │ ──fetch──▶ FastAPI (/api + SPA)     │ ──httpx──▶ wg-gesucht.de  │
-│ (Vite, TS)   │ ◀── SSE ──│ HuntEngine → evaluator   │ ──httpx──▶ OpenAI (vibe)  │
-└──────────────┘          │ SQLite (+ Alembic)       │ ──httpx──▶ Google Maps    │
-                          └──────────────────────────┘
+┌──────────────┐          ┌──────────────────────────┐          ┌──────────────────────────┐
+│ React SPA    │ ──fetch──▶ FastAPI (/api + SPA)     │ ──httpx──▶ wg-gesucht.de             │
+│ (Vite, TS)   │ ◀── SSE ──│ matcher → evaluator     │ ──httpx──▶ living.tum.de (GraphQL)   │
+└──────────────┘          │ MySQL (+ scraper service)│ ──httpx──▶ kleinanzeigen.de          │
+                          └──────────────────────────┘ ──httpx──▶ OpenAI + Google Maps      │
 ```
 
 Full runtime diagram: [`docs/ARCHITECTURE.md`](./docs/ARCHITECTURE.md).
@@ -42,7 +43,8 @@ Full runtime diagram: [`docs/ARCHITECTURE.md`](./docs/ARCHITECTURE.md).
 │   ├── AGENT_LOOP.md ────── one HuntEngine.run_find_only pass end-to-end
 │   ├── DESIGN.md ─────────── palette, typography, primitives, enforced rules
 │   ├── WG_GESUCHT.md ────── live recon notes + DOM selectors we depend on
-│   ├── DECISIONS.md ─────── ADR log (ADR-001 … ADR-017)
+│   ├── DECISIONS.md ─────── ADR log (ADR-001 … ADR-021)
+│   ├── MULTI_SOURCE_SCRAPER_PLAN.md  rollout plan for the multi-source scraper
 │   ├── ROADMAP.md ────────── queued / later / done-recently
 │   └── _generated/openapi.json   committed OpenAPI spec
 │
@@ -54,8 +56,9 @@ Full runtime diagram: [`docs/ARCHITECTURE.md`](./docs/ARCHITECTURE.md).
 │
 ├── backend/                 FastAPI app
 │   ├── README.md ─────────── pointer back to docs/
-│   ├── app/main.py ───────── lifespan: init_db → Alembic upgrade → resume_running_hunts → API
+│   ├── app/main.py ───────── lifespan: init_db → resume_user_agents → API (no Alembic)
 │   ├── app/wg_agent/ ────── agent package (see docs/BACKEND.md for file-by-file)
+│   ├── app/scraper/ ─────── scraper container + sources/ plugins (wg-gesucht / tum-living / kleinanzeigen) + per-site recon (README.md, SOURCE_*.md) + migrate_multi_source.py one-shot DB migration
 │   ├── alembic/versions/ ── 0001_initial … 0007_nearby_places (see docs/DATA_MODEL.md)
 │   └── tests/ ────────────── pytest suite (parser, repo, evaluator, periodic, commute, …)
 │

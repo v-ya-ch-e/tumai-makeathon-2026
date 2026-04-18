@@ -44,7 +44,8 @@ docs/
 ├── AGENT_LOOP.md ─────────── one UserAgent.run_match_pass end-to-end
 ├── DESIGN.md ─────────────── palette, typography, UI primitives, enforced rules
 ├── WG_GESUCHT.md ─────────── live recon notes + DOM selectors we depend on
-├── DECISIONS.md ──────────── ADR log (ADR-001 … ADR-017)
+├── DECISIONS.md ──────────── ADR log (ADR-001 … ADR-021)
+├── MULTI_SOURCE_SCRAPER_PLAN.md  rollout plan for the multi-source scraper (wg-gesucht / tum-living / kleinanzeigen)
 ├── ROADMAP.md ────────────── queued / later / done-recently
 └── _generated/openapi.json   committed OpenAPI spec (regenerate after API changes)
 ```
@@ -55,6 +56,7 @@ Related files outside `docs/`:
 - [`../CLAUDE.md`](../CLAUDE.md) / [`../AGENTS.md`](../AGENTS.md) — behavioral guidelines + doc tree for coding agents.
 - [`../DEPLOYMENT.md`](../DEPLOYMENT.md) / [`../CI-CONFIGURATION.md`](../CI-CONFIGURATION.md) — EC2 + GitHub Actions recipes.
 - [`../context/`](../context/) — hackathon background: challenge brief, TUM systems inventory, code samples.
+- [`../backend/app/scraper/README.md`](../backend/app/scraper/README.md) — multi-source scraper contract + per-site recon docs (`SOURCE_WG_GESUCHT.md`, `SOURCE_TUM_LIVING.md`, `SOURCE_KLEINANZEIGEN.md`).
 
 ## Read in order
 

@@ -5,7 +5,7 @@ from __future__ import annotations
 from datetime import date, datetime
 from typing import Optional
 
-from sqlalchemy import Column, JSON, LargeBinary
+from sqlalchemy import Column, JSON, LargeBinary, Text
 from sqlmodel import Field, SQLModel
 
 
@@ -50,26 +50,27 @@ class ListingRow(SQLModel, table=True):
 
     __tablename__ = "listingrow"
     id: str = Field(primary_key=True)
-    url: str
-    title: Optional[str] = None
+    url: str = Field(sa_column=Column(Text, nullable=False))
+    title: Optional[str] = Field(default=None, sa_column=Column(Text))
     price_eur: Optional[int] = None
     size_m2: Optional[float] = None
     wg_size: Optional[int] = None
-    city: Optional[str] = None
-    district: Optional[str] = None
-    address: Optional[str] = None
+    city: Optional[str] = Field(default=None, sa_column=Column(Text))
+    district: Optional[str] = Field(default=None, sa_column=Column(Text))
+    address: Optional[str] = Field(default=None, sa_column=Column(Text))
     lat: Optional[float] = None
     lng: Optional[float] = None
     available_from: Optional[date] = None
     available_to: Optional[date] = None
-    description: Optional[str] = None
+    description: Optional[str] = Field(default=None, sa_column=Column(Text))
     furnished: Optional[bool] = None
     pets_allowed: Optional[bool] = None
     smoking_ok: Optional[bool] = None
     languages: Optional[list] = Field(default=None, sa_column=Column(JSON))
+    kind: str = Field(default="wg", index=True)
     scrape_status: str = Field(default="stub", index=True)
     scraped_at: Optional[datetime] = Field(default=None, index=True)
-    scrape_error: Optional[str] = None
+    scrape_error: Optional[str] = Field(default=None, sa_column=Column(Text))
     first_seen_at: datetime
     last_seen_at: datetime
     deleted_at: Optional[datetime] = Field(default=None, index=True)

@@ -9,6 +9,7 @@ change without requiring a real Playwright run.
 from __future__ import annotations
 
 import pathlib
+import re
 import sys
 
 sys.path.insert(0, str(pathlib.Path(__file__).resolve().parent.parent))
@@ -49,10 +50,11 @@ def test_parse_search_page() -> None:
     html = _cached_fetch(SEARCH_URL, "search_muenchen.html")
     listings = parse_search_page(html)
     assert listings, "Expected at least one listing in search results"
-    # Sanity on basic invariants.
     for listing in listings:
-        assert listing.id.isdigit(), f"bad id {listing.id}"
-        assert str(listing.url).endswith(f"{listing.id}.html") or "/wg-zimmer-in-" in str(listing.url)
+        assert re.match(r"^wg-gesucht:\d{5,9}$", listing.id), f"bad id {listing.id}"
+        assert listing.kind == "wg"
+        bare_id = listing.id.split(":", 1)[1]
+        assert str(listing.url).endswith(f"{bare_id}.html") or "/wg-zimmer-in-" in str(listing.url)
         if listing.price_eur is not None:
             assert 100 <= listing.price_eur <= 3000
         if listing.size_m2 is not None:

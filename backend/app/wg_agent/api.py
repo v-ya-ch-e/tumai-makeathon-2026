@@ -331,6 +331,7 @@ def _get_listing_detail(
         username=username,
         url=row.url,
         title=row.title,
+        kind=repo._kind_from_row(row),
         district=row.district,
         lat=row.lat,
         lng=row.lng,

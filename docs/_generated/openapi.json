@@ -1055,6 +1055,21 @@
             ],
             "title": "Title"
           },
+          "kind": {
+            "anyOf": [
+              {
+                "type": "string",
+                "enum": [
+                  "wg",
+                  "flat"
+                ]
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Kind"
+          },
           "district": {
             "anyOf": [
               {

@@ -298,6 +298,61 @@ def test_list_scorable_listings_for_user_excludes_scored_and_deleted() -> None:
     assert b_candidates == {"g1", "g2"}
 
 
+def test_list_scorable_listings_filters_by_mode() -> None:
+    """G3: a user with mode='flat' only sees kind='flat' candidates; mode='wg'
+    only sees kind='wg'; mode='both' (or None) sees everything."""
+    engine = _make_engine()
+    with Session(engine) as session:
+        repo.create_user(
+            session, profile=UserProfile(username="u", age=22, gender=Gender.female)
+        )
+
+        for lid, kind in (
+            ("wg-gesucht:wg-1", "wg"),
+            ("wg-gesucht:wg-2", "wg"),
+            ("kleinanzeigen:flat-1", "flat"),
+            ("tum-living:flat-2", "flat"),
+        ):
+            repo.upsert_global_listing(
+                session,
+                listing=Listing(
+                    id=lid,
+                    url=HttpUrl(f"https://example.com/{lid}"),
+                    title=f"Listing {lid}",
+                    kind=kind,  # type: ignore[arg-type]
+                ),
+                status="full",
+            )
+
+        wg_only = {
+            r.id
+            for r in repo.list_scorable_listings_for_user(
+                session, username="u", mode="wg"
+            )
+        }
+        flat_only = {
+            r.id
+            for r in repo.list_scorable_listings_for_user(
+                session, username="u", mode="flat"
+            )
+        }
+        both = {
+            r.id
+            for r in repo.list_scorable_listings_for_user(
+                session, username="u", mode="both"
+            )
+        }
+        unfiltered = {
+            r.id
+            for r in repo.list_scorable_listings_for_user(session, username="u")
+        }
+
+    assert wg_only == {"wg-gesucht:wg-1", "wg-gesucht:wg-2"}
+    assert flat_only == {"kleinanzeigen:flat-1", "tum-living:flat-2"}
+    assert both == {"wg-gesucht:wg-1", "wg-gesucht:wg-2", "kleinanzeigen:flat-1", "tum-living:flat-2"}
+    assert unfiltered == both
+
+
 def test_repo_tolerates_legacy_preference_strings() -> None:
     """Legacy rows (pre-0005 dev DBs) could store bare strings in preferences.
     `repo.get_search_profile` must parse those as weight-3 PreferenceWeights

@@ -118,6 +118,9 @@ export function ListingList({ listings, onOpen, emptyLabel }: ListingListProps) 
                     </p>
                   </div>
                   <div className="flex flex-wrap items-center gap-2">
+                    {listing.kind ? (
+                      <StatusPill tone="idle">{listing.kind === 'flat' ? 'Whole flat' : 'WG room'}</StatusPill>
+                    ) : null}
                     <StatusPill tone={scoreTone(listing.score)}>{scoreLabel(listing.score)}</StatusPill>
                     {state ? <StatusPill tone={state.tone}>{state.label}</StatusPill> : null}
                   </div>
