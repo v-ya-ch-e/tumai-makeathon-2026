@@ -1,0 +1,242 @@
+# Architecture Decision Records
+
+ADR index for WG Hunter. Each entry lists context, decision, consequences, and the introducing commit where applicable. See also [ARCHITECTURE.md](./ARCHITECTURE.md), [DATA_MODEL.md](./DATA_MODEL.md), and [DESIGN.md](./DESIGN.md).
+
+---
+
+## ADR-001: SQLite + SQLModel + Alembic for persistence
+
+- **Date:** 2026-04-18  
+- **Status:** Accepted  
+
+**Context:** Hackathon demos need zero external infra but still benefit from ACID transactions; we may later point the same code at Postgres for a “real” deployment.
+
+**Decision:** Ship with default `sqlite:///~/.wg_hunter/app.db` (overridable via `WG_DB_URL`), model tables in SQLModel, and treat Alembic as the sole schema authority (`0001_initial` onward).
+
+**Consequences:** Fast local setup and easy tarball backups; WAL mode is required so API requests and asyncio hunt tasks can write concurrently ([`db.py`](../backend/app/wg_agent/db.py)). Alembic adds a small startup cost on every process boot ([`main.py`](../backend/app/main.py)).
+
+**Introduced in:** `8ca9fe2`
+
+---
+
+## ADR-002: Vite + React (no Next.js)
+
+- **Date:** 2026-04-18  
+- **Status:** Accepted  
+
+**Context:** The UI is a desktop-first SPA with no SEO requirement; the backend already serves HTTP and can host static assets.
+
+**Decision:** Use Vite 8 + React 19 + React Router 7 for the frontend, and let FastAPI serve `frontend/dist/` with a catch-all SPA fallback ([`main.py`](../backend/app/main.py)).
+
+**Consequences:** One deployable service, no SSR/edge complexity, straightforward `fetch` + `EventSource` integration. We give up built-in metadata/OG tags per route.
+
+**Introduced in:** `8d3f6fd`
+
+---
+
+## ADR-003: Aesop warm-cream palette with one accent
+
+- **Date:** 2026-04-18  
+- **Status:** Accepted  
+
+**Context:** The product brief called for a warm, editorial feel distinct from typical SaaS blues.
+
+**Decision:** Encode the palette as CSS variables in `:root`, map them through Tailwind (`tailwind.config.ts`), use terracotta as the single accent, and sage/amber/rust for semantic states ([`index.css`](../frontend/src/index.css)).
+
+**Consequences:** Re-skinning is centralized; review rules are written down in [DESIGN.md](./DESIGN.md) to keep contributions disciplined.
+
+**Introduced in:** `a4f858f`
+
+---
+
+## ADR-004: Per-hunt listings (composite primary key)
+
+- **Date:** 2026-04-18  
+- **Status:** Accepted  
+
+**Context:** Two users (or two hunts) can target the same wg-gesucht numeric listing id; a global listing table would collide or leak scores across hunts.
+
+**Decision:** Model `ListingRow` (and related score/photo keys) with composite PK `(id, hunt_id)` ([`db_models.py`](../backend/app/wg_agent/db_models.py), [DATA_MODEL.md](./DATA_MODEL.md)).
+
+**Consequences:** Listings and scores are naturally scoped; revisiting the same external id in a later hunt is OK. API calls must always supply `hunt_id` when addressing a listing.
+
+**Introduced in:** `8ca9fe2`
+
+---
+
+## ADR-005: Alembic from day 1
+
+- **Date:** 2026-04-18  
+- **Status:** Accepted  
+
+**Context:** SQLite tempts teams to rely on `create_all()` and skip migration history, which breaks as soon as collaborators diverge.
+
+**Decision:** Check in Alembic (`backend/alembic/`) and run `upgrade head` during FastAPI lifespan before serving ([`main.py`](../backend/app/main.py)).
+
+**Consequences:** Schema changes require an Alembic revision (usually autogenerate + human review); startup is marginally slower but reproducible.
+
+**Introduced in:** `8ca9fe2`
+
+---
+
+## ADR-006: HTTPX anonymous search, Playwright reserved for auth flows
+
+- **Date:** 2026-04-18  
+- **Status:** Accepted  
+
+**Context:** Launching Chromium is slow and operationally heavy for a demo loop; wg-gesucht listing pages are public HTML.
+
+**Decision:** Implement `anonymous_search` + `anonymous_scrape_listing` with httpx + parsers ([`browser.py`](../backend/app/wg_agent/browser.py)); keep `WGBrowser` / `launch_browser` for future authenticated messaging.
+
+**Consequences:** Cold hunts start faster; fewer moving parts for basic scoring demos; Playwright install remains optional for v1 happy paths ([SETUP.md](./SETUP.md)).
+
+**Introduced in:** `2993f37`
+
+---
+
+## ADR-007: SSE hybrid queue + DB poll
+
+- **Date:** 2026-04-18  
+- **Status:** Accepted  
+
+**Context:** The dashboard wants near-live updates, but in-process queues alone would miss actions after a reload or if producers/consumers differ.
+
+**Decision:** `/api/hunts/{id}/stream` drains a per-hunt `asyncio.Queue` with a **1s** timeout, then **always** re-reads actions via `repo.get_hunt` on a fresh session ([`api.py`](../backend/app/wg_agent/api.py)).
+
+**Consequences:** Low latency when the queue is hot; resilient replay after restarts; one extra SQLite read per poll tick.
+
+**Introduced in:** `2839f1b` (JSON/SSE surface) and `9a964fe` (periodic hunter wiring)
+
+---
+
+## ADR-008: Fernet-only credential-at-rest encryption
+
+- **Date:** 2026-04-18  
+- **Status:** Accepted  
+
+**Context:** Optional wg credentials must not live plaintext on disk, but we are not building enterprise KMS integration for a hackathon scope.
+
+**Decision:** Encrypt the JSON credential blob with Fernet; resolve keys from `WG_SECRET_KEY` or auto-generate `~/.wg_hunter/secret.key` with mode `600` ([`crypto.py`](../backend/app/wg_agent/crypto.py)).
+
+**Consequences:** Simple local security story; **not** sufficient for multi-tenant SaaS (single symmetric key per machine).
+
+**Introduced in:** `8ca9fe2`
+
+---
+
+## ADR-009: snake_case on the wire, camelCase in the UI
+
+- **Date:** 2026-04-18  
+- **Status:** Accepted  
+
+**Context:** Python/Pydantic idioms use snake_case JSON; TypeScript/React ergonomics favor camelCase fields in components.
+
+**Decision:** Keep backend DTO field names snake_case; normalize at the client edge with `toCamel` / `toSnake` in [`frontend/src/lib/api.ts`](../frontend/src/lib/api.ts) and mirror shapes in [`types.ts`](../frontend/src/types.ts).
+
+**Consequences:** One obvious conversion layer; grep-friendly distinction between transport and UI types; Vitest covers parsing edge cases (`1a3af89`).
+
+**Introduced in:** `afdf8cf` (client scaffolding) with tests in `1a3af89`
+
+---
+
+## ADR-010: Structured `main_locations` via client-side Google Places Autocomplete
+
+- **Date:** 2026-04-18  
+- **Status:** Accepted  
+
+**Context:** Free-text `main_locations: list[str]` could not feed commute-aware scoring — the LLM got a token like `"TUM"` with no coordinate. We also wanted the user to pick a concrete place (building, S-Bahn, district) rather than spell out a string.
+
+**Decision:** Collect main locations as structured `PlaceLocation { label, place_id, lat, lng }` via Google Places Autocomplete (New). Load the Maps JavaScript API client-side with [`@vis.gl/react-google-maps`](https://github.com/visgl/react-google-maps); the `VITE_GOOGLE_MAPS_API_KEY` ships in the bundle but is referrer + API restricted per Google's documented pattern. Store the structured shape end-to-end through DTOs, domain model, and the existing `JSON` column; derive the legacy wg-gesucht `city` from `main_locations[0].label`.
+
+**Consequences:** One repo-root `.env` now owns the Maps key (Vite reads it via [`envDir: '..'`](../frontend/vite.config.ts)). No backend proxy is needed, so the FastAPI surface stays unchanged. Existing dev rows are wiped by [`alembic/0002_places_main_locations.py`](../backend/alembic/versions/0002_places_main_locations.py); pre-demo users re-pick locations. Listing addresses are not yet geocoded — that's the next piece needed before the Routes API call that commute scoring will depend on.
+
+**Introduced in:** this commit
+
+---
+
+## ADR-011: Server-side Geocoding API call inside `anonymous_scrape_listing`
+
+- **Date:** 2026-04-18  
+- **Status:** Accepted  
+
+**Context:** Main locations carry coordinates (ADR-010), but the other side of the commute equation — the listing's address — was still free text. Commute-aware scoring needs `(lat, lng)` on *both* origin and destination. We also didn't want a second API call path later (e.g. a frontend-side geocode triggered from a map UI) because it would diverge from what the scorer sees.
+
+**Decision:** Call the Google Geocoding API server-side from [`geocoder.py`](../backend/app/wg_agent/geocoder.py) immediately after `parse_listing_page` inside [`browser.anonymous_scrape_listing`](../backend/app/wg_agent/browser.py). Store the result on `ListingRow.lat` / `ListingRow.lng` via the existing `repo.upsert_listing` path (schema widened in [`0003_listing_coords.py`](../backend/alembic/versions/0003_listing_coords.py)) and expose it on `ListingDTO` for future map UIs. Key material is a separate `GOOGLE_MAPS_SERVER_KEY` (no `VITE_` prefix, never shipped to the browser), IP-restricted and scoped to the Geocoding API only in Google Cloud Console.
+
+**Consequences:** Listings get coordinates exactly once per scrape, cached in-process so rescans of the same string don't re-bill the free-tier quota. Missing key / HTTP errors / `ZERO_RESULTS` all degrade gracefully to `None` instead of raising, so the scrape pipeline keeps working without the key in dev. A second key is one more secret to manage, but keeping the browser and server keys separate lets us restrict each to the smallest-possible API set. No scoring logic changes yet — commute-aware scoring is tracked separately as a follow-up that reads `listing.lat/lng` plus `SearchProfile.main_locations[].lat/lng` to call the Routes API.
+
+**Introduced in:** this commit
+
+---
+
+## ADR-012: Commute-aware scoring via Routes API, LLM-only composition
+
+- **Date:** 2026-04-18  
+- **Status:** Accepted  
+
+**Context:** With listing coordinates (ADR-011) and main-location coordinates (ADR-010) both in hand, we can now measure per-mode commute times and let them influence scoring. The product question was how to combine a deterministic commute term with the existing LLM score — blend them numerically, add a secondary ranking pass, or feed everything through the prompt and let the LLM decide.
+
+**Decision:** Call the Google Routes API's `computeRouteMatrix` from [`commute.py`](../backend/app/wg_agent/commute.py) inside `HuntEngine.run_find_only` (one POST per mode, guarded by `listing.lat is not None`), feed the resulting `{(place_id, mode): seconds}` matrix into `brain.score_listing` as a "Commute times" block in the user prompt, and leave the composition entirely to the LLM. Persist only the collapsed `{place_id: {mode, minutes}}` (fastest mode per location) on [`ListingScoreRow.travel_minutes`](../backend/app/wg_agent/db_models.py) so the listing drawer can render per-location minutes without re-calling Routes. Modes are picked from the user's profile: always `TRANSIT`, plus `BICYCLE` when `has_bike`, plus `DRIVE` when `has_car`. The prompt instructs the LLM to treat commutes over 40 minutes as strong negatives and under 20 minutes as positives.
+
+**Consequences:** Smallest possible diff — scoring stays in one place (the LLM), and the prompt additions are bounded (a few lines per location). No new sliders, weights, or per-location caps in the onboarding UI. Trading off: the LLM's commute reasoning isn't audited by a deterministic check, so edge cases (e.g. a 70-minute transit commute praised because the listing is cheap) depend on prompt discipline rather than hard guardrails; if this turns noisy, a follow-up can add a deterministic commute term that blends with the LLM score. Free-tier economics are comfortable: a typical user with 2 main locations × 2 modes = 4 elements per listing, well inside the Routes API's element quota. The API call is the last network hop before scoring, so listings without coordinates (or users with no `main_locations`) fall straight through to the pre-plan behaviour without an extra branch in the SSE path.
+
+**Introduced in:** this commit
+
+---
+
+## ADR-013: Weighted preferences + per-location commute budgets, LLM composition
+
+- **Date:** 2026-04-18  
+- **Status:** Accepted  
+
+**Context:** ADR-012 wired the Routes API into scoring with a single rule ("over 40 min = negative, under 20 min = positive") and left preferences as flat string tags. In practice, two users with the same `["gym", "park"]` preference list have very different priorities: one may treat the gym as non-negotiable, the other as a mild bonus. Likewise, the "fine" commute for someone cycling to TUM differs from what's "fine" for someone visiting their partner in Sendling twice a week. Both needs pointed to the same answer: let the user express importance, and give each main location its own budget.
+
+**Decision:** Encode preferences as `PreferenceWeight { key, weight: 1..5 }` and extend `PlaceLocation` with an optional `max_commute_minutes` (5..240). Persist both inside the existing `SearchProfileRow` JSON columns (no schema change; [`0005_weighted_prefs.py`](../backend/alembic/versions/0005_weighted_prefs.py) resets pre-demo rows, mirroring the [`0002` reset](../backend/alembic/versions/0002_places_main_locations.py)). In the UI, collect weights via a reusable [`WeightSlider`](../frontend/src/components/ui/WeightSlider.tsx) that expands under each selected preference tile in `OnboardingPreferences`, and collect budgets as a per-location minutes field inside the `PlaceAutocomplete` row stack in `OnboardingRequirements`. Keep composition LLM-only (per ADR-012): extend `_requirements_summary` with a `Preferences (1=nice, 5=must-have)` line and extend `_commute_block` to render `(max N min)` beside each location; update `SCORE_USER_TEMPLATE` to cap score at 0.4 when a weight-5 preference is clearly missing and to treat fastest-mode times above a location's budget as strong negatives.
+
+**Consequences:** The three-layer pipeline changes in one coherent way — `models.py` + `dto.py` + `db_models.py` + `repo.py` all reshape the same two JSON payloads — so the grep-level footprint for "how weights flow" is small. `repo.get_search_profile` parses both new `{key, weight}` dicts and legacy bare strings (weight-3 fallback), so dev DBs that already hold pre-0005 rows don't break during migration. We add no deterministic cap on the LLM score; behaviour still depends on prompt discipline. If hackathon testing shows the LLM disregarding weight-5 items or budgets, a follow-up can add a deterministic veto on top of the current score (a natural extension of ADR-012's "follow-up if noisy" escape hatch).
+
+**Introduced in:** this commit
+
+---
+
+## ADR-014: Structured DOM selectors + `map_config.markers` coords in `parse_listing_page`
+
+- **Date:** 2026-04-18  
+- **Status:** Accepted  
+
+**Context:** The original `parse_listing_page` ran `re.search` over `soup.get_text()` for every field, and the description fallback was `full_text[:4000]`. Three problems showed up while bringing up the scorer: (a) `furnished` flipped to `True` on any listing that said "nicht möbliert" in the description (the negation lives 40+ chars before the keyword, outside the regex's reach); (b) `languages` and `pets_allowed` misfired whenever a free-text paragraph contained the label words; (c) the 4000-char fallback dumped cookie-consent markup, login-modal copy, and footer navigation into the LLM prompt. Separately, the geocoder step sat on the critical path for every listing even though the detail page already ships the landlord's own map pin inside a `map_config.markers` script block.
+
+**Decision:** Refactor `parse_listing_page` to prefer scoped DOM lookups with explicit fallbacks to the original full-text regexes. Add three helpers in [`browser.py`](../backend/app/wg_agent/browser.py): `_section_pairs` (walks forward from a section `<h2>` until the next `<h2>` to collect label/value rows — scoped enough to separate Kosten from Verfügbarkeit even though they share a `div.panel`); `_wg_details_lines` (returns the WG-Details `<li>` text in order for languages/pets/smoking); `_parse_address_panel` (splits the Adresse detail into `(street, postal_code, city, district)`); `_parse_map_lat_lng` (extracts `(lat, lng)` from the `map_config.markers` script via a narrow regex). Pull the description from `#ad_description_text` with embedded `<script>`/`<iframe>`/`div-gpt-ad-*` stripped, and never fall back to the full-page text dump. Have `anonymous_scrape_listing` trust the map-pin coordinates when present and only call the Geocoding API when they're missing. Lock every new assertion down in [`test_wg_parser.py`](../backend/tests/test_wg_parser.py) against the committed fixtures.
+
+**Consequences:** The scoring prompt now sees clean listing fields instead of menu chrome, so `brain.score_listing` has less noise to filter. `furnished` / `pets_allowed` / `smoking_ok` become trustworthy enough that a future deterministic pre-filter (see ADR-013 escape hatch) can rely on them. `listing.lat` / `listing.lng` come for free on every listing that renders a map (≈all of them), reducing Geocoding API calls to near-zero in typical hunts — the geocoder stays wired as a fallback, not a hot-path dependency. The parser still degrades gracefully when wg-gesucht tweaks a selector because each DOM path preserves its pre-existing regex fallback. No schema change, no dependency change, no new prompts or scoring logic.
+
+**Introduced in:** this commit
+
+---
+
+## ADR-015: Scorecard evaluator with deterministic components + narrow LLM vibe
+
+- **Date:** 2026-04-18  
+- **Status:** Accepted  
+- **Supersedes:** the "follow-up if noisy" escape hatch in ADR-012 and ADR-013
+
+**Context:** ADR-012 put commute-aware scoring behind a single `brain.score_listing` LLM call; ADR-013 added weighted preferences and per-location commute budgets to the same prompt. Both explicitly flagged that the LLM composes everything — hard budget caps, must-have preferences, commute thresholds — as prose rules rather than deterministic checks, and noted a follow-up "if this turns noisy." Observed problems: (a) listings well over `max_rent_eur` still came back with 0.6+ scores when the description read well; (b) weight-5 "must-haves" were honor-system (the model decided both whether a tile was missing and whether to obey the cap); (c) two listings scored in different runs weren't comparable because the scale drifted with prompt and model version; (d) every new listing cost one LLM call, including obvious rejects (wrong city, 3x the rent); (e) the single-sentence `score_reason` wasn't auditable — we couldn't grep "why exactly did listing X beat Y."
+
+**Decision:** Replace the single-LLM-call path with a **scorecard evaluator** in new module [`evaluator.py`](../backend/app/wg_agent/evaluator.py). The pipeline is:
+
+1. **Hard filter** — deterministic vetoes for anything that can't possibly match: `price_eur > max_rent_eur`, city mismatch (with a Muenchen/München normalizer), district in `avoid_districts`, `available_from` after `move_in_until`, and weight-5 preferences on structured booleans (`furnished`, `pets_allowed`, `smoking_ok`) directly contradicted by the listing. Vetoes short-circuit: no components computed, no LLM call, `ListingScoreRow.score = 0.0`, action log emits `Rejected {id}: <reason>`.
+2. **Component functions** — six pure-Python components, each returning `ComponentScore(key, score, weight, evidence, hard_cap?, missing_data?)`. Curves:
+   - `price_fit`: 1.0 inside `[min_rent, 0.85 * max_rent]`, linear down to 0 at `max_rent`, 0 above.
+   - `size_fit`: trapezoid — 0 below `min_size_m2`, ramps to 1 over the next 5 m², stays 1 up to `max_size_m2`, back to 0 at `max_size_m2 * 1.25`.
+   - `wg_size_fit`: 1 inside `[min_wg_size, max_wg_size]`, 0.5 one off, 0 further. Skipped (`missing_data`) when `mode == "flat"`.
+   - `availability_fit`: 1 inside the move-in window; linear down to 0 over 14 days either side; `missing_data` when either the listing date or the window is missing.
+   - `commute_fit`: per `main_location`, the fastest-mode time `m` vs. `budget = max_commute_minutes or 40` — 1.0 at `m ≤ 0.5 * budget`, 0.5 at `m = budget`, 0.0 at `m ≥ 1.5 * budget`. Beyond `1.5 * budget` also sets `hard_cap = 0.3`. Averaged across locations.
+   - `preference_fit`: iterate `PreferenceWeight`s; structured booleans resolve against `Listing` fields, soft tags scan `description.lower()` with a synonym table (`PREFERENCE_KEYWORDS`). Score is `sum(weight * present) / sum(weight)`; weight-5 clearly-absent sets `hard_cap = 0.4`. Unknown tags get neutral half credit so "can't tell" isn't a straight negative.
+3. **`vibe_fit`** — the one remaining LLM call, through a new narrow function `brain.vibe_score(listing, profile) -> VibeScore` with `response_format=json_object` + Pydantic validation. The prompt is explicitly told **not** to judge price, size, WG size, or commute; it only rates `listing.description` + `listing.district` against `profile.notes`, `preferred_districts`, and `avoid_districts`. On `ValidationError` or any exception the component degrades to `missing_data=True`, no fallback score.
+4. **`compose`** — weighted mean across components with `missing_data == False` using `COMPONENT_WEIGHTS` (price 2.0, commute 2.0, preferences 1.5, size/availability/vibe 1.0, wg_size 0.5), then apply the minimum of every non-null `hard_cap`, then clamp to `[0, 1]`. Derives `score_reason` from the strongest positive and weakest component so the existing drawer copy still reads naturally; fills `match_reasons` / `mismatch_reasons` from component evidence for back-compat with pre-migration rows.
+
+Persistence: one additive Alembic revision [`0006_scorecard_components.py`](../backend/alembic/versions/0006_scorecard_components.py) adds `components: JSON` and `veto_reason: str | None` to `ListingScoreRow`. [`repo._listing_from_row`](../backend/app/wg_agent/repo.py) rehydrates both with NULL-safe fallbacks, so old hunts keep rendering via the legacy `score_reason` block. [`HuntEngine.run_find_only`](../backend/app/wg_agent/periodic.py) now calls `await evaluator.evaluate(...)` instead of `brain.score_listing(...)`; the old entry point stays exported for [`orchestrator.py`](../backend/app/wg_agent/orchestrator.py) (the non-v1 path). On the UI side, [`ListingDrawer`](../frontend/src/components/ListingDrawer.tsx) renders one bar per component with `evidence` underneath (greyed when `missing_data`), plus a red "Rejected" banner when `vetoReason` is set.
+
+**Consequences:** Every numeric judgment is code we can unit-test against fixtures — [`test_evaluator.py`](../backend/tests/test_evaluator.py) pins each curve at its boundaries and verifies `compose`'s arithmetic, `hard_cap` minimum, and veto short-circuit. Obvious rejects never hit the LLM (one network round-trip saved per vetoed listing; the `Rejected {id}: over budget` action gives the user a defensible reason). Scores are now comparable across runs because the curves and weights live in one file; changing them is a diff, not a prompt rewrite. The vibe prompt is small enough that `gpt-4o-mini` output is more consistent, and a `ValidationError` degrades to `missing_data` instead of corrupting the composite score. Trade-offs: (1) the curves and `COMPONENT_WEIGHTS` are currently hand-picked — ADR-015 is the substrate a later ADR can sit on if we want to fit weights from user feedback (thumbs up/down in the UI), but that requires UI work first and is explicitly out of scope; (2) `preference_fit`'s keyword table ([`PREFERENCE_KEYWORDS`](../backend/app/wg_agent/evaluator.py)) is a small German/English synonym list and will miss creative phrasings — listings with no description fall to the neutral half-credit path on purpose, matching the "don't invent features" rule from ADR-013; (3) `brain.score_listing` is still exported (delegates to the same prompt as before) so the older orchestrator path doesn't break, but all **v1 hunts go through the evaluator** — the legacy function is a compatibility shim, not the default.
+
+**Introduced in:** this commit

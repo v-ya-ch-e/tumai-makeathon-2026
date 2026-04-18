@@ -1,0 +1,33 @@
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+:root {
+  /* Surfaces */
+  --canvas: #F5F0E6;       /* page background */
+  --surface: #FAF6EE;      /* cards */
+  --surface-raised: #FFFCF6; /* inputs, modals */
+  --hairline: #E6DECF;     /* 1px borders */
+
+  /* Text */
+  --ink: #2B2623;          /* primary text, near-black warm */
+  --ink-muted: #7A6E60;    /* labels, hints */
+
+  /* Accent (used sparingly — primary buttons, focus rings, active states) */
+  --accent: #8A5A3B;       /* terracotta / cognac */
+  --accent-muted: #C8A586; /* hover, selected chip bg */
+
+  /* Signal */
+  --good: #6B8E5A;         /* sage — high score, agent running */
+  --warn: #C08A3E;         /* amber — dry-run skip, pacing */
+  --bad:  #A85C4A;         /* rust — errors, rejected */
+}
+
+html,
+body {
+  color: var(--ink);
+  background-color: var(--canvas);
+  font-family: Geist, ui-sans-serif, system-ui, sans-serif;
+  font-size: 15px;
+  line-height: 1.5;
+}

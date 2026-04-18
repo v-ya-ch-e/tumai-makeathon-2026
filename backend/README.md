@@ -1,34 +1,11 @@
-# Backend Service
+# backend
 
-This directory contains the FastAPI backend service.
+FastAPI backend for WG Hunter. Hosts the v1 JSON + SSE API under `/api/*`, serves `frontend/dist/` as SPA, and runs the `PeriodicHunter` agent loop in the same process.
 
-## Setup Local Environment
+See [`../docs/README.md`](../docs/README.md) for the index. Quick jumps:
 
-1. Create a virtual environment:
-   ```bash
-   python3 -m venv venv
-   ```
-2. Activate the virtual environment:
-   ```bash
-   source venv/bin/activate
-   ```
-3. Install dependencies:
-   ```bash
-   pip install -r requirements.txt
-   ```
-4. Run the server:
-   ```bash
-   uvicorn app.main:app --reload
-   ```
-
-## Run with Docker
-
-1. Build and start the container:
-   ```bash
-   docker-compose up --build
-   ```
-
-## Endpoints
-
-- `GET /`: Health check
-- `GET /items/{item_id}`: Example item endpoint
+- [`../docs/SETUP.md`](../docs/SETUP.md) — how to run it.
+- [`../docs/BACKEND.md`](../docs/BACKEND.md) — file-by-file walkthrough.
+- [`../docs/DATA_MODEL.md`](../docs/DATA_MODEL.md) — tables, DTOs, the three-layer rule.
+- [`../docs/AGENT_LOOP.md`](../docs/AGENT_LOOP.md) — one hunt iteration in detail.
+- [`../docs/_generated/openapi.json`](../docs/_generated/openapi.json) — current OpenAPI spec.

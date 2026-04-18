@@ -1,8 +1,17 @@
 # CLAUDE.md
 
+## Read this first
+
+Developer docs live under [`docs/`](docs/README.md). Read [`docs/README.md`](docs/README.md), then follow its "Read in order" list before making non-trivial changes. In particular:
+
+- [`docs/ARCHITECTURE.md`](docs/ARCHITECTURE.md) — runtime shape of the WG Hunter stack.
+- [`docs/DATA_MODEL.md`](docs/DATA_MODEL.md) — the **three-layer rule** (UI ↔ DTO ↔ domain ↔ row) that every API change must respect.
+- [`docs/BACKEND.md`](docs/BACKEND.md) / [`docs/FRONTEND.md`](docs/FRONTEND.md) — file maps.
+- [`docs/DECISIONS.md`](docs/DECISIONS.md) — ADR log; add an entry for any new architecture decision.
+
 ## Project context
 
-This repository is our **TUM.ai Makeathon 2026** submission for Reply's [*The Campus Co-Pilot Suite*](context/CHALLENGE_BRIEF.md) challenge: build an autonomous AI agent (or multi-agent system) that takes concrete actions across TUM's fragmented digital ecosystem (TUMonline, Moodle, ZHS, Mensa, Matrix, Confluence, …) using AWS Bedrock. The code is a FastAPI backend under [`backend/`](backend/) ([`backend/app/main.py`](backend/app/main.py)) deployed per the recipes in [`DEPLOYMENT.md`](DEPLOYMENT.md) and [`CI-CONFIGURATION.md`](CI-CONFIGURATION.md).
+This repository is our **TUM.ai Makeathon 2026** submission for Reply's [*The Campus Co-Pilot Suite*](context/CHALLENGE_BRIEF.md) challenge: build an autonomous AI agent (or multi-agent system) that takes concrete actions across TUM's fragmented digital ecosystem (TUMonline, Moodle, ZHS, Mensa, Matrix, Confluence, …) using AWS Bedrock. The active workstream is the WG Hunter agent. The code is a FastAPI backend under [`backend/`](backend/) ([`backend/app/main.py`](backend/app/main.py)) plus a Vite + React frontend under [`frontend/`](frontend/), deployed per the recipes in [`DEPLOYMENT.md`](DEPLOYMENT.md) and [`CI-CONFIGURATION.md`](CI-CONFIGURATION.md).
 
 ### Context files (`context/`)
 

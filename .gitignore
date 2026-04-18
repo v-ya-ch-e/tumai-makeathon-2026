@@ -63,3 +63,8 @@ Thumbs.db
 
 # Secrets
 .env
+
+# WG-Gesucht agent artefacts
+backend/tests/fixtures/
+wg_state.json
+*_state.json
