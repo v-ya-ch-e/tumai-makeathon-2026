@@ -80,5 +80,5 @@ export function ProgressSteps({
       ),
     )
   }
-  return <p className={clsx('flex flex-wrap items-center gap-2 text-[13px]', className)}>{parts}</p>
+  return <p className={clsx('flex flex-nowrap items-center gap-2 overflow-x-auto whitespace-nowrap text-[13px]', className)}>{parts}</p>
 }

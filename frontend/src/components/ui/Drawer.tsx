@@ -43,33 +43,15 @@ export function Drawer({
     return () => window.removeEventListener('keydown', onKeyDown)
   }, [render, onClose])
 
-  useEffect(() => {
-    if (!render) return
-    const prev = document.body.style.overflow
-    document.body.style.overflow = 'hidden'
-    return () => {
-      document.body.style.overflow = prev
-    }
-  }, [render])
-
   if (!render) return null
 
   return createPortal(
-    <div className="fixed inset-0 z-40">
-      <button
-        type="button"
-        aria-label="Close drawer"
-        className={clsx(
-          'absolute inset-0 z-40 bg-ink/20 transition-opacity duration-[220ms]',
-          entered ? 'opacity-100' : 'opacity-0',
-        )}
-        onClick={onClose}
-      />
+    <div className="pointer-events-none fixed inset-0 z-40">
       <div
         aria-modal
         role="dialog"
         className={clsx(
-          'fixed top-0 right-0 z-50 flex h-full flex-col rounded-l-drawer border-l border-hairline bg-surface shadow-drawer transition-transform duration-[220ms] ease-in-out',
+          'pointer-events-auto fixed top-0 right-0 z-50 flex h-full flex-col rounded-l-drawer border-l border-hairline bg-surface shadow-drawer transition-transform duration-[220ms] ease-in-out',
           widthClass,
           entered ? 'translate-x-0' : 'translate-x-full',
         )}

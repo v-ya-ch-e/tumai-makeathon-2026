@@ -11,7 +11,9 @@ from fastapi import APIRouter, Depends, HTTPException, Query, Response
 from fastapi.responses import StreamingResponse
 from sqlmodel import Session, select
 
-from . import periodic, repo
+import os
+
+from . import notifier, periodic, repo
 from .db import engine, get_session
 from .db_models import ListingRow, PhotoRow, UserListingRow
 from .dto import (
@@ -28,7 +30,9 @@ from .dto import (
     UpsertSearchProfileBody,
     UserDTO,
     action_to_dto,
+    FIXED_RESCAN_INTERVAL_MINUTES,
     listing_to_dto,
+    normalize_score_text,
     search_profile_to_dto,
     upsert_body_to_search_profile,
     user_to_dto,
@@ -119,7 +123,7 @@ async def put_search_profile(
     out = repo.upsert_search_profile(session, username=username, sp=sp)
     # Boot (or refresh) the per-user agent. spawn_user_agent is idempotent.
     periodic.spawn_user_agent(
-        username, interval_minutes=body.rescan_interval_minutes
+        username, interval_minutes=FIXED_RESCAN_INTERVAL_MINUTES
     )
     return search_profile_to_dto(out)
 
@@ -194,7 +198,7 @@ async def start_agent(
     if sp is None:
         raise HTTPException(status_code=400, detail="User has no search profile yet")
     periodic.spawn_user_agent(
-        username, interval_minutes=sp.rescan_interval_minutes
+        username, interval_minutes=FIXED_RESCAN_INTERVAL_MINUTES
     )
     return Response(status_code=204)
 
@@ -244,16 +248,25 @@ def list_user_actions_endpoint(
 
 
 @router.get("/users/{username}/stream")
-async def stream_user_events(
-    username: str, session: Session = Depends(get_session)
-) -> StreamingResponse:
-    if repo.get_user(session, username=username) is None:
-        raise HTTPException(status_code=404, detail="User not found")
+async def stream_user_events(username: str) -> StreamingResponse:
+    # Do not use Depends(get_session) here: SSE responses are long-lived, and
+    # keeping the injected session open for the whole stream would leak a DB
+    # connection per subscriber and quickly exhaust the SQLAlchemy pool
+    # (QueuePool limit ... reached). Use a short-lived session only for the
+    # existence check, and let event_source open its own scoped sessions.
+    with Session(engine) as s:
+        if repo.get_user(s, username=username) is None:
+            raise HTTPException(status_code=404, detail="User not found")
 
     async def event_source():
         seen: set[tuple[datetime, str, str]] = set()
+        # Only replay the most-recent slice of history on connect. Emitting
+        # every historical action on every (re)connect triggers a refresh storm
+        # on the client (each `evaluate`/`new_listing` event causes a refresh).
         with Session(engine) as s:
-            initial = repo.list_actions_for_user(s, username=username)
+            initial = repo.list_actions_for_user(
+                s, username=username, limit=200
+            )
         for a in initial:
             seen.add((a.at, a.kind.value, a.summary))
             yield _sse(action_to_dto(a).model_dump(mode="json"))
@@ -302,6 +315,29 @@ def get_listing_detail(
     return detail
 
 
+# --- Debug / smoke tests ---------------------------------------------------
+
+
+def _email_debug_enabled() -> bool:
+    raw = os.environ.get("ENABLE_EMAIL_DEBUG", "").strip().lower()
+    return raw in {"1", "true", "yes", "on"}
+
+
+@router.get("/debug/send-test-email")
+def debug_send_test_email(
+    to: str = Query(..., description="Destination email address"),
+) -> dict:
+    """Fire a single SES test email. Disabled unless ENABLE_EMAIL_DEBUG is set.
+
+    Useful for verifying that SES credentials + verified identity + sandbox
+    status are all correctly configured without waiting for a real 0.9+ match.
+    """
+    if not _email_debug_enabled():
+        raise HTTPException(status_code=404, detail="Not Found")
+    notifier.send_test_email(to)
+    return {"status": "dispatched", "to": to}
+
+
 # --- Helpers ---------------------------------------------------------------
 
 
@@ -321,9 +357,9 @@ def _get_listing_detail(
     ).all()
     photos = [p.url for p in photo_rows]
     score_val = match_row.score
-    reason = match_row.reason
-    match_reasons = list(match_row.match_reasons or [])
-    mismatch_reasons = list(match_row.mismatch_reasons or [])
+    reason = normalize_score_text(match_row.reason)
+    match_reasons = [normalize_score_text(item) or "" for item in (match_row.match_reasons or [])]
+    mismatch_reasons = [normalize_score_text(item) or "" for item in (match_row.mismatch_reasons or [])]
     components_dto = _components_dto_from_row(match_row)
     veto_reason = match_row.veto_reason
     listing_dto = ListingDTO(
@@ -381,6 +417,8 @@ def _components_dto_from_row(
             out.append(ComponentDTO.model_validate(raw))
         except Exception:  # noqa: BLE001
             continue
+    for item in out:
+        item.evidence = [normalize_score_text(text) or "" for text in item.evidence]
     return out
 
 
@@ -389,9 +427,9 @@ def _travel_minutes_by_label(
     *,
     username: str,
     match_row: Optional[UserListingRow],
-) -> Optional[dict[str, int]]:
+) -> Optional[dict[str, dict[str, str | int]]]:
     """Convert the persisted `{place_id: {mode, minutes}}` blob into
-    `{label: minutes}` by looking up each place_id in the user's
+    `{label: {mode, minutes}}` by looking up each place_id in the user's
     SearchProfile.main_locations."""
     if match_row is None or not match_row.travel_minutes:
         return None
@@ -399,16 +437,17 @@ def _travel_minutes_by_label(
     if sp is None or not sp.main_locations:
         return None
     label_by_pid = {loc.place_id: loc.label for loc in sp.main_locations}
-    out: dict[str, int] = {}
+    out: dict[str, dict[str, str | int]] = {}
     for place_id, entry in match_row.travel_minutes.items():
         if not isinstance(entry, dict):
             continue
         minutes = entry.get("minutes")
-        if not isinstance(minutes, int):
+        mode = entry.get("mode")
+        if not isinstance(minutes, int) or not isinstance(mode, str):
             continue
         label = label_by_pid.get(place_id)
         if label:
-            out[label] = minutes
+            out[label] = {"minutes": minutes, "mode": mode}
     return out or None
 
 

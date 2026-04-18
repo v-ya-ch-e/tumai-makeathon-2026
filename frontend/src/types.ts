@@ -14,6 +14,8 @@ export type User = {
   createdAt: string
 }
 
+export type HuntStatus = 'pending' | 'running' | 'done' | 'failed'
+
 export type PlaceLocation = {
   label: string
   placeId: string
@@ -44,11 +46,6 @@ export type SearchProfile = {
 
 export type UpsertSearchProfileBody = Omit<SearchProfile, 'updatedAt'>
 
-export type CredentialsStatus = {
-  connected: boolean
-  savedAt: string | null
-}
-
 export type AgentStatus = 'idle' | 'running' | 'rescanning' | 'error'
 
 export type Action = {
@@ -57,6 +54,16 @@ export type Action = {
   summary: string
   detail: string | null
   listingId: string | null
+}
+
+export type Hunt = {
+  id: string
+  status: HuntStatus
+  startedAt: string
+  finishedAt: string | null
+  listings: Listing[]
+  actions: Action[]
+  error: string | null
 }
 
 export type Component = {
@@ -75,6 +82,11 @@ export type NearbyPlace = {
   distanceM: number | null
   placeName: string | null
   category: string | null
+}
+
+export type CommuteInfo = {
+  minutes: number
+  mode: string
 }
 
 export type Listing = {
@@ -97,6 +109,8 @@ export type Listing = {
   description: string | null
   coverPhotoUrl: string | null
   bestCommuteMinutes: number | null
+  bestCommuteLabel: string | null
+  bestCommuteMode: string | null
   score: number | null
   scoreReason: string | null
   matchReasons: string[]
@@ -109,7 +123,7 @@ export type ListingDetail = {
   listing: Listing
   photos: string[]
   score: number | null
-  travelMinutesPerLocation: Record<string, number> | null
+  travelMinutesPerLocation: Record<string, CommuteInfo> | null
   nearbyPreferencePlaces: NearbyPlace[]
 }
 
@@ -119,4 +133,14 @@ export type TimelineItem = {
   source: string
   category: TimelineCategory
   urgency: UrgencyLevel
+}
+
+export type MapsEntry = {
+  id: string
+  lat: number
+  lng: number
+  title: string | null
+  score: number | null
+  priceEur: number | null
+  district: string | null
 }

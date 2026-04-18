@@ -353,5 +353,27 @@ Persistence: one additive Alembic revision [`0006_scorecard_components.py`](../b
 **Decision:** Add `kind: Literal['wg', 'flat']` as an indexed column on `ListingRow` (default `'wg'` for the existing wg-gesucht-only pool) and as a field on the domain `Listing` model. Each per-source scraper sets `kind` from the search vertical it iterated — the listing-detail page does not need to be parsed to determine kind. The matcher's `repo.list_scorable_listings_for_user` now accepts a `mode` kwarg and filters by `kind = mode` when `mode != 'both'`, finally honoring the wizard's `mode` selection. Frontend gets one optional `kind?: 'wg' | 'flat'` field on the TS `Listing` type and one neutral `<StatusPill>` in the listing card / drawer (`{kind === 'flat' ? 'Whole flat' : 'WG room'}`).
 
 **Consequences:** The matcher honors `SearchProfile.mode` for the first time. Indexed lookup for the `WHERE kind = sp.mode` filter means the read cost is essentially free. Schema change is one additive column on one table — existing rows default to `'wg'` so the migration is invisible. Trade-off: every per-source scraper has to remember to set `kind` correctly; the protocol enforces it by making `kind` part of the search-stub return value (immutable from stub creation through `scrape_detail`, per the `Source` protocol). We considered (and rejected) inferring kind from `id` prefix at read time — it doesn't work for sources like Kleinanzeigen that serve both kinds under the same id namespace.
+## ADR-023: Batched + rate-limited email digest, gated on `first_seen_at > user.created_at`
+
+- **Date:** 2026-04-18
+- **Status:** Accepted
+- **Supersedes:** The per-listing `notify_if_high_score` call in [`periodic.py`](../backend/app/wg_agent/periodic.py)
+
+**Context:** The previous notifier emitted one SES email per high-scoring listing, called inline inside `UserAgent.run_match_pass`. Three problems followed:
+
+1. **Spam on signup.** Immediately after account creation the matcher scores every listing already in the shared pool. With a lax `WG_NOTIFY_THRESHOLD`, one new user could trigger dozens of emails within the first pass.
+2. **No rate limit.** A busy pass could fan out ten SES sends in seconds; there was no per-user ceiling.
+3. **No batching.** A single pass that found five new >0.9 matches sent five separate emails.
+
+There is also a deployment wrinkle worth naming: **the scraper may run locally from a developer laptop**, writing into the same AWS-hosted MySQL that the server-side backend reads from. Any notification logic coupled to "the scraper process just wrote a row" would miss the laptop case. The logic therefore lives in the matcher (which always runs on the backend) and uses DB state — specifically `ListingRow.first_seen_at` vs `UserRow.created_at` — as the single source of truth for "is this a new listing?".
+
+**Decision:** Replace the per-listing send with an in-process per-user digest buffer (`_NOTIFY_STATE[username]` in [`periodic.py`](../backend/app/wg_agent/periodic.py)) and a new [`notifier.send_digest_email`](../backend/app/wg_agent/notifier.py) that renders multiple listings into one HTML+text SES message. Three gates decide whether a scored listing is queued: (a) the user has `UserRow.email` set, (b) `score >= WG_NOTIFY_THRESHOLD`, and (c) `ListingRow.first_seen_at > UserRow.created_at`. At the end of every `run_match_pass`, `_try_flush_digest` sends the whole buffer in one email iff `datetime.utcnow() - last_sent_at >= WG_NOTIFY_COOLDOWN_MINUTES` (default `5`); otherwise the buffer is held and tried again next pass.
+
+**Consequences:**
+
+- **No signup spam.** The `first_seen_at > created_at` gate mechanically excludes the initial-evaluation backlog regardless of how many listings the scraper has already accumulated, so the first pass after account creation sends zero emails.
+- **Works for laptop scrapers.** Gate (c) is pure DB state, so a laptop-run scraper that writes a fresh `ListingRow` (new `first_seen_at = utcnow()`) produces a notifiable listing on the server's next match pass.
+- **Per-user 5-minute floor.** Even if two passes complete back-to-back (e.g., after `WG_RESCAN_INTERVAL_MINUTES=3`), the second pass holds its items until the cooldown elapses.
+- **In-memory state** — A backend restart drops pending items and resets `last_sent_at`. That is acceptable: the `first_seen_at` gate requeues any still-new listing on the first post-restart pass, and the cooldown simply restarts, which only ever *reduces* the number of emails we send.
 
 **Introduced in:** this commit

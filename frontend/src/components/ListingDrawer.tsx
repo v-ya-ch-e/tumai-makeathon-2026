@@ -1,6 +1,7 @@
 import clsx from 'clsx'
 import { useEffect, useState, type ReactNode } from 'react'
 import { getListingDetail } from '../lib/api'
+import { formatGermanDateRange } from '../lib/date'
 import { useSession } from '../lib/session'
 import type { Component, Listing, ListingDetail } from '../types'
 import { Button, Drawer, StatusPill, type StatusPillTone } from './ui'
@@ -19,7 +20,7 @@ function scoreTone(score: number | null): StatusPillTone {
 }
 
 function formatScore(score: number | null): string {
-  return score === null ? 'Pending' : score.toFixed(2)
+  return score === null ? 'Pending' : `${Math.round(score * 100)}%`
 }
 
 const COMPONENT_LABELS: Record<string, string> = {
@@ -49,11 +50,11 @@ function ComponentBar({ component }: { component: Component }) {
   return (
     <li
       className={clsx(
-        'grid grid-cols-[96px_1fr_48px] items-center gap-3 text-[13px]',
+        'grid grid-cols-[88px_minmax(0,1fr)_56px] items-start gap-3 text-[13px]',
         component.missingData && 'opacity-60',
       )}
     >
-      <span className="truncate text-ink-muted">{componentLabel(component.key)}</span>
+      <span className="leading-5 text-ink-muted">{componentLabel(component.key)}</span>
       <div className="space-y-1">
         <div className="h-1.5 w-full rounded-full bg-hairline/60">
           <div
@@ -61,13 +62,20 @@ function ComponentBar({ component }: { component: Component }) {
             style={{ width: `${widthPct}%` }}
           />
         </div>
-        {primaryEvidence ? <p className="line-clamp-1 text-[12px] text-ink-muted">{primaryEvidence}</p> : null}
+        {primaryEvidence ? <p className="break-words text-[12px] leading-5 text-ink-muted">{primaryEvidence}</p> : null}
       </div>
       <span className="text-right tabular-nums text-ink">
-        {component.missingData ? '—' : component.score.toFixed(2)}
+        {component.missingData ? '—' : `${Math.round(component.score * 100)}%`}
       </span>
     </li>
   )
+}
+
+function modeLabel(mode: string): string {
+  if (mode === 'drive') return 'car'
+  if (mode === 'bicycle') return 'bike'
+  if (mode === 'transit') return 'public transit'
+  return mode
 }
 
 function Stat({ label, value }: { label: string; value: string }) {
@@ -181,17 +189,17 @@ export function ListingDrawer({ open, listing, onClose }: ListingDrawerProps) {
               <Stat label="District" value={activeListing.district ?? '—'} />
               <Stat
                 label="Available"
-                value={`${activeListing.availableFrom ?? '—'}${activeListing.availableTo ? ` → ${activeListing.availableTo}` : ''}`}
+                value={formatGermanDateRange(activeListing.availableFrom, activeListing.availableTo)}
               />
             </dl>
           </Section>
 
           {activeListing.vetoReason ? (
-            <Section title="Why it was rejected" className="border-bad/35 bg-bad/5">
+            <Section title="Why it did not fit" className="border-bad/35 bg-bad/5">
               <p className="text-[14px] leading-6 text-ink">{activeListing.vetoReason}</p>
             </Section>
           ) : activeListing.components.length > 0 ? (
-            <Section title="Score breakdown">
+            <Section title="Why it ranks here">
               {activeListing.scoreReason ? (
                 <p className="text-[13px] leading-6 text-ink-muted">{activeListing.scoreReason}</p>
               ) : null}
@@ -224,10 +232,13 @@ export function ListingDrawer({ open, listing, onClose }: ListingDrawerProps) {
           {detail?.travelMinutesPerLocation && Object.keys(detail.travelMinutesPerLocation).length > 0 ? (
             <Section title="Commute">
               <ul className="space-y-2 text-[13px] text-ink">
-                {Object.entries(detail.travelMinutesPerLocation).map(([label, minutes]) => (
-                  <li key={label} className="flex items-start justify-between gap-4">
-                    <span className="text-ink-muted">{label}</span>
-                    <span>{minutes} min</span>
+                {Object.entries(detail.travelMinutesPerLocation).map(([label, commute]) => (
+                  <li key={label} className="grid grid-cols-[minmax(0,1fr)_auto] items-start gap-4">
+                    <span className="break-words text-ink-muted">{label}</span>
+                    <span className="text-right">
+                      {commute.minutes} min
+                      <span className="block text-[12px] text-ink-muted">via {modeLabel(commute.mode)}</span>
+                    </span>
                   </li>
                 ))}
               </ul>
@@ -235,7 +246,7 @@ export function ListingDrawer({ open, listing, onClose }: ListingDrawerProps) {
           ) : null}
 
           {detail && detail.nearbyPreferencePlaces.length > 0 ? (
-            <Section title="Nearby preference checks">
+            <Section title="Nearby highlights">
               <ul className="space-y-2">
                 {detail.nearbyPreferencePlaces.map((place) => {
                   const summary = nearbyCheckSummary(place)
@@ -259,7 +270,7 @@ export function ListingDrawer({ open, listing, onClose }: ListingDrawerProps) {
           ) : null}
 
           {activeListing.description ? (
-            <Section title="Original description">
+            <Section title="Listing description">
               <p className="whitespace-pre-wrap text-[14px] leading-7 text-ink">{activeListing.description}</p>
             </Section>
           ) : null}
@@ -288,9 +299,6 @@ export function ListingDrawer({ open, listing, onClose }: ListingDrawerProps) {
               }}
             >
               Open on WG-Gesucht
-            </Button>
-            <Button variant="secondary" size="sm" disabled>
-              Messaging comes later
             </Button>
           </div>
 

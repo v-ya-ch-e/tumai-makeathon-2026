@@ -6,7 +6,7 @@ import { Card, Chip, Input } from '../components/ui'
 import { ApiError, getSearchProfile, putSearchProfile } from '../lib/api'
 import { onboardingSteps } from '../lib/onboarding'
 import { useSession } from '../lib/session'
-import type { Mode, PlaceLocation, Schedule, UpsertSearchProfileBody } from '../types'
+import type { Mode, PlaceLocation, UpsertSearchProfileBody } from '../types'
 
 type LocalState = {
   priceMax: string
@@ -16,15 +16,12 @@ type LocalState = {
   mode: Mode
   moveInFrom: string
   moveInUntil: string
-  schedule: Schedule
-  rescanIntervalMinutes: string
 }
 
 type ValidationErrors = {
   price?: string
   locations?: string
   commute?: string
-  rescanInterval?: string
   moveInWindow?: string
 }
 
@@ -32,12 +29,10 @@ const DEFAULT_STATE: LocalState = {
   priceMax: '900',
   mainLocations: [],
   hasCar: false,
-  hasBike: true,
+  hasBike: false,
   mode: 'both',
   moveInFrom: '',
   moveInUntil: '',
-  schedule: 'one_shot',
-  rescanIntervalMinutes: '30',
 }
 
 export default function OnboardingRequirements() {
@@ -76,8 +71,6 @@ export default function OnboardingRequirements() {
           mode: searchProfile.mode,
           moveInFrom: searchProfile.moveInFrom ?? '',
           moveInUntil: searchProfile.moveInUntil ?? '',
-          schedule: searchProfile.schedule,
-          rescanIntervalMinutes: String(searchProfile.rescanIntervalMinutes),
         })
       } finally {
         if (!cancelled) setHydrated(true)
@@ -99,11 +92,6 @@ export default function OnboardingRequirements() {
 
     if (priceMax !== null && (!Number.isFinite(priceMax) || priceMax < 0)) {
       nextErrors.price = 'Maximum rent must be a non-negative number.'
-    }
-
-    const rescan = Number(state.rescanIntervalMinutes)
-    if (state.schedule === 'periodic' && (!Number.isInteger(rescan) || rescan < 5 || rescan > 1440)) {
-      nextErrors.rescanInterval = 'Rescan interval must stay between 5 and 1440 minutes.'
     }
 
     if (state.mainLocations.length === 0) {
@@ -146,8 +134,8 @@ export default function OnboardingRequirements() {
       moveInFrom: state.moveInFrom || null,
       moveInUntil: state.moveInUntil || null,
       preferences: [],
-      rescanIntervalMinutes: Number(state.rescanIntervalMinutes),
-      schedule: state.schedule,
+      rescanIntervalMinutes: 30,
+      schedule: 'periodic',
     }
 
     setBusy(true)
@@ -170,7 +158,7 @@ export default function OnboardingRequirements() {
       <OnboardingShell
         step={2}
         eyebrow="Requirements"
-        title="Define the search brief"
+        title="Set your requirements"
         onNext={() => undefined}
         busy
         progressSteps={progressSteps}
@@ -184,8 +172,8 @@ export default function OnboardingRequirements() {
     <OnboardingShell
       step={2}
       eyebrow="Requirements"
-      title="Define the search brief"
-      description="Set the real constraints first: rent ceiling, places you need to reach, and how aggressively the agent should rescan WG-Gesucht."
+      title="Set your requirements"
+      description="Start with the essentials: budget, key destinations, and move-in timing. Sherlock Homes keeps checking automatically every 30 minutes."
       onBack={() => navigate('/onboarding/profile')}
       onNext={() => void handleNext()}
       busy={busy}
@@ -202,10 +190,7 @@ export default function OnboardingRequirements() {
             />
             <SummaryRow label="Travel" value={mobilitySummary(state)} />
             <SummaryRow label="Listing type" value={modeLabel(state.mode)} />
-            <SummaryRow
-              label="Rescan"
-              value={state.schedule === 'periodic' ? `Every ${state.rescanIntervalMinutes || '30'} min` : 'One pass'}
-            />
+            <SummaryRow label="Updates" value="Every 30 min" />
           </div>
         </Card>
       }
@@ -213,7 +198,7 @@ export default function OnboardingRequirements() {
       <div className="overflow-hidden rounded-card border border-hairline bg-surface">
         <RequirementSection
           title="Monthly rent"
-          hint={errors.price ?? 'Set the highest monthly rent you would still consider, including cases the agent should reject immediately.'}
+          hint={errors.price ?? 'Set the highest monthly rent you would genuinely consider.'}
           error={Boolean(errors.price)}
         >
           <div className="max-w-sm">
@@ -251,7 +236,7 @@ export default function OnboardingRequirements() {
             }}
           />
           <p className="mt-3 text-[13px] leading-6 text-ink-muted">
-            Use the commute field to define your upper comfort limit. Leave it blank if the place matters, but timing does not.
+            Use the commute field to define your comfort limit. Leave it blank if the place matters, but timing does not.
           </p>
         </RequirementSection>
 
@@ -271,7 +256,7 @@ export default function OnboardingRequirements() {
 
         <RequirementSection
           title="What to search"
-          hint="Leave this on either unless you already know the agent should ignore one listing type."
+          hint="Choose what you want to see most often."
         >
           <div className="flex flex-wrap gap-2">
             <Chip selected={state.mode === 'wg'} onToggle={() => setState({ ...state, mode: 'wg' })}>
@@ -328,50 +313,15 @@ export default function OnboardingRequirements() {
         </RequirementSection>
 
         <RequirementSection
-          title="Run mode"
-          hint={errors.rescanInterval ?? 'Choose between one pass or a recurring background scan.'}
-          error={Boolean(errors.rescanInterval)}
+          title="Updates"
+          hint="Sherlock Homes keeps your shortlist fresh automatically, so you do not need to configure update timing."
         >
-          <div className="flex flex-wrap gap-2">
-            <Chip
-              selected={state.schedule === 'one_shot'}
-              onToggle={() => {
-                setState({ ...state, schedule: 'one_shot' })
-                setErrors((prev) => ({ ...prev, rescanInterval: undefined }))
-              }}
-            >
-              One pass
-            </Chip>
-            <Chip
-              selected={state.schedule === 'periodic'}
-              onToggle={() => {
-                setState({ ...state, schedule: 'periodic' })
-                setErrors((prev) => ({ ...prev, rescanInterval: undefined }))
-              }}
-            >
-              Keep rescanning
-            </Chip>
+          <div className="rounded-card border border-hairline bg-surface-raised p-4">
+            <p className="text-[15px] font-semibold text-ink">Automatic every 30 minutes</p>
+            <p className="mt-2 text-[14px] leading-6 text-ink-muted">
+              After onboarding, Sherlock Homes keeps checking for new listings in the background. You can pause the search later from the dashboard.
+            </p>
           </div>
-          {state.schedule === 'periodic' ? (
-            <div className="mt-4 max-w-xs">
-              <label htmlFor="req-rescan" className="data-label">
-                Minutes between rescans
-              </label>
-              <Input
-                id="req-rescan"
-                type="number"
-                inputMode="numeric"
-                min={5}
-                max={1440}
-                value={state.rescanIntervalMinutes}
-                onChange={(event) => {
-                  setState({ ...state, rescanIntervalMinutes: event.target.value })
-                  if (errors.rescanInterval) setErrors((prev) => ({ ...prev, rescanInterval: undefined }))
-                }}
-                className="mt-2"
-              />
-            </div>
-          ) : null}
         </RequirementSection>
       </div>
     </OnboardingShell>

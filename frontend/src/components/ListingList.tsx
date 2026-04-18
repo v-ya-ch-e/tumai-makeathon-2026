@@ -1,4 +1,4 @@
-import clsx from 'clsx'
+import { formatGermanDate } from '../lib/date'
 import type { Listing } from '../types'
 import { StatusPill, type StatusPillTone } from './ui'
 
@@ -17,7 +17,7 @@ function scoreTone(score: number | null): StatusPillTone {
 
 function scoreLabel(score: number | null): string {
   if (score === null) return 'Pending'
-  return score.toFixed(2)
+  return `${Math.round(score * 100)}%`
 }
 
 function priceLabel(listing: Listing): string {
@@ -31,59 +31,43 @@ function sizeLabel(listing: Listing): string {
 }
 
 function distanceLabel(listing: Listing): string {
-  if (listing.bestCommuteMinutes !== null) return `${listing.bestCommuteMinutes} min commute`
+  if (listing.bestCommuteMinutes !== null) {
+    const target = listing.bestCommuteLabel ? `to ${listing.bestCommuteLabel}` : 'to your best anchor'
+    return `${listing.bestCommuteMinutes} min ${target}`
+  }
   return 'Route pending'
+}
+
+function availabilityLabel(listing: Listing): string | null {
+  if (listing.availableFrom && listing.availableTo) {
+    return `${formatGermanDate(listing.availableFrom)} - ${formatGermanDate(listing.availableTo)}`
+  }
+  if (listing.availableFrom) return `From ${formatGermanDate(listing.availableFrom)}`
+  if (listing.availableTo) return `Until ${formatGermanDate(listing.availableTo)}`
+  return null
 }
 
 function subline(listing: Listing): string {
   const parts: string[] = []
   if (listing.district) parts.push(listing.district)
-  if (listing.availableFrom) parts.push(`From ${listing.availableFrom}`)
+  const availability = availabilityLabel(listing)
+  if (availability) parts.push(availability)
   return parts.join(' · ')
-}
-
-function listingState(
-  listing: Listing,
-  strongMatchIds: Set<string>,
-): { tone: StatusPillTone; label: string } | null {
-  if (listing.vetoReason) return { tone: 'bad', label: 'Rejected' }
-  if (strongMatchIds.has(listing.id)) return { tone: 'good', label: 'Strong match' }
-  if (listing.mismatchReasons.length > 0) return { tone: 'warn', label: 'Needs review' }
-  return null
-}
-
-function listingNote(listing: Listing): string | null {
-  if (listing.vetoReason) return listing.vetoReason
-  if (listing.mismatchReasons.length > 0) return listing.mismatchReasons[0]
-  if (listing.matchReasons.length > 0) return listing.matchReasons[0]
-  return null
 }
 
 export function ListingList({ listings, onOpen, emptyLabel }: ListingListProps) {
   if (listings.length === 0) {
     return (
       <p className="text-[13px] text-ink-muted">
-        {emptyLabel ?? 'Matching listings will appear here once the agent has finished its first scoring pass.'}
+        {emptyLabel ?? 'Matches will appear here as soon as the first results are ready.'}
       </p>
     )
   }
 
   const sorted = [...listings].sort((a, b) => (b.score ?? -1) - (a.score ?? -1))
-  const strongMatches = sorted.filter(
-    (listing) =>
-      listing.score !== null &&
-      listing.score >= 0.75 &&
-      !listing.vetoReason &&
-      listing.matchReasons.length > 0 &&
-      listing.mismatchReasons.length === 0,
-  )
-  const strongMatchIds = new Set(strongMatches.slice(0, Math.max(1, Math.min(3, Math.ceil(sorted.length * 0.2)))).map((listing) => listing.id))
-
   return (
     <ul className="divide-y divide-hairline">
       {sorted.map((listing) => {
-        const state = listingState(listing, strongMatchIds)
-        const note = listingNote(listing)
         return (
           <li key={listing.id}>
             <button
@@ -108,7 +92,7 @@ export function ListingList({ listings, onOpen, emptyLabel }: ListingListProps) 
               </div>
 
               <div className="min-w-0">
-                <div className="flex flex-wrap items-start justify-between gap-3">
+                <div className="grid gap-3 sm:grid-cols-[minmax(0,1fr)_auto] sm:items-start">
                   <div className="min-w-0">
                     <h3 className="truncate text-[20px] font-semibold text-ink">
                       {listing.title ?? `Listing ${listing.id}`}
@@ -121,8 +105,8 @@ export function ListingList({ listings, onOpen, emptyLabel }: ListingListProps) 
                     {listing.kind ? (
                       <StatusPill tone="idle">{listing.kind === 'flat' ? 'Whole flat' : 'WG room'}</StatusPill>
                     ) : null}
+                  <div className="flex items-start justify-start sm:justify-end">
                     <StatusPill tone={scoreTone(listing.score)}>{scoreLabel(listing.score)}</StatusPill>
-                    {state ? <StatusPill tone={state.tone}>{state.label}</StatusPill> : null}
                   </div>
                 </div>
 
@@ -132,14 +116,8 @@ export function ListingList({ listings, onOpen, emptyLabel }: ListingListProps) 
                   <Fact label="Commute" value={distanceLabel(listing)} />
                 </dl>
 
-                {note ? (
-                  <p className={clsx('mt-4 text-[14px] leading-6', listing.vetoReason ? 'text-bad' : 'text-ink-muted')}>
-                    {note}
-                  </p>
-                ) : null}
-
                 <div className="mt-4 flex items-center justify-between border-t border-hairline pt-3 text-[13px] text-ink-muted">
-                  <span>{listing.coverPhotoUrl ? 'Photo available' : 'Text-only listing'}</span>
+                  <span>See details and original listing</span>
                   <span aria-hidden className="text-ink transition-transform duration-150 group-hover:translate-x-0.5">
                     Open →
                   </span>

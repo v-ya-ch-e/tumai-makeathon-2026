@@ -24,25 +24,25 @@ type FieldErrors = {
   username?: string
   gender?: string
   age?: string
-  email?: string
+  notificationEmail?: string
   signInUsername?: string
 }
 
 export default function OnboardingProfile() {
   const navigate = useNavigate()
-  const { setSession } = useSession()
+  const { setUsername, setSession } = useSession()
 
   const [mode, setMode] = useState<Mode>('create')
   const [usernameInput, setUsernameInput] = useState('')
   const [gender, setGender] = useState<Gender | ''>('')
   const [ageInput, setAgeInput] = useState('')
-  const [emailInput, setEmailInput] = useState('')
+  const [notificationEmailInput, setNotificationEmailInput] = useState('')
   const [signInUsername, setSignInUsername] = useState('')
   const [busy, setBusy] = useState(false)
   const [footer, setFooter] = useState<ReactNode>(null)
   const [errors, setErrors] = useState<FieldErrors>({})
 
-  const usernamePreview = useMemo(() => usernameInput.trim() || 'room-hunt-2026', [usernameInput])
+  const usernamePreview = useMemo(() => usernameInput.trim() || 'your-name', [usernameInput])
 
   const switchMode = (nextMode: Mode) => {
     if (nextMode === mode || busy) return
@@ -64,16 +64,16 @@ export default function OnboardingProfile() {
 
     const nameError = validateUsername(username)
     if (nameError) nextErrors.username = nameError
-    if (!gender) nextErrors.gender = 'Select the profile value that matches the backend model.'
+    if (!gender) nextErrors.gender = 'Select your gender.'
 
     const age = Number(ageInput)
     if (!Number.isInteger(age) || age < 16 || age > 99) {
       nextErrors.age = 'Age must be a whole number between 16 and 99.'
     }
 
-    const email = emailInput.trim()
-    if (email && !EMAIL_RE.test(email)) {
-      nextErrors.email = 'Enter a valid email address or leave it blank.'
+    const notificationEmail = notificationEmailInput.trim()
+    if (notificationEmail && !EMAIL_RE.test(notificationEmail)) {
+      nextErrors.notificationEmail = 'Enter a valid email address or leave it blank.'
     }
 
     setErrors(nextErrors)
@@ -81,13 +81,13 @@ export default function OnboardingProfile() {
 
     setBusy(true)
     try {
-      const user = await createUser({
+      await createUser({
         username,
         age,
         gender: gender as Gender,
-        email: email || null,
+        email: notificationEmail || null,
       })
-      setSession(username, user)
+      setUsername(username)
       navigate('/onboarding/requirements', { replace: false })
     } catch (error) {
       if (error instanceof ApiError && error.status === 409) {
@@ -118,7 +118,13 @@ export default function OnboardingProfile() {
         return
       }
       setSession(username, user)
-      navigate('/', { replace: true })
+      // Navigate straight to /dashboard instead of going through HomeRedirect
+      // at '/'. React Router 7 re-renders the matched route synchronously from
+      // its external history store, which can out-race the React state commit
+      // from setSession. If HomeRedirect reads the still-null session it
+      // bounces us right back to /onboarding/profile, which is why sign-in
+      // appeared to only succeed on the second attempt.
+      navigate('/dashboard', { replace: true })
     } catch (error) {
       if (error instanceof ApiError) {
         setFooter(<p className="text-[15px] text-bad">{error.message}</p>)
@@ -136,15 +142,15 @@ export default function OnboardingProfile() {
     <OnboardingShell
       step={1}
       eyebrow={createMode ? 'Profile' : 'Resume'}
-      title={createMode ? 'Create the hunt profile' : 'Open an existing hunt'}
+      title={createMode ? 'Create your profile' : 'Welcome back'}
       description={
         createMode
-          ? 'Use a local username so this browser can store the search brief, resume hunts, and fetch saved results. Age and gender stay aligned with the WG-Gesucht demo flow.'
-          : 'Use the same username you already created on this device. The demo keeps this step intentionally lightweight.'
+          ? 'Tell us what matters to you. Sherlock Homes searches WG-Gesucht, ranks the best fits, and keeps them in one clear shortlist.'
+          : 'Use the same username you created earlier to reopen your saved search.'
       }
       onNext={() => void (createMode ? handleCreate() : handleSignIn())}
       busy={busy}
-      nextLabel={createMode ? 'Continue to requirements' : 'Open dashboard'}
+      nextLabel={createMode ? 'Continue to requirements' : 'Open results'}
       footer={footer}
       showProgress={createMode}
       progressSteps={onboardingSteps({
@@ -156,7 +162,7 @@ export default function OnboardingProfile() {
         createMode ? (
           <div className="space-y-4">
             <Card className="panel-muted p-6">
-              <p className="section-kicker">Stored locally</p>
+              <p className="section-kicker">Saved profile</p>
               <p className="mt-4 text-[24px] font-semibold text-ink">{usernamePreview}</p>
               <dl className="mt-5 space-y-3">
                 <PreviewRow label="Age" value={ageInput || 'Not set'} />
@@ -167,19 +173,19 @@ export default function OnboardingProfile() {
               </dl>
             </Card>
             <Card className="panel p-6">
-              <p className="text-[15px] font-semibold text-ink">What happens next</p>
+              <p className="text-[15px] font-semibold text-ink">What Sherlock Homes does</p>
               <ul className="mt-3 space-y-2 text-[14px] leading-6 text-ink-muted">
-                <li>Define a rent ceiling and the places you need to reach.</li>
-                <li>Mark the details that change how listings get ranked.</li>
-                <li>Start a hunt and review the agent log beside the ranked results.</li>
+                <li>Finds relevant WG-Gesucht listings for your budget and preferred area.</li>
+                <li>Ranks them by fit, including commute, timing, and the preferences you choose.</li>
+                <li>Keeps your shortlist fresh automatically, so you only review the strongest options.</li>
               </ul>
             </Card>
           </div>
         ) : (
           <Card className="panel p-6">
-            <p className="text-[15px] font-semibold text-ink">Sign-in note</p>
+            <p className="text-[15px] font-semibold text-ink">Resume note</p>
             <p className="mt-3 text-[14px] leading-6 text-ink-muted">
-              Usernames are local identifiers for the demo. If you do not see your hunt, create a new profile and continue.
+              Use the same username you used before on this device. If you do not have one yet, create a profile first.
             </p>
           </Card>
         )
@@ -193,7 +199,7 @@ export default function OnboardingProfile() {
             <>
               <FieldRow
                 label="Username"
-                hint="Pick a short local handle. This is how the browser reopens the same hunt later."
+                hint="Choose a short name you will recognize when you return."
                 error={errors.username}
               >
                 <Input
@@ -212,7 +218,7 @@ export default function OnboardingProfile() {
 
               <FieldRow
                 label="Age"
-                hint="Included because many WG listings mention a preferred age range."
+                hint="Helpful when listings mention a preferred age range."
                 error={errors.age}
               >
                 <Input
@@ -233,28 +239,28 @@ export default function OnboardingProfile() {
 
               <FieldRow
                 label="Notification email"
-                hint="Optional for now. It becomes useful once alerting is wired up."
-                error={errors.email}
+                hint="Optional for future updates and alerts."
+                error={errors.notificationEmail}
               >
                 <Input
                   id="onboarding-notification-email"
                   type="email"
-                  value={emailInput}
+                  value={notificationEmailInput}
                   onChange={(event) => {
-                    setEmailInput(event.target.value)
-                    if (errors.email) {
-                      setErrors((prev) => ({ ...prev, email: undefined }))
+                    setNotificationEmailInput(event.target.value)
+                    if (errors.notificationEmail) {
+                      setErrors((prev) => ({ ...prev, notificationEmail: undefined }))
                     }
                   }}
                   autoComplete="email"
-                  aria-invalid={Boolean(errors.email)}
-                  placeholder="you@example.com"
+                  aria-invalid={Boolean(errors.notificationEmail)}
+                  placeholder="Enter your email here"
                 />
               </FieldRow>
 
               <FieldRow
                 label="Gender"
-                hint="Matches the backend profile field used for the demo."
+                hint="Used when a listing mentions a preferred fit."
                 error={errors.gender}
               >
                 <Select
@@ -280,7 +286,7 @@ export default function OnboardingProfile() {
           ) : (
             <FieldRow
               label="Username"
-              hint="Use the same local username you created earlier."
+              hint="Use the same username you created earlier."
               error={errors.signInUsername}
             >
               <Input
