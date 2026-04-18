@@ -9,6 +9,7 @@ import { useSession } from '../lib/session'
 import type { Gender } from '../types'
 
 const USERNAME_RE = /^[a-zA-Z0-9_-]+$/
+const EMAIL_RE = /^[^\s@]+@[^\s@]+\.[^\s@]+$/
 
 const GENDER_OPTIONS: { value: Gender; label: string }[] = [
   { value: 'female', label: 'Female' },
@@ -23,6 +24,7 @@ type FieldErrors = {
   username?: string
   gender?: string
   age?: string
+  notificationEmail?: string
   signInUsername?: string
 }
 
@@ -35,6 +37,7 @@ export default function OnboardingProfile() {
   const [usernameInput, setUsernameInput] = useState('')
   const [gender, setGender] = useState<Gender | ''>('')
   const [ageInput, setAgeInput] = useState('')
+  const [notificationEmailInput, setNotificationEmailInput] = useState('')
   const [signInUsername, setSignInUsername] = useState('')
 
   const [busy, setBusy] = useState(false)
@@ -74,6 +77,11 @@ export default function OnboardingProfile() {
       nextErrors.age = 'Age must be a whole number between 16 and 99.'
     }
 
+    const notificationEmail = notificationEmailInput.trim()
+    if (notificationEmail && !EMAIL_RE.test(notificationEmail)) {
+      nextErrors.notificationEmail = 'Enter a valid email address or leave it blank.'
+    }
+
     setErrors(nextErrors)
     if (Object.keys(nextErrors).length > 0) {
       return
@@ -81,7 +89,12 @@ export default function OnboardingProfile() {
 
     setBusy(true)
     try {
-      await createUser({ username, age, gender: gender as Gender })
+      await createUser({
+        username,
+        age,
+        gender: gender as Gender,
+        notificationEmail: notificationEmailInput.trim() || null,
+      })
       setUsername(username)
       navigate('/onboarding/requirements', { replace: false })
     } catch (e) {
@@ -200,7 +213,11 @@ export default function OnboardingProfile() {
 
         {mode === 'create' ? (
           <div className="grid gap-5 md:grid-cols-2">
-            <FieldCard label="Choose a hunt name" hint="Short, memorable, and unique on this device." error={errors.username}>
+            <FieldCard
+              label="Choose a hunt name"
+              hint="Use something memorable on this device - initials, a nickname, or a short theme all work well."
+              error={errors.username}
+            >
               <Input
                 id="onboarding-username"
                 value={usernameInput}
@@ -211,7 +228,7 @@ export default function OnboardingProfile() {
                 autoComplete="username"
                 maxLength={40}
                 aria-invalid={Boolean(errors.username)}
-                placeholder="lennart-munich"
+                placeholder="room-hunt-2026"
               />
             </FieldCard>
 
@@ -229,6 +246,27 @@ export default function OnboardingProfile() {
                 }}
                 aria-invalid={Boolean(errors.age)}
                 placeholder="24"
+              />
+            </FieldCard>
+
+            <FieldCard
+              label="Notification email"
+              hint="Optional. We can use this later to alert you as soon as a strong offer appears."
+              error={errors.notificationEmail}
+            >
+              <Input
+                id="onboarding-notification-email"
+                type="email"
+                value={notificationEmailInput}
+                onChange={(ev) => {
+                  setNotificationEmailInput(ev.target.value)
+                  if (errors.notificationEmail) {
+                    setErrors((prev) => ({ ...prev, notificationEmail: undefined }))
+                  }
+                }}
+                autoComplete="email"
+                aria-invalid={Boolean(errors.notificationEmail)}
+                placeholder="you@example.com"
               />
             </FieldCard>
 
@@ -276,7 +314,7 @@ export default function OnboardingProfile() {
               autoComplete="username"
               maxLength={40}
               aria-invalid={Boolean(errors.signInUsername)}
-              placeholder="lennart-munich"
+              placeholder="room-hunt-2026"
               onKeyDown={(ev) => {
                 if (ev.key === 'Enter' && !busy) {
                   ev.preventDefault()
