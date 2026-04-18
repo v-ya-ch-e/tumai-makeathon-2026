@@ -213,3 +213,89 @@ def test_scraper_refreshes_stale_listings(monkeypatch) -> None:
 
     assert scraped == 1
     scrape_spy.assert_awaited_once()
+
+
+def test_scraper_deletion_sweep_tombstones_missing_listings(monkeypatch) -> None:
+    """After N consecutive passes without seeing a listing, it gets tombstoned."""
+    engine = _make_engine()
+    monkeypatch.setattr(db_module, "engine", engine)
+
+    with Session(engine) as session:
+        repo.upsert_global_listing(session, listing=_full_listing("keep"), status="full")
+        repo.upsert_global_listing(session, listing=_full_listing("gone"), status="full")
+
+    async def fake_search(*_a, **_kw):
+        # Only "keep" continues to appear; "gone" is missing from both passes.
+        return [
+            Listing(
+                id="keep",
+                url=HttpUrl("https://www.wg-gesucht.de/keep.html"),
+                title="keep stub",
+            )
+        ]
+
+    agent = ScraperAgent(max_pages=1, interval_seconds=1, refresh_hours=24)
+
+    with (
+        patch("app.scraper.agent.browser.anonymous_search", new=AsyncMock(side_effect=fake_search)),
+        patch(
+            "app.scraper.agent.browser.anonymous_scrape_listing",
+            new=AsyncMock(side_effect=lambda lst, **_kw: _full_listing(lst.id)),
+        ),
+    ):
+        asyncio.run(agent.run_once())
+        asyncio.run(agent.run_once())
+
+    with Session(engine) as session:
+        keep = session.get(ListingRow, "keep")
+        gone = session.get(ListingRow, "gone")
+    assert keep is not None
+    assert keep.deleted_at is None
+    assert keep.scrape_status != "deleted"
+    assert gone is not None
+    assert gone.scrape_status == "deleted"
+    assert gone.deleted_at is not None
+
+
+def test_scraper_deletion_sweep_resets_counter_when_listing_returns(monkeypatch) -> None:
+    """A listing that reappears after being missing for one pass must not be
+    tombstoned, and its miss-counter must be cleared."""
+    engine = _make_engine()
+    monkeypatch.setattr(db_module, "engine", engine)
+
+    with Session(engine) as session:
+        repo.upsert_global_listing(session, listing=_full_listing("flaky"), status="full")
+
+    calls = {"n": 0}
+
+    async def fake_search(*_a, **_kw):
+        calls["n"] += 1
+        # Pass 1: missing. Pass 2: reappears.
+        if calls["n"] == 1:
+            return []
+        return [
+            Listing(
+                id="flaky",
+                url=HttpUrl("https://www.wg-gesucht.de/flaky.html"),
+                title="flaky stub",
+            )
+        ]
+
+    agent = ScraperAgent(max_pages=1, interval_seconds=1, refresh_hours=24)
+
+    with (
+        patch("app.scraper.agent.browser.anonymous_search", new=AsyncMock(side_effect=fake_search)),
+        patch(
+            "app.scraper.agent.browser.anonymous_scrape_listing",
+            new=AsyncMock(side_effect=lambda lst, **_kw: _full_listing(lst.id)),
+        ),
+    ):
+        asyncio.run(agent.run_once())
+        asyncio.run(agent.run_once())
+
+    with Session(engine) as session:
+        row = session.get(ListingRow, "flaky")
+    assert row is not None
+    assert row.deleted_at is None
+    assert row.scrape_status != "deleted"
+    assert "flaky" not in agent._missing_passes

@@ -25,7 +25,7 @@ async def lifespan(app: FastAPI):
     logger.info("WG database: %s", wg_db.describe_database())
     from .wg_agent import periodic as wg_periodic
 
-    await wg_periodic.resume_running_hunts()
+    await wg_periodic.resume_user_agents()
     yield
 
 

@@ -14,7 +14,8 @@ const LS_KEY = 'wg-hunter.username'
 
 export type SessionContextValue = {
   username: string | null
-  setUsername: (u: string | null) => void
+  setUsername: (u: null) => void
+  setSession: (username: string, user: User) => void
   user: User | null
   refreshUser: () => Promise<void>
   isReady: boolean
@@ -58,28 +59,29 @@ export function SessionProvider({ children }: { children: ReactNode }) {
     }
   }, [refreshUser])
 
-  const setUsername = useCallback(
-    (u: string | null) => {
-      if (u) {
-        localStorage.setItem(LS_KEY, u)
-      } else {
-        localStorage.removeItem(LS_KEY)
-      }
-      setUsernameState(u)
-      void refreshUser()
-    },
-    [refreshUser],
-  )
+  const setUsername = useCallback((u: null) => {
+    void u
+    localStorage.removeItem(LS_KEY)
+    setUsernameState(null)
+    setUser(null)
+  }, [])
+
+  const setSession = useCallback((nextUsername: string, nextUser: User) => {
+    localStorage.setItem(LS_KEY, nextUsername)
+    setUsernameState(nextUsername)
+    setUser(nextUser)
+  }, [])
 
   const value = useMemo(
     () => ({
       username,
       setUsername,
+      setSession,
       user,
       refreshUser,
       isReady,
     }),
-    [username, setUsername, user, refreshUser, isReady],
+    [username, setUsername, setSession, user, refreshUser, isReady],
   )
 
   return <SessionContext.Provider value={value}>{children}</SessionContext.Provider>
