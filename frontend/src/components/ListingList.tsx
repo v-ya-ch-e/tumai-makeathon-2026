@@ -42,9 +42,12 @@ function subline(listing: Listing): string {
   return parts.join(' · ')
 }
 
-function listingState(listing: Listing): { tone: StatusPillTone; label: string } | null {
+function listingState(
+  listing: Listing,
+  strongMatchIds: Set<string>,
+): { tone: StatusPillTone; label: string } | null {
   if (listing.vetoReason) return { tone: 'bad', label: 'Rejected' }
-  if (listing.matchReasons.length > 0) return { tone: 'good', label: 'Strong match' }
+  if (strongMatchIds.has(listing.id)) return { tone: 'good', label: 'Strong match' }
   if (listing.mismatchReasons.length > 0) return { tone: 'warn', label: 'Needs review' }
   return null
 }
@@ -66,11 +69,20 @@ export function ListingList({ listings, onOpen, emptyLabel }: ListingListProps) 
   }
 
   const sorted = [...listings].sort((a, b) => (b.score ?? -1) - (a.score ?? -1))
+  const strongMatches = sorted.filter(
+    (listing) =>
+      listing.score !== null &&
+      listing.score >= 0.75 &&
+      !listing.vetoReason &&
+      listing.matchReasons.length > 0 &&
+      listing.mismatchReasons.length === 0,
+  )
+  const strongMatchIds = new Set(strongMatches.slice(0, Math.max(1, Math.min(3, Math.ceil(sorted.length * 0.2)))).map((listing) => listing.id))
 
   return (
     <ul className="divide-y divide-hairline">
       {sorted.map((listing) => {
-        const state = listingState(listing)
+        const state = listingState(listing, strongMatchIds)
         const note = listingNote(listing)
         return (
           <li key={listing.id}>

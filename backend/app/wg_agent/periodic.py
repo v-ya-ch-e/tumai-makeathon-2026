@@ -18,9 +18,25 @@ from sqlmodel import Session
 from . import commute, evaluator, places, repo
 from . import db as db_module
 from .db_models import HuntRow
-from .models import ActionKind, AgentAction, HuntStatus, NearbyPlace, SearchProfile
+from .models import (
+    ActionKind,
+    AgentAction,
+    HuntStatus,
+    NearbyPlace,
+    PlaceLocation,
+    SearchProfile,
+)
 
 logger = logging.getLogger(__name__)
+
+CITY_CENTER_PLACE_ID = "munich_city_center"
+CITY_CENTER_LABEL = "City center"
+CITY_CENTER_LOCATION = PlaceLocation(
+    label=CITY_CENTER_LABEL,
+    place_id=CITY_CENTER_PLACE_ID,
+    lat=48.137154,
+    lng=11.576124,
+)
 
 
 class HuntRunFailed(RuntimeError):
@@ -58,6 +74,14 @@ def _evaluate_detail(
             continue
         parts.append(f"{loc.label}: {minutes} min ({mode})")
     return "; ".join(parts) or None
+
+
+def _destinations_with_city_center(sp: SearchProfile) -> list[PlaceLocation]:
+    destinations = list(sp.main_locations)
+    if any(loc.place_id == CITY_CENTER_PLACE_ID for loc in destinations):
+        return destinations
+    destinations.append(CITY_CENTER_LOCATION)
+    return destinations
 
 
 def _nearby_places_detail(
@@ -160,11 +184,10 @@ class HuntEngine:
                 if (
                     listing.lat is not None
                     and listing.lng is not None
-                    and sp.main_locations
                 ):
                     travel_times = await commute.travel_times(
                         origin=(listing.lat, listing.lng),
-                        destinations=sp.main_locations,
+                        destinations=_destinations_with_city_center(sp),
                         modes=commute.modes_for(sp),
                     )
                 if (

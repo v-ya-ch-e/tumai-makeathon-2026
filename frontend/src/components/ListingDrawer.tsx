@@ -95,6 +95,22 @@ function Section({
   )
 }
 
+function nearbyCheckSummary(place: ListingDetail['nearbyPreferencePlaces'][number]): {
+  status: string
+  detail: string | null
+} {
+  if (!place.searched) {
+    return { status: 'Lookup unavailable', detail: null }
+  }
+  if (place.distanceM !== null) {
+    return {
+      status: `${place.distanceM} m away`,
+      detail: place.placeName ? place.placeName : null,
+    }
+  }
+  return { status: 'None found nearby', detail: null }
+}
+
 export function ListingDrawer({ open, listing, onClose }: ListingDrawerProps) {
   const [detail, setDetail] = useState<ListingDetail | null>(null)
   const [loading, setLoading] = useState(false)
@@ -215,23 +231,24 @@ export function ListingDrawer({ open, listing, onClose }: ListingDrawerProps) {
 
           {detail && detail.nearbyPreferencePlaces.length > 0 ? (
             <Section title="Nearby preference checks">
-              <ul className="space-y-2 text-[13px] leading-6 text-ink">
-                {detail.nearbyPreferencePlaces.map((place) => (
-                  <li key={place.key}>
-                    <span className="text-ink-muted">{place.label}</span>
-                    {!place.searched ? (
-                      <span> — lookup unavailable</span>
-                    ) : place.distanceM !== null ? (
-                      <span>
-                        {' '}
-                        — {place.distanceM} m
-                        {place.placeName ? ` (${place.placeName})` : ''}
-                      </span>
-                    ) : (
-                      <span> — none found nearby</span>
-                    )}
-                  </li>
-                ))}
+              <ul className="space-y-2">
+                {detail.nearbyPreferencePlaces.map((place) => {
+                  const summary = nearbyCheckSummary(place)
+                  return (
+                    <li
+                      key={place.key}
+                      className="grid gap-1 rounded border border-hairline bg-surface-raised px-3 py-3 sm:grid-cols-[minmax(0,1fr)_auto] sm:items-start sm:gap-3"
+                    >
+                      <div className="min-w-0">
+                        <p className="text-[13px] font-medium text-ink">{place.label}</p>
+                        {summary.detail ? (
+                          <p className="mt-1 break-words text-[12px] leading-5 text-ink-muted">{summary.detail}</p>
+                        ) : null}
+                      </div>
+                      <p className="text-[12px] leading-5 text-ink-muted sm:text-right">{summary.status}</p>
+                    </li>
+                  )
+                })}
               </ul>
             </Section>
           ) : null}

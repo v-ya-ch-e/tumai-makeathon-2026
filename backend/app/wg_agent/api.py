@@ -48,6 +48,9 @@ from .models import (
 
 router = APIRouter(prefix="/api", tags=["wg-hunter"])
 
+CITY_CENTER_PLACE_ID = "munich_city_center"
+CITY_CENTER_LABEL = "City center"
+
 
 class HuntRequest(BaseModel):
     """Top-level POST body that kicks off a hunt run."""
@@ -163,9 +166,10 @@ def _travel_minutes_by_label(
     if hunt_row is None:
         return None
     sp = repo.get_search_profile(session, username=hunt_row.username)
-    if sp is None or not sp.main_locations:
+    if sp is None:
         return None
     label_by_pid = {loc.place_id: loc.label for loc in sp.main_locations}
+    label_by_pid[CITY_CENTER_PLACE_ID] = CITY_CENTER_LABEL
     out: dict[str, int] = {}
     for place_id, entry in score_row.travel_minutes.items():
         if not isinstance(entry, dict):
@@ -183,7 +187,9 @@ def _best_commute_minutes(score_row: Optional[ListingScoreRow]) -> Optional[int]
     if score_row is None or not score_row.travel_minutes:
         return None
     best: Optional[int] = None
-    for entry in score_row.travel_minutes.values():
+    for place_id, entry in score_row.travel_minutes.items():
+        if place_id == CITY_CENTER_PLACE_ID:
+            continue
         if not isinstance(entry, dict):
             continue
         minutes = entry.get("minutes")
@@ -192,6 +198,8 @@ def _best_commute_minutes(score_row: Optional[ListingScoreRow]) -> Optional[int]
         if best is None or minutes < best:
             best = minutes
     return best
+
+
 def _nearby_places_from_row(
     score_row: Optional[ListingScoreRow],
 ) -> list[NearbyPlaceDTO]:

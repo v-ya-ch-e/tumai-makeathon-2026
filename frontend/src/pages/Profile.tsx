@@ -1,4 +1,4 @@
-import { useEffect, useState, type ReactNode } from 'react'
+import { useCallback, useEffect, useState, type ReactNode } from 'react'
 import { useNavigate } from 'react-router-dom'
 import { AppTabs } from '../components/AppTabs'
 import { Button, Card, Input, Select } from '../components/ui'
@@ -15,7 +15,7 @@ const GENDER_OPTIONS: { value: Gender; label: string }[] = [
 
 export default function Profile() {
   const navigate = useNavigate()
-  const { username, user, isReady, refreshUser } = useSession()
+  const { username, user, isReady, refreshUser, setUsername } = useSession()
   const [ageInput, setAgeInput] = useState('')
   const [gender, setGender] = useState<Gender | ''>('')
   const [notificationEmailInput, setNotificationEmailInput] = useState('')
@@ -24,6 +24,12 @@ export default function Profile() {
   const [hydrated, setHydrated] = useState(false)
   const [footer, setFooter] = useState<ReactNode>(null)
   const [errors, setErrors] = useState<{ age?: string; gender?: string; notificationEmail?: string }>({})
+
+  const handleLogout = useCallback(() => {
+    localStorage.removeItem('wg-hunter.hunt-id')
+    setUsername(null)
+    navigate('/onboarding/profile', { replace: true })
+  }, [navigate, setUsername])
 
   useEffect(() => {
     if (!isReady) return
@@ -108,13 +114,18 @@ export default function Profile() {
             <p className="section-kicker text-accent">WG Hunter</p>
             <p className="mt-1 text-[14px] text-ink-muted">Dashboard and profile</p>
           </div>
-          <AppTabs
-            current="/profile"
-            tabs={[
-              { label: 'Dashboard', href: '/dashboard' },
-              { label: 'Profile', href: '/profile' },
-            ]}
-          />
+          <div className="flex flex-wrap items-center justify-end gap-3">
+            <AppTabs
+              current="/profile"
+              tabs={[
+                { label: 'Dashboard', href: '/dashboard' },
+                { label: 'Profile', href: '/profile' },
+              ]}
+            />
+            <Button variant="secondary" size="sm" onClick={handleLogout}>
+              Log out
+            </Button>
+          </div>
         </div>
 
         <header className="page-frame overflow-hidden">

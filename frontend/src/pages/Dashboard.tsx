@@ -236,7 +236,7 @@ export default function Dashboard() {
     }
   }
 
-  const onStartAsNewUser = () => {
+  const onLogout = () => {
     localStorage.removeItem(LS_HUNT_ID)
     setOpenListing(null)
     setUsername(null)
@@ -292,13 +292,18 @@ export default function Dashboard() {
             <p className="section-kicker text-accent">WG Hunter</p>
             <p className="mt-1 text-[14px] text-ink-muted">Dashboard and profile</p>
           </div>
-          <AppTabs
-            current="/dashboard"
-            tabs={[
-              { label: 'Dashboard', href: '/dashboard' },
-              { label: 'Profile', href: '/profile' },
-            ]}
-          />
+          <div className="flex flex-wrap items-center justify-end gap-3">
+            <AppTabs
+              current="/dashboard"
+              tabs={[
+                { label: 'Dashboard', href: '/dashboard' },
+                { label: 'Profile', href: '/profile' },
+              ]}
+            />
+            <Button variant="secondary" size="sm" onClick={onLogout}>
+              Log out
+            </Button>
+          </div>
         </div>
 
         <header className="page-frame overflow-hidden">
@@ -358,17 +363,6 @@ export default function Dashboard() {
                     </div>
                   }
                 />
-
-                <ControlRow
-                  label="Reset"
-                  value="Clear the current local profile and start a new hunt."
-                  action={
-                    <Button variant="secondary" size="sm" onClick={onStartAsNewUser}>
-                      New user
-                    </Button>
-                  }
-                />
-
                 {errorMessage ? (
                   <p className="rounded border border-bad/30 bg-bad/5 px-4 py-3 text-[13px] leading-6 text-bad">
                     {errorMessage}
@@ -484,6 +478,7 @@ export default function Dashboard() {
             </section>
           </section>
         )}
+
       </div>
 
       {username ? (
