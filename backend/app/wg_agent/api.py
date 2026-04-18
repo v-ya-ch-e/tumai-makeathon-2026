@@ -12,7 +12,7 @@ from fastapi.responses import StreamingResponse
 from pydantic import BaseModel, Field
 from sqlmodel import Session, select
 
-from . import repo
+from . import periodic, repo
 from .db import engine, get_session
 from .db_models import HuntRow, ListingRow, ListingScoreRow, PhotoRow
 from .dto import (
@@ -44,8 +44,6 @@ from .models import (
 )
 
 router = APIRouter(prefix="/api", tags=["wg-hunter"])
-
-EVENT_QUEUES: dict[str, asyncio.Queue] = {}
 
 
 class HuntRequest(BaseModel):
@@ -202,7 +200,7 @@ def get_credentials_status(
 
 
 @router.post("/users/{username}/hunts", status_code=201, response_model=HuntDTO)
-def create_hunt(
+async def create_hunt(
     username: str,
     body: CreateHuntBody,
     session: Session = Depends(get_session),
@@ -215,26 +213,42 @@ def create_hunt(
         raise HTTPException(status_code=400, detail="User has no search profile yet")
 
     hunt = repo.create_hunt(session, username=username, schedule=body.schedule)
-    repo.append_action(
-        session,
-        hunt_id=hunt.id,
-        action=AgentAction(
-            kind=ActionKind.boot,
-            summary=(
-                f"Hunt queued ({body.schedule}). Agent loop wires up in the next iteration."
-            ),
-        ),
+    repo.update_hunt_status(
+        session, hunt_id=hunt.id, status=HuntStatus.running
     )
+    rescan = (
+        body.rescan_interval_minutes
+        if body.rescan_interval_minutes is not None
+        else sp.rescan_interval_minutes
+    )
+    boot = AgentAction(
+        kind=ActionKind.boot,
+        summary=f"Hunt queued ({body.schedule}).",
+    )
+    repo.append_action(session, hunt_id=hunt.id, action=boot)
+    periodic.spawn_hunter(
+        hunt.id,
+        username,
+        body.schedule,
+        rescan,
+    )
+    q = periodic.event_queue_for(hunt.id)
+    if q is not None:
+        try:
+            q.put_nowait(boot)
+        except asyncio.QueueFull:
+            pass
     fresh = repo.get_hunt(session, hunt_id=hunt.id)
     assert fresh is not None
     return hunt_to_dto(fresh, username=username, schedule=body.schedule)
 
 
 @router.post("/hunts/{hunt_id}/stop", response_model=HuntDTO)
-def stop_hunt(hunt_id: str, session: Session = Depends(get_session)) -> HuntDTO:
+async def stop_hunt(hunt_id: str, session: Session = Depends(get_session)) -> HuntDTO:
     row = session.get(HuntRow, hunt_id)
     if row is None:
         raise HTTPException(status_code=404, detail="Hunt not found")
+    periodic.cancel_hunter(hunt_id)
     repo.update_hunt_status(
         session,
         hunt_id=hunt_id,
@@ -271,22 +285,37 @@ async def stream_hunt(
         raise HTTPException(status_code=404, detail="Hunt not found")
 
     async def event_source():
-        seen_action_ids: set[tuple[datetime, str]] = set()
+        seen: set[tuple[datetime, str, str]] = set()
         for a in hunt.actions:
-            seen_action_ids.add((a.at, a.summary))
+            seen.add((a.at, a.kind.value, a.summary))
             yield _sse(action_to_dto(a).model_dump(mode="json"))
 
         while True:
+            action: AgentAction | None = None
+            queue = periodic.event_queue_for(hunt_id)
+            if queue is not None:
+                try:
+                    action = await asyncio.wait_for(queue.get(), timeout=1.0)
+                except asyncio.TimeoutError:
+                    pass
+            else:
+                await asyncio.sleep(1.0)
+
+            if action is not None:
+                key = (action.at, action.kind.value, action.summary)
+                if key not in seen:
+                    seen.add(key)
+                    yield _sse(action_to_dto(action).model_dump(mode="json"))
+
             with Session(engine) as s:
                 fresh = repo.get_hunt(s, hunt_id=hunt_id)
             if fresh is None:
                 return
             for a in fresh.actions:
-                key = (a.at, a.summary)
-                if key in seen_action_ids:
-                    continue
-                seen_action_ids.add(key)
-                yield _sse(action_to_dto(a).model_dump(mode="json"))
+                key = (a.at, a.kind.value, a.summary)
+                if key not in seen:
+                    seen.add(key)
+                    yield _sse(action_to_dto(a).model_dump(mode="json"))
             if fresh.status in (HuntStatus.done, HuntStatus.failed):
                 yield _sse(
                     {
@@ -298,7 +327,6 @@ async def stream_hunt(
                 )
                 return
             yield ": keep-alive\n\n"
-            await asyncio.sleep(1.0)
 
     return StreamingResponse(event_source(), media_type="text/event-stream")
 

@@ -31,7 +31,9 @@ async def lifespan(app: FastAPI):
     cfg = Config(str(alembic_ini))
     cfg.set_main_option("script_location", str(BACKEND_DIR / "alembic"))
     command.upgrade(cfg, "head")
-    # TODO(periodic_hunter): re-spawn running hunts
+    from .wg_agent import periodic as wg_periodic
+
+    await wg_periodic.resume_running_hunts()
     yield
 
 
