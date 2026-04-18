@@ -1,9 +1,11 @@
+import clsx from 'clsx'
 import { useCallback, useEffect, useRef, useState, type ReactNode } from 'react'
 import { useLocation, useNavigate } from 'react-router-dom'
 import { AppTabs } from '../components/AppTabs'
 import { ConnectWGDialog } from '../components/ConnectWGDialog'
 import { ListingDrawer } from '../components/ListingDrawer'
 import { ListingList } from '../components/ListingList'
+import { ListingMap } from '../components/ListingMap'
 import { Button, Card, StatusPill, type StatusPillTone } from '../components/ui'
 import {
   ApiError,
@@ -96,6 +98,7 @@ export default function Dashboard() {
   const [dialogOpen, setDialogOpen] = useState(false)
   const [errorMessage, setErrorMessage] = useState<string | null>(null)
   const [openListing, setOpenListing] = useState<Listing | null>(null)
+  const [viewMode, setViewMode] = useState<'list' | 'map'>('list')
   const seenActionKeysRef = useRef<Set<string>>(new Set())
   const autoStartTriggeredRef = useRef(false)
   const refreshTimerRef = useRef<number | null>(null)
@@ -253,6 +256,7 @@ export default function Dashboard() {
       const nextHunt = await createHunt(username, { schedule: profile.schedule })
       localStorage.setItem(LS_HUNT_ID, nextHunt.id)
       setOpenListing(null)
+      setViewMode('list')
       applyHunt(nextHunt)
     } catch (error) {
       setErrorMessage(error instanceof ApiError ? error.message : String(error))
@@ -479,13 +483,43 @@ export default function Dashboard() {
                 <p className="section-kicker text-accent">Ranked results</p>
                 <h2 className="section-title mt-2">Best matches</h2>
               </div>
-              <p className="text-[13px] text-ink-muted">
-                {listings.length} collected · {summaryCount(listings)}
-              </p>
+              <div className="flex items-center gap-3">
+                <p className="text-[13px] text-ink-muted">
+                  {listings.length} collected · {summaryCount(listings)}
+                </p>
+                <div className="flex overflow-hidden rounded border border-hairline">
+                  <button
+                    type="button"
+                    onClick={() => setViewMode('list')}
+                    className={clsx(
+                      'h-8 px-3 text-[12px] font-medium transition-colors',
+                      viewMode === 'list' ? 'bg-surface-raised text-ink' : 'bg-transparent text-ink-muted hover:text-ink',
+                    )}
+                  >
+                    List
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => setViewMode('map')}
+                    className={clsx(
+                      'h-8 border-l border-hairline px-3 text-[12px] font-medium transition-colors',
+                      viewMode === 'map' ? 'bg-surface-raised text-ink' : 'bg-transparent text-ink-muted hover:text-ink',
+                    )}
+                  >
+                    Map
+                  </button>
+                </div>
+              </div>
             </div>
-            <div className="max-h-[820px] overflow-y-auto">
-              <ListingList listings={listings} onOpen={(listing) => setOpenListing(listing)} />
-            </div>
+            {viewMode === 'list' ? (
+              <div className="max-h-[820px] overflow-y-auto">
+                <ListingList listings={listings} onOpen={(listing) => setOpenListing(listing)} />
+              </div>
+            ) : (
+              <div className="p-4">
+                <ListingMap listings={listings} onOpen={(listing) => setOpenListing(listing)} />
+              </div>
+            )}
           </section>
         )}
 
