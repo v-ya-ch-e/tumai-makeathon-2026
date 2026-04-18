@@ -143,9 +143,12 @@ From [`.env.example`](./.env.example). Vite reads the same file via [`envDir: '.
 | `GOOGLE_MAPS_SERVER_KEY` | optional | backend | Google Geocoding API + Distance Matrix API + Places API (New) for listing fallback geocoding, commute times, and nearby amenity distances |
 | `GOOGLE_MAPS_MAX_RPS` | no | backend | Process-wide throttle for backend Google Maps requests; defaults to `8` |
 | `WG_SECRET_KEY` | no | backend | Pin the Fernet key used to encrypt credentials (else auto-generated at `~/.wg_hunter/secret.key`) |
-| `WG_RESCAN_INTERVAL_MINUTES` | no | backend | Shorten rescan interval during demos |
+| `WG_RESCAN_INTERVAL_MINUTES` | no | backend | Global floor on how often each per-user matcher re-checks the listing pool (minutes). Overrides the per-profile value when set. Default `3` in `.env.example` so new matches email within a few minutes of scraping |
 | `WG_STATE_FILE` | no | backend | Playwright `storage_state.json` for authenticated flows (reserved for post-v1) |
-| `AWS_ACCESS_KEY_ID` / `AWS_SECRET_ACCESS_KEY` / `AWS_DEFAULT_REGION` | no | backend | Reserved for Bedrock-based alternatives |
+| `AWS_ACCESS_KEY_ID` / `AWS_SECRET_ACCESS_KEY` / `AWS_DEFAULT_REGION` | no | backend | IAM user credentials + region for Amazon SES. Used by [`notifier.py`](./backend/app/wg_agent/notifier.py) to email users when a new match scores at/above `WG_NOTIFY_THRESHOLD`. See [`DEPLOYMENT.md`](./DEPLOYMENT.md#email-notifications-amazon-ses) for the one-time SES setup. Blank values silently disable notifications |
+| `SES_FROM_EMAIL` | no | backend | Sender identity for score-alert emails (must be a verified SES identity in `AWS_DEFAULT_REGION`). Default `noreply@doubleu.team` |
+| `WG_NOTIFY_THRESHOLD` | no | backend | Minimum match score (inclusive) that triggers an email. Default `0.9` |
+| `ENABLE_EMAIL_DEBUG` | no | backend | Set to `1` to expose `GET /api/debug/send-test-email?to=…` for smoke-testing SES end-to-end without waiting for a real hit |
 
 ---
 

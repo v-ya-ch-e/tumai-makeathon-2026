@@ -11,7 +11,9 @@ from fastapi import APIRouter, Depends, HTTPException, Query, Response
 from fastapi.responses import StreamingResponse
 from sqlmodel import Session, select
 
-from . import periodic, repo
+import os
+
+from . import notifier, periodic, repo
 from .db import engine, get_session
 from .db_models import ListingRow, PhotoRow, UserListingRow
 from .dto import (
@@ -300,6 +302,29 @@ def get_listing_detail(
     if detail is None:
         raise HTTPException(status_code=404, detail="Listing not found")
     return detail
+
+
+# --- Debug / smoke tests ---------------------------------------------------
+
+
+def _email_debug_enabled() -> bool:
+    raw = os.environ.get("ENABLE_EMAIL_DEBUG", "").strip().lower()
+    return raw in {"1", "true", "yes", "on"}
+
+
+@router.get("/debug/send-test-email")
+def debug_send_test_email(
+    to: str = Query(..., description="Destination email address"),
+) -> dict:
+    """Fire a single SES test email. Disabled unless ENABLE_EMAIL_DEBUG is set.
+
+    Useful for verifying that SES credentials + verified identity + sandbox
+    status are all correctly configured without waiting for a real 0.9+ match.
+    """
+    if not _email_debug_enabled():
+        raise HTTPException(status_code=404, detail="Not Found")
+    notifier.send_test_email(to)
+    return {"status": "dispatched", "to": to}
 
 
 # --- Helpers ---------------------------------------------------------------
