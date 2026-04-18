@@ -296,9 +296,6 @@ export function ListingDrawer({ open, listing, onClose }: ListingDrawerProps) {
             >
               Open on WG-Gesucht
             </Button>
-            <Button variant="secondary" size="sm" disabled>
-              Messaging comes later
-            </Button>
           </div>
 
           {loading ? <p className="text-[13px] text-ink-muted">Loading…</p> : null}

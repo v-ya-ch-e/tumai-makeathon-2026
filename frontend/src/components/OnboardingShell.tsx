@@ -43,14 +43,16 @@ export function OnboardingShell({
   return (
     <div className="min-h-screen bg-canvas">
       <div className="app-shell">
-        {showProgress ? (
-          <div className="mb-8 flex flex-col gap-3 border-b border-hairline pb-4 sm:flex-row sm:items-center sm:justify-between">
-            <ProgressSteps current={step} steps={progressSteps} />
-            <span className="hidden font-mono text-[11px] uppercase tracking-[0.22em] text-ink-muted sm:inline">
-              WG Hunter
-            </span>
+        <div className="mb-8 flex flex-col gap-5 border-b border-hairline pb-5 sm:flex-row sm:items-end sm:justify-between">
+          <div>
+            <span className="brand-chip">Investigate less. Belong sooner.</span>
+            <p className="brand-wordmark mt-3">Sherlock Homes</p>
+            <p className="mt-1 max-w-xl text-[14px] text-ink-muted">
+              A sharp-eyed rental companion for sorting clues, trade-offs, and strong leads.
+            </p>
           </div>
-        ) : null}
+          {showProgress ? <ProgressSteps current={step} steps={progressSteps} /> : null}
+        </div>
 
         <div className={aside ? 'grid gap-8 lg:grid-cols-[minmax(0,1fr)_320px]' : 'grid gap-6'}>
           <section className="page-frame overflow-hidden">
@@ -83,7 +85,7 @@ export function OnboardingShell({
                       Back
                     </Button>
                   ) : (
-                    <p className="text-[13px] text-ink-muted">You can update these details later.</p>
+                    <p className="text-[13px] text-ink-muted">You can revisit these details when the case evolves.</p>
                   )}
                 </div>
                 <div className="flex items-center justify-end gap-3">

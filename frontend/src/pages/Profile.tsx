@@ -111,8 +111,8 @@ export default function Profile() {
       <div className="app-shell space-y-8">
         <div className="flex flex-wrap items-center justify-between gap-4 border-b border-hairline pb-4">
           <div>
-            <p className="section-kicker text-accent">WG Hunter</p>
-            <p className="mt-1 text-[14px] text-ink-muted">Results and profile</p>
+            <p className="section-kicker text-accent">Sherlock Homes</p>
+            <p className="mt-1 text-[14px] text-ink-muted">Profile and saved brief</p>
           </div>
           <div className="flex flex-wrap items-center justify-end gap-3">
             <AppTabs
@@ -133,7 +133,7 @@ export default function Profile() {
             <p className="section-kicker text-accent">Profile</p>
             <h1 className="page-title mt-4">Your profile</h1>
             <p className="body-copy mt-4 max-w-3xl">
-              Update the personal details tied to your saved search. Your search settings stay in the next steps.
+              Update the personal details tied to your saved search. Your search brief and signals stay in the next steps.
             </p>
           </div>
         </header>
@@ -162,7 +162,7 @@ export default function Profile() {
 
             <FieldRow
               label="Notification email"
-              hint={errors.notificationEmail ?? 'Optional. Helpful if updates are added later.'}
+              hint={errors.notificationEmail ?? 'Optional for future updates and alerts.'}
               error={Boolean(errors.notificationEmail)}
             >
               <Input

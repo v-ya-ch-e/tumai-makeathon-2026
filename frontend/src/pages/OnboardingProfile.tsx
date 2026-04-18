@@ -136,11 +136,11 @@ export default function OnboardingProfile() {
     <OnboardingShell
       step={1}
       eyebrow={createMode ? 'Profile' : 'Resume'}
-      title={createMode ? 'Create your profile' : 'Welcome back'}
+      title={createMode ? 'Open your case file' : 'Welcome back'}
       description={
         createMode
-          ? 'Choose the details that shape your search and save them on this device.'
-          : 'Use the same username you created earlier to pick up where you left off.'
+          ? 'Start with the essentials Sherlock Homes uses to examine each lead for you.'
+          : 'Use the same username you created earlier to reopen your saved search.'
       }
       onNext={() => void (createMode ? handleCreate() : handleSignIn())}
       busy={busy}
@@ -156,7 +156,7 @@ export default function OnboardingProfile() {
         createMode ? (
           <div className="space-y-4">
             <Card className="panel-muted p-6">
-              <p className="section-kicker">Saved for later</p>
+              <p className="section-kicker">Case file</p>
               <p className="mt-4 text-[24px] font-semibold text-ink">{usernamePreview}</p>
               <dl className="mt-5 space-y-3">
                 <PreviewRow label="Age" value={ageInput || 'Not set'} />
@@ -167,17 +167,17 @@ export default function OnboardingProfile() {
               </dl>
             </Card>
             <Card className="panel p-6">
-              <p className="text-[15px] font-semibold text-ink">What comes next</p>
+              <p className="text-[15px] font-semibold text-ink">What Sherlock Homes checks next</p>
               <ul className="mt-3 space-y-2 text-[14px] leading-6 text-ink-muted">
-                <li>Set your budget and the places that matter most.</li>
-                <li>Choose the details that should change the order of results.</li>
-                <li>Review fresh matches in one clear shortlist.</li>
+                <li>Set the budget and destinations that anchor a good match.</li>
+                <li>Add the signals that should move one listing above another.</li>
+                <li>Review the strongest leads in one calm shortlist.</li>
               </ul>
             </Card>
           </div>
         ) : (
           <Card className="panel p-6">
-            <p className="text-[15px] font-semibold text-ink">Sign-in note</p>
+            <p className="text-[15px] font-semibold text-ink">Resume note</p>
             <p className="mt-3 text-[14px] leading-6 text-ink-muted">
               Use the same username you used before on this device. If you do not have one yet, create a profile first.
             </p>
@@ -193,7 +193,7 @@ export default function OnboardingProfile() {
             <>
               <FieldRow
                 label="Username"
-                hint="Choose a short name you will recognize later."
+                hint="Choose a short name you will recognize when you return."
                 error={errors.username}
               >
                 <Input
@@ -233,7 +233,7 @@ export default function OnboardingProfile() {
 
               <FieldRow
                 label="Notification email"
-                hint="Optional. Helpful if updates are added later."
+                hint="Optional for future updates and alerts."
                 error={errors.notificationEmail}
               >
                 <Input

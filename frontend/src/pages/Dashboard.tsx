@@ -289,8 +289,8 @@ export default function Dashboard() {
       <div className="app-shell space-y-8">
         <div className="flex flex-wrap items-center justify-between gap-4 border-b border-hairline pb-4">
           <div>
-            <p className="section-kicker text-accent">WG Hunter</p>
-            <p className="mt-1 text-[14px] text-ink-muted">Results and profile</p>
+            <p className="section-kicker text-accent">Sherlock Homes</p>
+            <p className="mt-1 text-[14px] text-ink-muted">Leads, profile, and live signals</p>
           </div>
           <div className="flex flex-wrap items-center justify-end gap-3">
             <AppTabs
@@ -315,7 +315,7 @@ export default function Dashboard() {
               </div>
               <h1 className="page-title mt-4">{username}&apos;s search</h1>
               <p className="body-copy mt-4 max-w-3xl">
-                See fresh matches, compare the fit, and keep your shortlist moving.
+                See fresh leads, compare the trade-offs, and keep your shortlist moving with confidence.
               </p>
 
               <dl className="mt-6 grid gap-4 sm:grid-cols-2 xl:grid-cols-4">
@@ -343,7 +343,7 @@ export default function Dashboard() {
 
                 <ControlRow
                   label="Search"
-                  value={hunt ? `Run ${hunt.id}` : 'Ready to start'}
+                  value={hunt ? `Case ${hunt.id}` : 'Ready to investigate'}
                   action={
                     <div className="flex flex-wrap justify-end gap-2">
                       {isActive ? (
@@ -374,7 +374,7 @@ export default function Dashboard() {
 
           <div className="grid border-t border-hairline sm:grid-cols-4">
             <StatStrip label="Listings" value={String(listings.length)} note={summaryCount(listings)} />
-            <StatStrip label="Best fit" value={topScore(listings)} note="Top match right now" />
+            <StatStrip label="Best fit" value={topScore(listings)} note="Strongest lead right now" />
             <StatStrip label="Updates" value={String(actions.length)} note="Recent changes" />
             <StatStrip
               label="Move-in"
@@ -390,11 +390,11 @@ export default function Dashboard() {
               <p className="section-kicker text-accent">Ready when you are</p>
               <h2 className="section-title mt-4">Your search is set.</h2>
               <p className="body-copy mt-4 max-w-2xl">
-                Start a fresh search when you are ready. New matches and updates will appear here automatically.
+                Start a fresh investigation when you are ready. New leads and updates will appear here automatically.
               </p>
               <div className="mt-6 flex flex-wrap gap-3">
                 <Button variant="primary" onClick={() => void onStart()}>
-                  Start search
+                  Start investigation
                 </Button>
                 <Button variant="secondary" onClick={() => setDialogOpen(true)}>
                   {connected ? 'Manage WG login' : 'Connect WG-Gesucht'}
@@ -404,18 +404,18 @@ export default function Dashboard() {
               <ol className="mt-8 divide-y divide-hairline border-t border-hairline">
                 <LaunchStep
                   number="01"
-                  title="Collect listings"
-                  detail="Gather fresh places that match the basics of your search."
+                  title="Collect leads"
+                  detail="Gather fresh places that match the basics of your brief."
                 />
                 <LaunchStep
                   number="02"
-                  title="Rank the fit"
-                  detail="Budget, commute, timing, and preferences help sort the best options to the top."
+                  title="Examine the fit"
+                  detail="Budget, commute, timing, and signals help sort the strongest options to the top."
                 />
                 <LaunchStep
                   number="03"
                   title="Review your shortlist"
-                  detail="Open any place for the details, highlights, and the original listing."
+                  detail="Open any lead for the details, highlights, and the original listing."
                 />
               </ol>
             </Card>
@@ -452,8 +452,8 @@ export default function Dashboard() {
             <section className="page-frame overflow-hidden">
               <div className="flex flex-wrap items-end justify-between gap-4 border-b border-hairline px-6 py-5">
                 <div>
-                  <p className="section-kicker text-accent">Ranked results</p>
-                  <h2 className="section-title mt-2">Best matches</h2>
+                  <p className="section-kicker text-accent">Ranked leads</p>
+                  <h2 className="section-title mt-2">Strongest leads</h2>
                 </div>
                 <p className="text-[13px] text-ink-muted">
                   {listings.length} collected · {summaryCount(listings)}

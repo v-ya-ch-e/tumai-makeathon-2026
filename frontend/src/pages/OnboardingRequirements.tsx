@@ -107,7 +107,7 @@ export default function OnboardingRequirements() {
     }
 
     if (state.mainLocations.length === 0) {
-      nextErrors.locations = 'Add at least one city, campus, or district to anchor the search.'
+      nextErrors.locations = 'Add at least one city, campus, or district to anchor the case.'
     }
 
     const invalidLocation = state.mainLocations.find(
@@ -170,7 +170,7 @@ export default function OnboardingRequirements() {
       <OnboardingShell
         step={2}
         eyebrow="Requirements"
-        title="Set your requirements"
+        title="Set your search brief"
         onNext={() => undefined}
         busy
         progressSteps={progressSteps}
@@ -184,8 +184,8 @@ export default function OnboardingRequirements() {
     <OnboardingShell
       step={2}
       eyebrow="Requirements"
-      title="Set your requirements"
-      description="Start with the essentials: budget, key destinations, and how often you want fresh results."
+      title="Set your search brief"
+      description="Start with the facts that narrow the case: budget, key destinations, and how often fresh leads should arrive."
       onBack={() => navigate('/onboarding/profile')}
       onNext={() => void handleNext()}
       busy={busy}
@@ -213,7 +213,7 @@ export default function OnboardingRequirements() {
       <div className="overflow-hidden rounded-card border border-hairline bg-surface">
         <RequirementSection
           title="Monthly rent"
-          hint={errors.price ?? 'Set the highest monthly rent you would realistically consider.'}
+          hint={errors.price ?? 'Set the highest monthly rent you would genuinely consider.'}
           error={Boolean(errors.price)}
         >
           <div className="max-w-sm">
@@ -251,7 +251,7 @@ export default function OnboardingRequirements() {
             }}
           />
           <p className="mt-3 text-[13px] leading-6 text-ink-muted">
-            Use the commute field to define your upper comfort limit. Leave it blank if the place matters, but timing does not.
+            Use the commute field to define your comfort limit. Leave it blank if the place matters, but timing does not.
           </p>
         </RequirementSection>
 
