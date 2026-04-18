@@ -25,7 +25,7 @@ backend/app/wg_agent/
 
 ## `main.py`
 
-`FastAPI` is constructed with `lifespan=lifespan`. On startup the async context runs, in order: `wg_db.init_db()` (ensures Fernet key material and touches the engine), logs `DATABASE_URL`, loads Alembic `Config` from `backend/alembic.ini` with `script_location` pointing at `backend/alembic`, runs `command.upgrade(cfg, "head")`, then `await wg_periodic.resume_running_hunts()`. The API router from [`api.py`](../backend/app/wg_agent/api.py) is included under `/api`. Tutorial-style `/items/*` routes and `/health` remain alongside `/api/health`. When `frontend/dist/assets` exists, `/assets` is mounted; the catch-all `GET /{full_path:path}` returns `index.html` for non-`api/` and non-`assets/` paths (503 if the bundle is missing).
+`FastAPI` is constructed with `lifespan=lifespan`. On startup the async context runs, in order: `wg_db.init_db()` (ensures Fernet key material and touches the engine), logs `DATABASE_URL`, loads Alembic `Config` from `backend/alembic.ini` with `script_location` pointing at `backend/alembic`, runs `command.upgrade(cfg, "head")`, then `await wg_periodic.resume_running_hunts()`. The API router from [`api.py`](../backend/app/wg_agent/api.py) is included under `/api`. Two sibling health probes are defined at the app level: `/health` and `/api/health` (both return `{"status": "ok"}`). When `frontend/dist/assets` exists, `/assets` is mounted; the catch-all `GET /{full_path:path}` returns `index.html` for non-`api/` and non-`assets/` paths (503 if the bundle is missing).
 
 ```24:37:backend/app/main.py
 @asynccontextmanager
@@ -160,10 +160,15 @@ Thin async client around the Google Routes API's `computeRouteMatrix`. `travel_t
 
 | File | Role | Command |
 | --- | --- | --- |
-| [`test_wg_parser.py`](../backend/tests/test_wg_parser.py) | Cached HTML fixtures; asserts parser output shape | `cd backend && python tests/test_wg_parser.py` |
-| [`test_orchestrator.py`](../backend/tests/test_orchestrator.py) | Mock browser/brain end-to-end orchestrator run | `cd backend && python tests/test_orchestrator.py` |
-| [`test_repo.py`](../backend/tests/test_repo.py) | In-memory SQLite round-trip for `repo` + crypto | `cd backend && python tests/test_repo.py` |
-| [`test_periodic.py`](../backend/tests/test_periodic.py) | `HuntEngine` / `PeriodicHunter` with mocked I/O | `cd backend && python tests/test_periodic.py` |
+| [`test_wg_parser.py`](../backend/tests/test_wg_parser.py) | Cached HTML fixtures; asserts parser output shape | `cd backend && python tests/test_wg_parser.py` (or `pytest tests/test_wg_parser.py`) |
+| [`test_orchestrator.py`](../backend/tests/test_orchestrator.py) | Mock browser/brain end-to-end orchestrator run | `cd backend && python tests/test_orchestrator.py` (or `pytest tests/test_orchestrator.py`) |
+| [`test_repo.py`](../backend/tests/test_repo.py) | In-memory SQLite round-trip for `repo` + crypto | `cd backend && pytest tests/test_repo.py` |
+| [`test_periodic.py`](../backend/tests/test_periodic.py) | `HuntEngine` / `PeriodicHunter` with mocked I/O (includes the commute-reaches-score and lat-missing guard cases) | `cd backend && pytest tests/test_periodic.py` |
+| [`test_commute.py`](../backend/tests/test_commute.py) | Routes API client with monkey-patched `httpx.post` | `cd backend && pytest tests/test_commute.py` |
+| [`test_brain.py`](../backend/tests/test_brain.py) | `_listing_summary` commute-block formatting (no LLM) | `cd backend && pytest tests/test_brain.py` |
+| [`test_geocoder.py`](../backend/tests/test_geocoder.py) | Geocoding client with mocked `httpx` (cache + fail-soft paths) | `cd backend && pytest tests/test_geocoder.py` |
+
+Run the whole suite with `cd backend && pytest` after activating the venv.
 
 ## Alembic
 

@@ -22,10 +22,8 @@ For security, we don't put credentials in the code. We use GitHub Secrets.
 | `EC2_SSH_KEY` | The **entire content** of your `.pem` private key file. Open it with a text editor and copy everything, including `-----BEGIN RSA PRIVATE KEY-----` and `-----END RSA PRIVATE KEY-----`. |
 
 ## Step 2: Create the Workflow File
- 
-1.  In your project root, create a directory named `.github/workflows` if it doesn't exist.
-2.  Create a file named `deploy.yml` inside it (`.github/workflows/deploy.yml`).
-3.  Paste the following content:
+
+The workflow is already committed at [`.github/workflows/deploy.yml`](./.github/workflows/deploy.yml) — if you forked this repo you already have it. For reference, the file passes the GitHub token through so it can deploy even if the repository is private:
 
 ```yaml
 name: Deploy to EC2
@@ -33,7 +31,7 @@ name: Deploy to EC2
 on:
   push:
     branches:
-      - main  # Trigger on push to main branch
+      - main
 
 jobs:
   deploy:
@@ -42,29 +40,32 @@ jobs:
     steps:
     - name: Deploy to EC2
       uses: appleboy/ssh-action@v1.0.3
+      env:
+        GH_TOKEN: ${{ github.token }}
+        REPO: ${{ github.repository }}
       with:
         host: ${{ secrets.EC2_HOST }}
         username: ${{ secrets.EC2_USERNAME }}
         key: ${{ secrets.EC2_SSH_KEY }}
+        envs: GH_TOKEN,REPO
+        script_stop: true
         script: |
-          # Navigate to the project directory
-          # Ensure this path matches where you cloned the repo on the server
-          cd ~/football-analytics-hackathon
+          cd ~/tumai-makeathon-2026
 
-          # Pull the latest changes from the main branch
+          git remote set-url origin "https://x-access-token:${GH_TOKEN}@github.com/${REPO}.git"
           git fetch origin
           git reset --hard origin/main
-          
-          # Navigate to backend directory
+          git remote set-url origin "https://github.com/${REPO}.git"
+
           cd backend
 
-          # Rebuild and restart containers
           docker compose down
           docker compose up -d --build
-          
-          # Clean up unused images to save space
+
           docker image prune -f
 ```
+
+Adjust `cd ~/tumai-makeathon-2026` if you cloned the repo into a different directory on the EC2 host.
 
 ## Step 3: Verify
 
@@ -73,4 +74,4 @@ jobs:
 3.  You should see the "Deploy to EC2" workflow running.
 4.  Once it completes (green checkmark), your server should be updated.
 
-> **Note on Branches**: This configuration assumes you want to deploy the `main` branch. If you are working on `vyach` or another branch, update the `on: push: branches` section and the `git reset --hard origin/YOUR_BRANCH` command in the YAML file.
+> **Note on Branches**: This configuration deploys the `main` branch. To deploy a different branch, update both the `on: push: branches` list and the `git reset --hard origin/YOUR_BRANCH` command.
