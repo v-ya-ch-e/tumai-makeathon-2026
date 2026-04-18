@@ -3,6 +3,8 @@ export type Gender = 'female' | 'male' | 'diverse' | 'prefer_not_to_say'
 export type Mode = 'wg' | 'flat' | 'both'
 
 export type Schedule = 'one_shot' | 'periodic'
+export type TimelineCategory = 'deadline' | 'course' | 'sport' | 'event'
+export type UrgencyLevel = 'high' | 'medium' | 'low'
 
 export type User = {
   username: string
@@ -119,4 +121,12 @@ export type ListingDetail = {
   score: number | null
   travelMinutesPerLocation: Record<string, number> | null
   nearbyPreferencePlaces: NearbyPlace[]
+}
+
+export type TimelineItem = {
+  title: string
+  date: string
+  source: string
+  category: TimelineCategory
+  urgency: UrgencyLevel
 }
