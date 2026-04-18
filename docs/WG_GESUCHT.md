@@ -164,3 +164,5 @@ wg-gesucht's ToS forbid automated scraping, so this agent is strictly a **hackat
 - Default to a **hard cap of 5 messages per run** (`WG_MAX_MESSAGES`).
 - Never auto-accept legally binding rental offers — the agent only goes as far as "proposing a viewing appointment" (a non-binding, conventional step).
 - Surface **every action** to the operator via the action log (SSE), so the demo judge always knows exactly what the agent just did.
+
+*Originally at `backend/app/wg_agent/WG_GESUCHT.md`. Moved here as part of docs consolidation.*
