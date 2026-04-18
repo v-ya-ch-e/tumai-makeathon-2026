@@ -6,6 +6,8 @@ import type {
   ListingDetail,
   Schedule,
   SearchProfile,
+  TimelineCategory,
+  TimelineItem,
   UpsertSearchProfileBody,
   User,
 } from '../types'
@@ -300,6 +302,18 @@ export async function getListingDetail(
     throw new ApiError(res.status, body, errorMessage(body))
   }
   return toCamel(body) as ListingDetail
+}
+
+export async function getTimelineItems(
+  category?: TimelineCategory,
+): Promise<TimelineItem[]> {
+  const q = new URLSearchParams()
+  if (category) {
+    q.set('category', category)
+  }
+  const suffix = q.toString() ? `?${q.toString()}` : ''
+  const data = await requestJson(`/api/deadline/timeline${suffix}`)
+  return data as TimelineItem[]
 }
 
 export function streamHunt(

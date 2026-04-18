@@ -7,7 +7,11 @@ import HealthPage from './pages/Health'
 import OnboardingPreferences from './pages/OnboardingPreferences'
 import OnboardingProfile from './pages/OnboardingProfile'
 import OnboardingRequirements from './pages/OnboardingRequirements'
+<<<<<<< Updated upstream
 import Profile from './pages/Profile'
+=======
+import TimelinePage from './pages/Timeline'
+>>>>>>> Stashed changes
 
 const GOOGLE_MAPS_API_KEY = import.meta.env.VITE_GOOGLE_MAPS_API_KEY
 
@@ -49,7 +53,11 @@ export default function App() {
             <Route path="/onboarding/requirements" element={<OnboardingRequirements />} />
             <Route path="/onboarding/preferences" element={<OnboardingPreferences />} />
             <Route path="/dashboard" element={<Dashboard />} />
+<<<<<<< Updated upstream
             <Route path="/profile" element={<Profile />} />
+=======
+            <Route path="/timeline" element={<TimelinePage />} />
+>>>>>>> Stashed changes
           </Routes>
         </BrowserRouter>
       </SessionProvider>
