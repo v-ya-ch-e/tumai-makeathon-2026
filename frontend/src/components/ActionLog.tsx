@@ -36,25 +36,26 @@ export function ActionLog({ actions, emptyLabel }: ActionLogProps) {
   const reversed = [...actions].reverse()
 
   return (
-    <ol className="space-y-4">
+    <ol className="divide-y divide-hairline">
       {reversed.map((a, i) => (
-        <li
-          key={`${a.at}-${i}`}
-          className="rounded-[22px] border border-hairline/80 bg-surface-raised/80 px-4 py-4 shadow-[0_14px_30px_rgba(39,33,29,0.04)]"
-        >
-          <div className="flex flex-wrap items-center gap-2">
+        <li key={`${a.at}-${i}`} className="grid gap-3 py-4 md:grid-cols-[86px_minmax(0,1fr)]">
+          <div className="pt-0.5">
             <span className="font-mono text-[12px] text-ink-muted">{formatTime(a.at)}</span>
+          </div>
+          <div>
+            <div className="flex flex-wrap items-center gap-2">
             <span
               className={clsx(
-                'inline-flex rounded-full border px-2.5 py-1 font-mono text-[11px] uppercase tracking-[0.14em]',
+                'inline-flex rounded border px-2 py-1 font-mono text-[11px] uppercase tracking-[0.14em]',
                 kindToneClass(a.kind),
               )}
             >
               {a.kind}
             </span>
+            </div>
+            <p className="mt-2 text-[14px] leading-6 text-ink">{a.summary}</p>
+            {a.detail ? <p className="mt-1 text-[13px] leading-6 text-ink-muted">{a.detail}</p> : null}
           </div>
-          <p className="mt-3 text-[14px] leading-6 text-ink">{a.summary}</p>
-          {a.detail ? <p className="mt-2 text-[13px] leading-6 text-ink-muted">{a.detail}</p> : null}
         </li>
       ))}
     </ol>

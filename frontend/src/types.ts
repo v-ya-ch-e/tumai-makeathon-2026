@@ -10,6 +10,7 @@ export type User = {
   username: string
   age: number
   gender: Gender
+  notificationEmail: string | null
   createdAt: string
 }
 

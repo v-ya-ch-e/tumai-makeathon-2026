@@ -23,11 +23,11 @@ export default {
       },
       borderRadius: {
         DEFAULT: '6px',
-        card: '12px',
-        drawer: '20px',
+        card: '10px',
+        drawer: '14px',
       },
       boxShadow: {
-        drawer: '0 4px 20px rgba(43, 38, 35, 0.06)',
+        drawer: '0 10px 30px rgba(34, 28, 23, 0.14)',
       },
     },
   },
