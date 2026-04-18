@@ -1,6 +1,7 @@
 import { BrowserRouter, Navigate, Route, Routes } from 'react-router-dom'
 import { SessionProvider, useSession } from './lib/session'
 import HealthPage from './pages/Health'
+import OnboardingPreferences from './pages/OnboardingPreferences'
 import OnboardingProfile from './pages/OnboardingProfile'
 import OnboardingRequirements from './pages/OnboardingRequirements'
 
@@ -32,6 +33,7 @@ export default function App() {
           <Route path="/health" element={<HealthPage />} />
           <Route path="/onboarding/profile" element={<OnboardingProfile />} />
           <Route path="/onboarding/requirements" element={<OnboardingRequirements />} />
+          <Route path="/onboarding/preferences" element={<OnboardingPreferences />} />
           <Route path="/dashboard" element={<DashboardPlaceholder />} />
         </Routes>
       </BrowserRouter>
