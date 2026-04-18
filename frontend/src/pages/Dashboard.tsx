@@ -341,18 +341,18 @@ export default function Dashboard() {
                   value={hunt ? `Hunt ${hunt.id}` : 'Ready to start'}
                   action={
                     <div className="flex flex-wrap justify-end gap-2">
-                      {hunt ? (
-                        <Button variant="secondary" size="sm" onClick={() => void onRestart()} disabled={isStarting || isStopping}>
-                          Restart
-                        </Button>
-                      ) : null}
                       {isActive ? (
                         <Button variant="destructive" size="sm" onClick={() => void onStop()} disabled={isStopping}>
                           {isStopping ? 'Stopping…' : 'Stop'}
                         </Button>
                       ) : (
-                        <Button variant="primary" size="sm" onClick={() => void onStart()} disabled={isStarting}>
-                          {isStarting ? 'Starting…' : hunt ? 'Start again' : 'Start'}
+                        <Button
+                          variant="primary"
+                          size="sm"
+                          onClick={() => void (hunt ? onRestart() : onStart())}
+                          disabled={isStarting}
+                        >
+                          {isStarting ? 'Starting…' : hunt ? 'Restart' : 'Start'}
                         </Button>
                       )}
                     </div>

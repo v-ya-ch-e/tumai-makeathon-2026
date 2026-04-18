@@ -206,7 +206,7 @@ export default function OnboardingProfile() {
                   autoComplete="username"
                   maxLength={40}
                   aria-invalid={Boolean(errors.username)}
-                  placeholder="room-hunt-2026"
+                  placeholder="Enter your username here"
                 />
               </FieldRow>
 
@@ -227,7 +227,7 @@ export default function OnboardingProfile() {
                     if (errors.age) setErrors((prev) => ({ ...prev, age: undefined }))
                   }}
                   aria-invalid={Boolean(errors.age)}
-                  placeholder="24"
+                  placeholder="Enter your age here"
                 />
               </FieldRow>
 
@@ -248,7 +248,7 @@ export default function OnboardingProfile() {
                   }}
                   autoComplete="email"
                   aria-invalid={Boolean(errors.notificationEmail)}
-                  placeholder="you@example.com"
+                  placeholder="Enter your email here"
                 />
               </FieldRow>
 
@@ -295,7 +295,7 @@ export default function OnboardingProfile() {
                 autoComplete="username"
                 maxLength={40}
                 aria-invalid={Boolean(errors.signInUsername)}
-                placeholder="room-hunt-2026"
+                placeholder="Enter your username here"
                 onKeyDown={(event) => {
                   if (event.key === 'Enter' && !busy) {
                     event.preventDefault()
