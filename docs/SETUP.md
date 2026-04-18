@@ -8,9 +8,9 @@ Clone the repo and run the WG Hunter stack locally: FastAPI backend + Vite-built
 - **Node.js** 20+ (Node **24** is what we use day-to-day; it works with the checked-in lockfile)
 - **npm** 10+
 - A working **`OPENAI_API_KEY`** (see [`.env.example`](../.env.example)). The evaluator's `vibe_fit` component calls OpenAI once per scored listing; without it, every listing's vibe component degrades to `missing_data` and the composite score uses only the deterministic components.
-- **Google Maps Platform** keys (both optional, but strongly recommended for demos):
-  - `VITE_GOOGLE_MAPS_API_KEY` — **Maps JavaScript API** + **Places API (New)**, referrer-restricted to `http://localhost:5173/*`, `http://localhost:8000/*`, and your deployed origin. Used by the onboarding wizard's Main locations autocomplete ([`PlaceAutocomplete.tsx`](../frontend/src/components/PlaceAutocomplete.tsx)). Without it the field falls back to a disabled placeholder.
-  - `GOOGLE_MAPS_SERVER_KEY` — **Geocoding API** + **Routes API**, IP-restricted, **never** shipped to the browser. Powers [`geocoder.py`](../backend/app/wg_agent/geocoder.py) (fallback when the listing HTML doesn't ship a map pin) and [`commute.py`](../backend/app/wg_agent/commute.py) (per-mode commute matrix used by `evaluator.commute_fit`). Without it, `commute_fit` degrades to `missing_data` and the composite score leans on the other components.
+- Optional location API keys:
+  - `VITE_GOOGLE_MAPS_API_KEY` — **Maps JavaScript API** + **Places API (New)**, referrer-restricted to `http://localhost:5173/*`, `http://localhost:8000/*`, and your deployed origin. Used only by the onboarding wizard's Main locations autocomplete ([`PlaceAutocomplete.tsx`](../frontend/src/components/PlaceAutocomplete.tsx)). Without it the field falls back to a disabled placeholder.
+  - `GOOGLE_MAPS_SERVER_KEY` — backend-only key for Google Geocoding API, Distance Matrix API, and Places API (New). Powers [`geocoder.py`](../backend/app/wg_agent/geocoder.py) (fallback when the listing HTML doesn't ship a map pin), [`commute.py`](../backend/app/wg_agent/commute.py) (per-mode commute matrix used by `evaluator.commute_fit`), and [`places.py`](../backend/app/wg_agent/places.py) (nearby amenity distances for place-like user preferences). Without it, commute and nearby-place components degrade to missing data, but scraping still works.
 
 ## One-shot setup
 
@@ -22,7 +22,7 @@ Clone the repo and run the WG Hunter stack locally: FastAPI backend + Vite-built
    cp .env.example .env
    ```
 
-   Edit `.env` and set `OPENAI_API_KEY`. Optionally set `VITE_GOOGLE_MAPS_API_KEY` for the Places Autocomplete widget; Vite reads this file via [`envDir: '..'`](../frontend/vite.config.ts) from `frontend/`, so one repo-root `.env` covers both backend and frontend.
+   Edit `.env` and set `OPENAI_API_KEY`. Optionally set `VITE_GOOGLE_MAPS_API_KEY` for the Places Autocomplete widget and `GOOGLE_MAPS_SERVER_KEY` for backend routing/geocoding/place enrichment; Vite reads this file via [`envDir: '..'`](../frontend/vite.config.ts) from `frontend/`, so one repo-root `.env` covers both backend and frontend.
 
 3. **Backend**
 
@@ -82,7 +82,7 @@ The backend stores `SearchProfile.preferences` as `list[PreferenceWeight]` ([`Se
 2. Append one tile object to the relevant section in the `GROUPS` array: a unique snake_case `key`, a short `label`, and an SVG `path` inside the existing `Icon` wrapper (copy an existing tile's structure).
 3. Save, run `npm run dev` (or `npm run build` if you test against production-like static files).
 4. Walk through onboarding again; select the new tile and adjust its importance on the 1–5 slider. The `{key, weight}` pair is persisted via `PUT /api/users/{username}/search-profile`.
-5. Start a hunt from the dashboard. The evaluator's [`preference_fit`](../backend/app/wg_agent/evaluator.py) will see the new tile. If the `key` matches one of the structured booleans in `STRUCTURED_PREFERENCES` (e.g. `furnished`), it's resolved directly against the listing row. Otherwise the evaluator substring-scans the listing description for the key plus any synonyms in `PREFERENCE_KEYWORDS`.
+5. Start a hunt from the dashboard. The evaluator's [`preference_fit`](../backend/app/wg_agent/evaluator.py) will see the new tile. If the `key` matches one of the structured booleans in `STRUCTURED_PREFERENCES` (e.g. `furnished`), it's resolved directly against the listing row. If it matches one of the Google Places-backed nearby-place categories in [`places.py`](../backend/app/wg_agent/places.py), the scorer uses the nearest real nearby place and its distance. Otherwise the evaluator substring-scans the listing description for the key plus any synonyms in `PREFERENCE_KEYWORDS`.
 6. **Optional polish**: if your new tile has German/English synonyms worth matching (e.g. `garden` → `garten`), add an entry to `PREFERENCE_KEYWORDS` in [`evaluator.py`](../backend/app/wg_agent/evaluator.py). Without it, only the bare key is matched.
 
 ### B. Tune a component curve (30 min, backend + test)
@@ -91,7 +91,7 @@ Every component in [`evaluator.py`](../backend/app/wg_agent/evaluator.py) is pur
 
 1. Edit the relevant component function in [`evaluator.py`](../backend/app/wg_agent/evaluator.py). Keep it pure — no I/O, no state.
 2. Run `cd backend && venv/bin/pytest tests/test_evaluator.py -k your_component` to see which boundary assertions break, and either update the curve or the test (match the existing table-driven style).
-3. Run the full suite: `venv/bin/pytest tests` — the 78-test suite should stay green.
+3. Run the full suite: `venv/bin/pytest tests` — the targeted backend suite should stay green; parser fixture tests need the checked-in `backend/tests/fixtures/` HTML snapshots.
 4. Start a hunt and open the listing drawer — your change shows up immediately as a different bar height and updated `evidence` string.
 
 ## Troubleshooting
@@ -109,3 +109,4 @@ Every component in [`evaluator.py`](../backend/app/wg_agent/evaluator.py) is pur
 - **"Vibe check skipped" in a component bar** — The vibe component degrades to `missing_data=True` when `brain.vibe_score` raises (no `OPENAI_API_KEY`, HTTP error, model returns invalid JSON). The rest of the scorecard still runs and the composite score is computed from the remaining components. Check the backend logs for `vibe_fit:` warnings to see the exact cause.
 
 - **All commutes show "no commute data"** — Either the user hasn't picked `main_locations` in onboarding (nothing to commute to), or `GOOGLE_MAPS_SERVER_KEY` is unset / invalid. [`commute.travel_times`](../backend/app/wg_agent/commute.py) returns `{}` on a missing key, which makes `evaluator.commute_fit` flip to `missing_data` for that listing.
+- **Nearby preferences all show as missing/unknown** — Ensure `GOOGLE_MAPS_SERVER_KEY` is set. [`places.nearby_places`](../backend/app/wg_agent/places.py) short-circuits to `{}` without a key, so place-like preferences fall back to description keywords or `missing_data`.

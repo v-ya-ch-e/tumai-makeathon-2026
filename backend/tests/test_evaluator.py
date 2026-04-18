@@ -33,6 +33,7 @@ from app.wg_agent.brain import VibeScore  # noqa: E402
 from app.wg_agent.models import (  # noqa: E402
     ComponentScore,
     Listing,
+    NearbyPlace,
     PlaceLocation,
     PreferenceWeight,
     SearchProfile,
@@ -412,6 +413,41 @@ def test_preference_fit_weighted_sum() -> None:
         ),
     )
     assert abs(c.score - (4 / 6)) < 0.01
+
+
+def test_preference_fit_place_pref_uses_nearby_distance() -> None:
+    c = evaluator.preference_fit(
+        _listing(description="Kleines Zimmer ohne weitere Lageinfos."),
+        _profile(preferences=[PreferenceWeight(key="gym", weight=4)]),
+        nearby_places={
+            "gym": NearbyPlace(
+                key="gym",
+                label="Gym",
+                searched=True,
+                distance_m=320,
+                place_name="Fit Star",
+            )
+        },
+    )
+    assert c.score == 1.0
+    assert any("320 m" in e for e in c.evidence)
+
+
+def test_preference_fit_weight5_nearby_missing_sets_cap() -> None:
+    c = evaluator.preference_fit(
+        _listing(description="Helles Zimmer."),
+        _profile(preferences=[PreferenceWeight(key="supermarket", weight=5)]),
+        nearby_places={
+            "supermarket": NearbyPlace(
+                key="supermarket",
+                label="Supermarket",
+                searched=True,
+                distance_m=None,
+            )
+        },
+    )
+    assert c.hard_cap == 0.4
+    assert c.score == 0.0
 
 
 # -----------------------------------------------------------------------------

@@ -1,13 +1,12 @@
-"""Server-side Google Geocoding API client for listing addresses.
+"""Server-side Google Geocoding client for listing-address fallback lookups.
 
-Called from `anonymous_scrape_listing` so every persisted `ListingRow`
-can carry `(lat, lng)` for future commute-aware scoring. Designed to
-fail soft: missing key, HTTP errors, or empty results all return
-`None` rather than raising, so scrape pipelines stay resilient.
+Called from `anonymous_scrape_listing` only when the listing HTML did
+not ship its own map pin coordinates. Designed to fail soft: missing
+API key, HTTP errors, or empty results all return `None` rather than
+raising, so scrape pipelines stay resilient.
 
-Uses an in-process dict cache keyed on the normalized address string
-to avoid re-billing the same listing across runs (the same wg-gesucht
-listing appears on every rescan).
+Uses an in-process dict cache keyed on the normalized address string to
+avoid repeating the same lookup across rescans.
 """
 
 from __future__ import annotations
@@ -17,6 +16,8 @@ import os
 from typing import Optional
 
 import httpx
+
+from . import google_maps
 
 logger = logging.getLogger(__name__)
 
@@ -48,33 +49,32 @@ async def geocode(address: str) -> Optional[tuple[float, float]]:
 
     params = {
         "address": address,
-        "key": api_key,
-        "region": "de",
         "components": "country:DE",
+        "key": api_key,
     }
 
     result: Optional[tuple[float, float]] = None
     try:
         async with httpx.AsyncClient(timeout=httpx.Timeout(3.0, connect=3.0)) as client:
+            await google_maps.wait_turn()
             response = await client.get(_ENDPOINT, params=params)
             response.raise_for_status()
             payload = response.json()
     except httpx.HTTPError as exc:
-        logger.warning("Geocoding HTTP error for %r: %s", address, exc)
+        logger.warning("Google geocoding HTTP error for %r: %s", address, exc)
     except ValueError as exc:
-        logger.warning("Geocoding returned non-JSON for %r: %s", address, exc)
+        logger.warning("Google geocoding returned non-JSON for %r: %s", address, exc)
     else:
         status = payload.get("status")
         results = payload.get("results") or []
-        if status != "OK" or not results:
-            if status and status != "ZERO_RESULTS":
-                logger.warning("Geocoding status=%s for %r", status, address)
-        else:
+        if status == "OK" and results:
             location = results[0].get("geometry", {}).get("location") or {}
             lat = location.get("lat")
             lng = location.get("lng")
             if isinstance(lat, (int, float)) and isinstance(lng, (int, float)):
                 result = (float(lat), float(lng))
+        elif status not in (None, "ZERO_RESULTS"):
+            logger.warning("Google geocoding status for %r: %r", address, status)
 
     if len(_cache) >= _CACHE_LIMIT:
         _cache.clear()

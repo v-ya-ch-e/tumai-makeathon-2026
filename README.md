@@ -23,7 +23,7 @@ Prerequisites (details in [`docs/SETUP.md`](./docs/SETUP.md)):
 - **Python 3.11+**
 - **Node.js 20+** and **npm 10+**
 - An **OpenAI API key**
-- Optional: **Google Maps Platform key(s)** — one `VITE_GOOGLE_MAPS_API_KEY` for in-browser Places Autocomplete, and a separate `GOOGLE_MAPS_SERVER_KEY` for server-side Geocoding + Routes API commute scoring. Without them, onboarding still works but locations fall back to disabled/free-text inputs and listings carry no commute data.
+- Optional: **maps/location API keys** — `VITE_GOOGLE_MAPS_API_KEY` keeps the existing in-browser Google Places Autocomplete for picking `main_locations`, and `GOOGLE_MAPS_SERVER_KEY` powers server-side geocoding fallback, commute routing, and nearby-place enrichment. Without `GOOGLE_MAPS_SERVER_KEY`, listings still scrape and score, but commute and nearby-place context degrade to missing data.
 
 1. Clone and create the env file:
 
@@ -124,7 +124,8 @@ From [`.env.example`](./.env.example). Vite reads the same file via [`envDir: '.
 | `OPENAI_API_KEY` | **yes** | backend | OpenAI Chat Completions for the evaluator's narrow vibe component ([`brain.vibe_score`](./backend/app/wg_agent/brain.py)) plus the legacy orchestrator path |
 | `OPENAI_MODEL` | no | backend | Override model (`gpt-4o-mini` by default) |
 | `VITE_GOOGLE_MAPS_API_KEY` | optional | browser | Places Autocomplete in onboarding (referrer- + API-restricted) |
-| `GOOGLE_MAPS_SERVER_KEY` | optional | backend | Geocoding + Routes API (IP- + API-restricted, **never** shipped to the browser) |
+| `GOOGLE_MAPS_SERVER_KEY` | optional | backend | Google Geocoding API + Distance Matrix API + Places API (New) for listing fallback geocoding, commute times, and nearby amenity distances |
+| `GOOGLE_MAPS_MAX_RPS` | no | backend | Process-wide throttle for backend Google Maps requests; defaults to `8` |
 | `WG_DB_URL` | no | backend | Override SQLite path / swap in Postgres |
 | `WG_SECRET_KEY` | no | backend | Pin the Fernet key used to encrypt credentials (else auto-generated at `~/.wg_hunter/secret.key`) |
 | `WG_RESCAN_INTERVAL_MINUTES` | no | backend | Shorten rescan interval during demos |

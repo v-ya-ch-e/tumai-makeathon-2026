@@ -10,10 +10,10 @@ from typing import Optional
 
 from sqlmodel import Session
 
-from . import browser, commute, evaluator, repo
+from . import browser, commute, evaluator, places, repo
 from . import db as db_module
 from .db_models import HuntRow
-from .models import ActionKind, AgentAction, HuntStatus, Listing, SearchProfile
+from .models import ActionKind, AgentAction, HuntStatus, Listing, NearbyPlace, SearchProfile
 
 logger = logging.getLogger(__name__)
 
@@ -48,6 +48,31 @@ def _evaluate_detail(
         if not isinstance(minutes, int):
             continue
         parts.append(f"{loc.label}: {minutes} min ({mode})")
+    return "; ".join(parts) or None
+
+
+def _nearby_places_detail(
+    nearby_places: dict[str, NearbyPlace],
+    preferences: list,
+) -> Optional[str]:
+    if not nearby_places or not preferences:
+        return None
+    parts: list[str] = []
+    seen: set[str] = set()
+    for pref in preferences:
+        if pref.key in seen:
+            continue
+        seen.add(pref.key)
+        item = nearby_places.get(pref.key)
+        if item is None:
+            continue
+        if not item.searched:
+            parts.append(f"{item.label}: lookup unavailable")
+            continue
+        if item.distance_m is None:
+            parts.append(f"{item.label}: >{places.SEARCH_RADIUS_M // 1000} km")
+            continue
+        parts.append(f"{item.label}: {item.distance_m} m")
     return "; ".join(parts) or None
 
 
@@ -134,6 +159,7 @@ class HuntEngine:
                     listing, req_city=sp.city
                 )
                 travel_times: dict[tuple[str, str], int] = {}
+                nearby_places: dict[str, NearbyPlace] = {}
                 if (
                     enriched.lat is not None
                     and enriched.lng is not None
@@ -144,8 +170,20 @@ class HuntEngine:
                         destinations=sp.main_locations,
                         modes=commute.modes_for(sp),
                     )
+                if (
+                    enriched.lat is not None
+                    and enriched.lng is not None
+                    and sp.preferences
+                ):
+                    nearby_places = await places.nearby_places(
+                        origin=(enriched.lat, enriched.lng),
+                        preferences=sp.preferences,
+                    )
                 result = await evaluator.evaluate(
-                    enriched, sp, travel_times=travel_times
+                    enriched,
+                    sp,
+                    travel_times=travel_times,
+                    nearby_places=nearby_places,
                 )
                 enriched.score = result.score
                 enriched.score_reason = result.summary
@@ -179,6 +217,7 @@ class HuntEngine:
                     match_reasons=list(enriched.match_reasons),
                     mismatch_reasons=list(enriched.mismatch_reasons),
                     travel_minutes=travel_minutes,
+                    nearby_places=nearby_places,
                     components=list(enriched.components),
                     veto_reason=enriched.veto_reason,
                 )
@@ -201,6 +240,12 @@ class HuntEngine:
                 )
                 if commute_detail:
                     ev_detail_parts.append(commute_detail)
+                nearby_detail = _nearby_places_detail(
+                    nearby_places,
+                    list(sp.preferences),
+                )
+                if nearby_detail:
+                    ev_detail_parts.append(nearby_detail)
                 ev = AgentAction(
                     kind=ActionKind.evaluate,
                     summary=f"Scored {enriched.id}: {enriched.score:.2f}",

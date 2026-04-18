@@ -72,6 +72,24 @@ class PreferenceWeight(BaseModel):
     weight: int = Field(default=3, ge=1, le=5)
 
 
+class NearbyPlace(BaseModel):
+    """Nearest real-world place for a place-like preference.
+
+    Produced from the Places API around a listing's coordinates and used
+    by the evaluator to score preferences such as `gym`, `park`, or
+    `supermarket` from actual distance instead of description keywords.
+    `distance_m` is `None` when the lookup succeeded but no matching
+    place was found inside the search radius.
+    """
+
+    key: str
+    label: str
+    searched: bool = True
+    distance_m: Optional[int] = Field(default=None, ge=0)
+    place_name: Optional[str] = None
+    category: Optional[str] = None
+
+
 class SearchProfile(BaseModel):
     """What kind of WG room the student is hunting for."""
 

@@ -198,6 +198,30 @@ export function ListingDrawer({ open, listing, onClose }: ListingDrawerProps) {
             </section>
           ) : null}
 
+          {detail && detail.nearbyPreferencePlaces.length > 0 ? (
+            <section className="space-y-2">
+              <h3 className="text-[15px] font-semibold text-ink">Nearby preferences</h3>
+              <ul className="space-y-1 text-[13px] text-ink">
+                {detail.nearbyPreferencePlaces.map((place) => (
+                  <li key={place.key}>
+                    <span className="text-ink-muted">{place.label}</span>
+                    {!place.searched ? (
+                      <span> — lookup unavailable</span>
+                    ) : place.distanceM !== null ? (
+                      <span>
+                        {' '}
+                        — {place.distanceM} m
+                        {place.placeName ? ` (${place.placeName})` : ''}
+                      </span>
+                    ) : (
+                      <span> — none found nearby</span>
+                    )}
+                  </li>
+                ))}
+              </ul>
+            </section>
+          ) : null}
+
           {active.description ? (
             <section className="space-y-2">
               <h3 className="text-[15px] font-semibold text-ink">Description</h3>

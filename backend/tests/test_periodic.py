@@ -26,7 +26,9 @@ from app.wg_agent.models import (  # noqa: E402
     Gender,
     HuntStatus,
     Listing,
+    NearbyPlace,
     PlaceLocation,
+    PreferenceWeight,
     SearchProfile,
     UserProfile,
 )
@@ -86,7 +88,7 @@ def test_periodic_hunter_dedupes_new_listings(monkeypatch) -> None:
         return lst
 
     async def evaluate_stub(
-        _lst: Listing, _sp: SearchProfile, *, travel_times=None
+        _lst: Listing, _sp: SearchProfile, *, travel_times=None, nearby_places=None
     ) -> EvaluationResult:
         return _stub_result(0.9)
 
@@ -215,9 +217,10 @@ def test_commute_times_reach_score_listing(monkeypatch) -> None:
     captured: dict = {}
 
     async def evaluate_capture(
-        _lst: Listing, _sp: SearchProfile, *, travel_times=None
+        _lst: Listing, _sp: SearchProfile, *, travel_times=None, nearby_places=None
     ) -> EvaluationResult:
         captured["travel_times"] = travel_times
+        captured["nearby_places"] = nearby_places
         return _stub_result(0.8)
 
     with Session(engine) as session:
@@ -270,6 +273,85 @@ def test_commute_times_reach_score_listing(monkeypatch) -> None:
     }
 
 
+def test_nearby_places_reach_evaluator_and_persist(monkeypatch) -> None:
+    engine = create_engine(
+        "sqlite://",
+        connect_args={"check_same_thread": False},
+    )
+    SQLModel.metadata.create_all(engine)
+    monkeypatch.setattr(db_module, "engine", engine)
+
+    fake_nearby = {
+        "gym": NearbyPlace(
+            key="gym",
+            label="Gym",
+            searched=True,
+            distance_m=240,
+            place_name="Fit Star",
+            category="sport.fitness.fitness_centre",
+        )
+    }
+
+    async def search_once(*_a, **_kw):
+        return _fake_listings(("lst-nearby",), lat=48.13, lng=11.50)
+
+    async def scrape_identity(lst: Listing, *_args, **_kwargs) -> Listing:
+        return lst
+
+    captured: dict = {}
+
+    async def evaluate_capture(
+        _lst: Listing, _sp: SearchProfile, *, travel_times=None, nearby_places=None
+    ) -> EvaluationResult:
+        captured["nearby_places"] = nearby_places
+        return _stub_result(0.7)
+
+    with Session(engine) as session:
+        repo.create_user(
+            session,
+            profile=UserProfile(username="u-nearby", age=22, gender=Gender.female),
+        )
+        sp = SearchProfile(
+            city="München",
+            max_rent_eur=900,
+            preferences=[PreferenceWeight(key="gym", weight=5)],
+            rescan_interval_minutes=30,
+            schedule="one_shot",
+        )
+        repo.upsert_search_profile(session, username="u-nearby", sp=sp)
+        hunt = repo.create_hunt(session, username="u-nearby", schedule="one_shot")
+
+    q: asyncio.Queue = asyncio.Queue()
+    he = HuntEngine(hunt.id, "u-nearby", q)
+
+    with (
+        patch(
+            "app.wg_agent.periodic.browser.anonymous_search",
+            new=AsyncMock(side_effect=search_once),
+        ),
+        patch(
+            "app.wg_agent.periodic.browser.anonymous_scrape_listing",
+            new=AsyncMock(side_effect=scrape_identity),
+        ),
+        patch(
+            "app.wg_agent.periodic.places.nearby_places",
+            new=AsyncMock(return_value=fake_nearby),
+        ),
+        patch(
+            "app.wg_agent.periodic.evaluator.evaluate",
+            new=AsyncMock(side_effect=evaluate_capture),
+        ),
+    ):
+        asyncio.run(he.run_find_only())
+
+    assert captured["nearby_places"] == fake_nearby
+
+    with Session(engine) as session:
+        score_row = session.get(ListingScoreRow, ("lst-nearby", hunt.id))
+    assert score_row is not None
+    assert score_row.nearby_places == [fake_nearby["gym"].model_dump(mode="json")]
+
+
 def test_commute_skipped_when_listing_lacks_coords(monkeypatch) -> None:
     engine = create_engine(
         "sqlite://",
@@ -289,7 +371,7 @@ def test_commute_skipped_when_listing_lacks_coords(monkeypatch) -> None:
         return lst
 
     async def evaluate_stub(
-        _lst: Listing, _sp: SearchProfile, *, travel_times=None
+        _lst: Listing, _sp: SearchProfile, *, travel_times=None, nearby_places=None
     ) -> EvaluationResult:
         return _stub_result(0.5, summary="no commute")
 

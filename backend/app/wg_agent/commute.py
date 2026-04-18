@@ -1,14 +1,14 @@
-"""Google Routes API client for per-mode commute times.
+"""Google Maps distance-matrix client for per-mode commute times.
 
 Called from `HuntEngine.run_find_only` right after an anonymous scrape,
-once a listing has geocoded `(lat, lng)`. For every `(main_location, mode)`
-pair we POST to `computeRouteMatrix` (one call per travel mode, since
-`travelMode` is a per-request field) and return a flat dict of seconds.
+once a listing has coordinates. For every `(main_location, mode)` pair
+we issue one Distance Matrix request per mode and return a flat dict of
+seconds.
 
 Designed to fail soft: a missing `GOOGLE_MAPS_SERVER_KEY`, HTTP errors,
-non-OK responses, or per-element errors all result in the affected pairs
-being absent from the returned dict. Callers can treat the dict as
-authoritative ("if it's not in here, we don't know").
+malformed responses, or per-pair routing failures all result in the
+affected pairs being absent from the returned dict. Callers can treat
+the dict as authoritative ("if it's not in here, we don't know").
 """
 
 from __future__ import annotations
@@ -19,21 +19,20 @@ from typing import Optional, Sequence
 
 import httpx
 
+from . import google_maps
 from .models import PlaceLocation, SearchProfile
 
 logger = logging.getLogger(__name__)
 
-ROUTES_URL = (
-    "https://routes.googleapis.com/distanceMatrix/v2:computeRouteMatrix"
-)
-_FIELD_MASK = "originIndex,destinationIndex,duration,condition"
+MATRIX_URL = "https://maps.googleapis.com/maps/api/distancematrix/json"
 _TIMEOUT = httpx.Timeout(4.0, connect=3.0)
 
 ALLOWED_MODES = ("DRIVE", "BICYCLE", "TRANSIT")
+_MODE_MAP = {"DRIVE": "driving", "BICYCLE": "bicycling", "TRANSIT": "transit"}
 
 
 def modes_for(sp: SearchProfile) -> list[str]:
-    """Derive the Routes API `travelMode` list from the user's profile.
+    """Derive the internal travel-mode list from the user's profile.
 
     TRANSIT is always requested; DRIVE/BICYCLE are added iff the user has a
     car/bike. Order matters only for consistent logging; callers treat the
@@ -47,21 +46,20 @@ def modes_for(sp: SearchProfile) -> list[str]:
     return modes
 
 
-def _waypoint(lat: float, lng: float) -> dict:
-    return {
-        "waypoint": {
-            "location": {"latLng": {"latitude": lat, "longitude": lng}}
-        }
-    }
+def _latlng(lat: float, lng: float) -> str:
+    return f"{lat},{lng}"
 
 
-def _parse_duration_seconds(raw: object) -> Optional[int]:
-    """Routes API returns durations as `"<int>s"`; tolerate int fallbacks."""
-    if isinstance(raw, int):
-        return raw
-    if isinstance(raw, str) and raw.endswith("s"):
+def _parse_time_seconds(raw: object) -> Optional[int]:
+    """Distance Matrix puts seconds under `duration.value`."""
+    if isinstance(raw, (int, float)):
+        return int(raw)
+    if isinstance(raw, str):
+        cleaned = raw.strip()
+        if cleaned.endswith("s"):
+            cleaned = cleaned[:-1]
         try:
-            return int(float(raw[:-1]))
+            return int(float(cleaned))
         except ValueError:
             return None
     return None
@@ -75,47 +73,63 @@ async def _fetch_mode(
     destinations: Sequence[PlaceLocation],
     mode: str,
 ) -> dict[str, int]:
-    """Call computeRouteMatrix once for a single mode. Returns
-    `{destination.place_id: seconds}` for reachable destinations only."""
-    body = {
-        "origins": [_waypoint(origin[0], origin[1])],
-        "destinations": [_waypoint(d.lat, d.lng) for d in destinations],
-        "travelMode": mode,
+    """Call Distance Matrix once for a single mode."""
+    mode_param = _MODE_MAP.get(mode)
+    if mode_param is None:
+        return {}
+    params = {
+        "origins": _latlng(origin[0], origin[1]),
+        "destinations": "|".join(_latlng(d.lat, d.lng) for d in destinations),
+        "mode": mode_param,
+        "language": "de",
+        "units": "metric",
+        "key": api_key,
     }
-    headers = {
-        "Content-Type": "application/json",
-        "X-Goog-Api-Key": api_key,
-        "X-Goog-FieldMask": _FIELD_MASK,
-    }
+    if mode == "DRIVE":
+        params["departure_time"] = "now"
 
     try:
-        response = await client.post(ROUTES_URL, json=body, headers=headers)
+        await google_maps.wait_turn()
+        response = await client.get(MATRIX_URL, params=params)
         response.raise_for_status()
         payload = response.json()
     except httpx.HTTPError as exc:
-        logger.warning("Routes API HTTP error for mode=%s: %s", mode, exc)
+        logger.warning("Google distance-matrix HTTP error for mode=%s: %s", mode, exc)
         return {}
     except ValueError as exc:
-        logger.warning("Routes API returned non-JSON for mode=%s: %s", mode, exc)
+        logger.warning("Google distance-matrix returned non-JSON for mode=%s: %s", mode, exc)
         return {}
 
-    if not isinstance(payload, list):
-        logger.warning("Routes API unexpected shape for mode=%s: %r", mode, payload)
+    if payload.get("status") != "OK":
+        logger.warning(
+            "Google distance-matrix status for mode=%s: %r",
+            mode,
+            payload.get("status"),
+        )
+        return {}
+    rows = payload.get("rows")
+    if not isinstance(rows, list) or not rows:
+        logger.warning("Google distance-matrix unexpected shape for mode=%s: %r", mode, payload)
+        return {}
+    first_row = rows[0]
+    elements = first_row.get("elements") if isinstance(first_row, dict) else None
+    if not isinstance(elements, list):
+        logger.warning("Google distance-matrix row shape invalid for mode=%s: %r", mode, payload)
         return {}
 
     out: dict[str, int] = {}
-    for element in payload:
-        if not isinstance(element, dict):
+    for idx, element in enumerate(elements):
+        if not isinstance(element, dict) or idx >= len(destinations):
             continue
-        if element.get("condition") != "ROUTE_EXISTS":
+        if element.get("status") != "OK":
             continue
-        dest_idx = element.get("destinationIndex")
-        if not isinstance(dest_idx, int) or not (0 <= dest_idx < len(destinations)):
-            continue
-        seconds = _parse_duration_seconds(element.get("duration"))
+        duration = element.get("duration") or {}
+        seconds = _parse_time_seconds(duration.get("value"))
+        if seconds is None:
+            seconds = _parse_time_seconds(duration.get("text"))
         if seconds is None:
             continue
-        out[destinations[dest_idx].place_id] = seconds
+        out[destinations[idx].place_id] = seconds
     return out
 
 

@@ -104,14 +104,14 @@ Replace `<YOUR_USERNAME>/<YOUR_REPO>` with your actual GitHub path.
 
 ## Step 5: Provide secrets
 
-The WG Hunter agent needs `OPENAI_API_KEY`, the Places Autocomplete widget in the frontend needs `VITE_GOOGLE_MAPS_API_KEY` (baked into the built SPA at build time), and `GOOGLE_MAPS_SERVER_KEY` enables listing geocoding + Routes API commute times on the backend.
+The WG Hunter agent needs `OPENAI_API_KEY`, the Places Autocomplete widget in the frontend needs `VITE_GOOGLE_MAPS_API_KEY` (baked into the built SPA at build time), and `GOOGLE_MAPS_SERVER_KEY` enables backend geocoding fallback, commute routing, and nearby-place enrichment.
 
 From the repo root, create `.env` (copy from [`.env.example`](./.env.example)) with at minimum:
 
 ```bash
 OPENAI_API_KEY=sk-...
 VITE_GOOGLE_MAPS_API_KEY=AIza...  # required for the onboarding map
-GOOGLE_MAPS_SERVER_KEY=AIza...    # optional but required for commute scoring
+GOOGLE_MAPS_SERVER_KEY=AIza...    # optional but required for commute / nearby-place scoring
 ```
 
 The root [`docker-compose.yml`](./docker-compose.yml) already wires `.env` into the backend via `env_file:` and passes `VITE_GOOGLE_MAPS_API_KEY` as a build arg to the frontend image, so nothing else to edit.

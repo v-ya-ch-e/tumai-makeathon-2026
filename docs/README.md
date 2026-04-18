@@ -9,7 +9,7 @@ Autonomous WG-Gesucht room hunter for the TUM.ai Makeathon 2026 ("Campus Co-Pilo
 A student fills a short wizard — demographics, rent/size/commute requirements, weighted preferences (`gym` weight 4, `furnished` weight 5, …) — and clicks **Start hunt**. The backend spins up a background task that:
 
 1. Queries `wg-gesucht.de` search pages via **httpx** (anonymous, no login).
-2. For each new listing it hasn't seen in this hunt: deep-scrapes the listing HTML, pulls landlord-precise `(lat, lng)` from the embedded map config, and (if the user configured main locations) asks Google Routes API for commute times per mode.
+2. For each new listing it hasn't seen in this hunt: deep-scrapes the listing HTML, pulls landlord-precise `(lat, lng)` from the embedded map config, and (if the user configured main locations) asks Google Distance Matrix for commute times per mode.
 3. Runs the **scorecard evaluator** — deterministic components (price, size, WG size, availability, commute, preferences) plus one narrow LLM call (`brain.vibe_score`) that judges prose fit only — and composes a weighted score. Listings that fail the deterministic hard filter (over budget, wrong city, avoid-district, etc.) never reach the LLM.
 4. Persists everything in SQLite (per-hunt `ListingRow` + `ListingScoreRow`, append-only `AgentActionRow` log).
 5. Streams every action to the browser over **Server-Sent Events** so the dashboard's live log and ranked-listings view update in real time. Clicking a listing opens a drawer with the component breakdown, commute times, and a link back to wg-gesucht.
@@ -24,7 +24,7 @@ No messaging in v1 — the orchestrator has that code staged for a future iterat
 | Persistence | **SQLite + SQLModel + Alembic** | Zero external infra for demos; migrations from day one (ADR-001, ADR-005) |
 | Frontend | **Vite + React 19 + TypeScript + Tailwind 3** | Desktop-first SPA, no SSR (ADR-002) |
 | Scoring | **Scorecard evaluator** (code) + **OpenAI** (narrow vibe call) | Deterministic components are unit-testable; LLM only judges what it's good at (ADR-015) |
-| External | **wg-gesucht.de** (httpx scrape), **Google Maps** (Geocoding + Routes), **OpenAI** | No APIs for wg-gesucht exist; we scrape defensively |
+| External | **wg-gesucht.de** (httpx scrape), **Google Maps Platform** (frontend autocomplete + backend geocoding/routing/nearby places), **OpenAI** | No APIs for wg-gesucht exist; we scrape defensively |
 
 ## Read in order
 
@@ -67,7 +67,7 @@ One documented exception: [`api._get_listing_detail`](../backend/app/wg_agent/ap
 - FastAPI serves `frontend/dist/` as SPA and exposes JSON + SSE under `/api/*`.
 - SQLite + SQLModel + Alembic migrations (through `0006_scorecard_components.py`); Fernet-encrypted optional wg-gesucht credentials at rest.
 - `PeriodicHunter` + `HuntEngine`: anonymous listing search and per-listing scrape via **httpx**, then `evaluator.evaluate` (deterministic components + one narrow `brain.vibe_score` LLM call); results persisted per `hunt_id`.
-- Commute-aware scoring: server-side Google Geocoding for listing addresses (fallback only — `map_config.markers` usually provides coords) + Google Routes API `computeRouteMatrix` per mode; the matrix drives `commute_fit` and the drawer's commute section (ADR-011, ADR-012).
+- Commute-aware scoring: server-side Google geocoding fallback for listing addresses, Google Distance Matrix per mode, and Google Places lookups for nearby user-preference amenities; the matrix drives `commute_fit`, nearby-place distances drive `preference_fit`, and both appear in the drawer (ADR-017).
 - Scorecard evaluator (ADR-015): deterministic hard-filter vetoes + six component curves + narrow vibe LLM + weighted composition with hard caps. Unit-tested curve-by-curve in [`test_evaluator.py`](../backend/tests/test_evaluator.py).
 
 ### Out (deliberately, for v1)

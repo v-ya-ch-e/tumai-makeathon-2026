@@ -30,8 +30,8 @@ from typing import Optional
 
 from pydantic import ValidationError
 
-from . import brain
-from .models import ComponentScore, Listing, SearchProfile
+from . import brain, places
+from .models import ComponentScore, Listing, NearbyPlace, SearchProfile
 
 logger = logging.getLogger(__name__)
 
@@ -42,6 +42,8 @@ logger = logging.getLogger(__name__)
 
 
 DEFAULT_COMMUTE_BUDGET_MIN = 40
+NEARBY_PLACE_COMFORT_M = 400
+NEARBY_PLACE_OK_M = 1000
 
 # Composition weights. These add up to 1.0 after filtering `missing_data`
 # components out. Tuned for "numeric fit dominates, vibe is a tie-breaker".
@@ -110,6 +112,12 @@ class EvaluationResult:
     mismatch_reasons: list[str]
 
 
+@dataclass(frozen=True)
+class PreferenceSignal:
+    score: Optional[float]
+    evidence: str
+
+
 # -----------------------------------------------------------------------------
 # Hard filter
 # -----------------------------------------------------------------------------
@@ -124,14 +132,15 @@ def hard_filter(listing: Listing, profile: SearchProfile) -> Optional[VetoResult
         return VetoResult(
             reason=f"over budget (€{listing.price_eur} > €{profile.max_rent_eur})"
         )
-    if (
-        listing.city
-        and profile.city
-        and _normalize_city(listing.city) != _normalize_city(profile.city)
-    ):
-        return VetoResult(
-            reason=f"wrong city ({listing.city} != {profile.city})"
-        )
+    # not needed, if we filter in wg gesucht for city first, also missfires often
+    # if (
+    #     listing.city
+    #     and profile.city
+    #     and _normalize_city(listing.city) != _normalize_city(profile.city)
+    # ):
+    #     return VetoResult(
+    #         reason=f"wrong city ({listing.city} != {profile.city})"
+    #     )
     if (
         listing.district
         and listing.district in profile.avoid_districts
@@ -423,7 +432,9 @@ def _commute_curve(minutes: int, budget: int) -> float:
 
 
 def preference_fit(
-    listing: Listing, profile: SearchProfile
+    listing: Listing,
+    profile: SearchProfile,
+    nearby_places: Optional[dict[str, NearbyPlace]] = None,
 ) -> ComponentScore:
     weight = COMPONENT_WEIGHTS["preferences"]
     if not profile.preferences:
@@ -435,26 +446,28 @@ def preference_fit(
             missing_data=True,
         )
     description_lower = (listing.description or "").lower()
+    nearby = nearby_places or {}
     weighted_sum = 0.0
     total_weight = 0.0
     evidence: list[str] = []
     hard_cap: Optional[float] = None
     for pref in profile.preferences:
         total_weight += pref.weight
-        present = _preference_present(pref.key, listing, description_lower)
-        if present is True:
-            weighted_sum += pref.weight
-            evidence.append(f"{pref.key} present (weight {pref.weight})")
-        elif present is False and pref.weight == 5:
-            evidence.append(f"{pref.key} missing (must-have)")
-            hard_cap = 0.4 if hard_cap is None else min(hard_cap, 0.4)
-        elif present is False:
-            evidence.append(f"{pref.key} missing (weight {pref.weight})")
-        else:
-            # Unknown: neutral half credit so "can't tell" doesn't read as
-            # a straight negative.
+        signal = _preference_signal(
+            pref.key,
+            listing,
+            description_lower,
+            nearby,
+        )
+        if signal.score is None:
             weighted_sum += 0.5 * pref.weight
-            evidence.append(f"{pref.key} unknown")
+            evidence.append(f"{signal.evidence} (unknown)")
+            continue
+
+        weighted_sum += signal.score * pref.weight
+        evidence.append(f"{signal.evidence} (weight {pref.weight})")
+        if pref.weight == 5 and signal.score <= 0.2:
+            hard_cap = 0.4 if hard_cap is None else min(hard_cap, 0.4)
     score = weighted_sum / total_weight if total_weight > 0 else 0.0
     return ComponentScore(
         key="preferences",
@@ -487,11 +500,76 @@ def _preference_present(
     return False
 
 
-async def vibe_fit(listing: Listing, profile: SearchProfile) -> ComponentScore:
+def _preference_signal(
+    key: str,
+    listing: Listing,
+    description_lower: str,
+    nearby_places: dict[str, NearbyPlace],
+) -> PreferenceSignal:
+    attr = STRUCTURED_PREFERENCES.get(key)
+    if attr is not None:
+        value = getattr(listing, attr, None)
+        if value is True:
+            return PreferenceSignal(1.0, f"{key} present")
+        if value is False:
+            return PreferenceSignal(0.0, f"{key} missing")
+        return PreferenceSignal(None, f"{key} not stated")
+
+    nearby = nearby_places.get(key)
+    if nearby is not None and nearby.searched:
+        if nearby.distance_m is None:
+            return PreferenceSignal(
+                0.0,
+                f"{nearby.label}: none found within {places.SEARCH_RADIUS_M // 1000} km",
+            )
+        place_name = nearby.place_name or "nearest match"
+        return PreferenceSignal(
+            _nearby_place_curve(nearby.distance_m),
+            f"{nearby.label}: {nearby.distance_m} m to {place_name}",
+        )
+
+    present = _preference_present(key, listing, description_lower)
+    if present is True:
+        return PreferenceSignal(1.0, f"{key} mentioned in listing")
+    if present is False:
+        return PreferenceSignal(0.0, f"{key} missing from listing")
+    return PreferenceSignal(None, f"{key} unclear")
+
+
+def _nearby_place_curve(distance_m: int) -> float:
+    """Piecewise linear score for "nearby" amenities.
+
+    1.0 inside the comfort radius, 0.5 at the "okay" radius, and 0.0 at
+    the search radius.
+    """
+    if distance_m <= 0:
+        return 1.0
+    if distance_m <= NEARBY_PLACE_COMFORT_M:
+        return 1.0
+    if distance_m <= NEARBY_PLACE_OK_M:
+        span = max(1, NEARBY_PLACE_OK_M - NEARBY_PLACE_COMFORT_M)
+        return 1.0 - 0.5 * (distance_m - NEARBY_PLACE_COMFORT_M) / span
+    if distance_m <= places.SEARCH_RADIUS_M:
+        span = max(1, places.SEARCH_RADIUS_M - NEARBY_PLACE_OK_M)
+        return 0.5 * (1.0 - (distance_m - NEARBY_PLACE_OK_M) / span)
+    return 0.0
+
+
+async def vibe_fit(
+    listing: Listing,
+    profile: SearchProfile,
+    *,
+    nearby_places: Optional[dict[str, NearbyPlace]] = None,
+) -> ComponentScore:
     """Run `brain.vibe_score` off the event loop; degrade gracefully."""
     weight = COMPONENT_WEIGHTS["vibe"]
     try:
-        out = await asyncio.to_thread(brain.vibe_score, listing, profile)
+        out = await asyncio.to_thread(
+            brain.vibe_score,
+            listing,
+            profile,
+            nearby_places=nearby_places or {},
+        )
     except (ValidationError, ValueError) as exc:
         logger.warning("vibe_fit: bad JSON from LLM: %s", exc)
         return ComponentScore(
@@ -630,6 +708,7 @@ async def evaluate(
     profile: SearchProfile,
     *,
     travel_times: Optional[dict[tuple[str, str], int]] = None,
+    nearby_places: Optional[dict[str, NearbyPlace]] = None,
 ) -> EvaluationResult:
     """End-to-end: veto check, all components, vibe LLM call, compose.
 
@@ -647,9 +726,9 @@ async def evaluate(
         wg_size_fit(listing, profile),
         availability_fit(listing, profile),
         commute_fit(listing, profile, tt),
-        preference_fit(listing, profile),
+        preference_fit(listing, profile, nearby_places),
     ]
-    components.append(await vibe_fit(listing, profile))
+    components.append(await vibe_fit(listing, profile, nearby_places=nearby_places))
     return compose(components)
 
 

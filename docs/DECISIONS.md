@@ -240,3 +240,49 @@ Persistence: one additive Alembic revision [`0006_scorecard_components.py`](../b
 **Consequences:** Every numeric judgment is code we can unit-test against fixtures — [`test_evaluator.py`](../backend/tests/test_evaluator.py) pins each curve at its boundaries and verifies `compose`'s arithmetic, `hard_cap` minimum, and veto short-circuit. Obvious rejects never hit the LLM (one network round-trip saved per vetoed listing; the `Rejected {id}: over budget` action gives the user a defensible reason). Scores are now comparable across runs because the curves and weights live in one file; changing them is a diff, not a prompt rewrite. The vibe prompt is small enough that `gpt-4o-mini` output is more consistent, and a `ValidationError` degrades to `missing_data` instead of corrupting the composite score. Trade-offs: (1) the curves and `COMPONENT_WEIGHTS` are currently hand-picked — ADR-015 is the substrate a later ADR can sit on if we want to fit weights from user feedback (thumbs up/down in the UI), but that requires UI work first and is explicitly out of scope; (2) `preference_fit`'s keyword table ([`PREFERENCE_KEYWORDS`](../backend/app/wg_agent/evaluator.py)) is a small German/English synonym list and will miss creative phrasings — listings with no description fall to the neutral half-credit path on purpose, matching the "don't invent features" rule from ADR-013; (3) `brain.score_listing` is still exported (delegates to the same prompt as before) so the older orchestrator path doesn't break, but all **v1 hunts go through the evaluator** — the legacy function is a compatibility shim, not the default.
 
 **Introduced in:** this commit
+
+---
+
+## ADR-016: Keep Google only for frontend autocomplete; move backend location intelligence to Geoapify
+
+- **Date:** 2026-04-18  
+- **Status:** Superseded by ADR-017  
+- **Supersedes:** the backend provider choices in ADR-011 and ADR-012
+
+**Context:** The product requirement changed: Google Maps must no longer be used on the backend. We still need three capabilities server-side: (1) fallback geocoding when a listing detail page lacks `map_config.markers`, (2) per-mode travel time to the student's important places, and (3) real-world nearby amenity lookup for place-like user preferences such as `gym`, `park`, and `supermarket`. The previous implementation handled only (1) and (2), both via Google, and preference scoring still relied mostly on description keywords.
+
+**Decision:** Keep ADR-010's client-side Google Places Autocomplete for picking `main_locations`, but replace every backend Google Maps call with Geoapify. Specifically:
+
+1. [`geocoder.py`](../backend/app/wg_agent/geocoder.py) now uses Geoapify forward geocoding with `GEOAPIFY_API_KEY` as the fallback when the listing page provides no map pin.
+2. [`commute.py`](../backend/app/wg_agent/commute.py) now uses Geoapify Route Matrix for `TRANSIT`, `BICYCLE`, and `DRIVE`, preserving the existing `{(place_id, mode): seconds}` contract so the evaluator and drawer logic stay stable.
+3. New module [`places.py`](../backend/app/wg_agent/places.py) queries Geoapify Places for the nearest real-world match to place-like preferences (`supermarket`, `gym`, `park`, `cafe`, `bars`, `library`, `coworking`, `nightlife`, `green_space`) within a 2 km radius around the listing.
+4. [`HuntEngine.run_find_only`](../backend/app/wg_agent/periodic.py) now enriches each listing with both `travel_times` and `nearby_places`, passes both into [`evaluator.evaluate`](../backend/app/wg_agent/evaluator.py), persists both via [`repo.save_score`](../backend/app/wg_agent/repo.py), and includes nearby-place distances in the `evaluate` action detail.
+5. [`preference_fit`](../backend/app/wg_agent/evaluator.py) now prefers real nearby-place distances over substring guesses for supported place-like preferences, using a distance curve (1.0 when genuinely close, down to 0.0 at the search-radius boundary). Weight-5 place preferences now cap the score when the nearest matching place is too far away or absent.
+6. [`brain.vibe_score`](../backend/app/wg_agent/brain.py) and the legacy `score_listing` prompt builder now receive a "Nearby preference places" block so the LLM sees the same neighborhood context the deterministic scorer uses.
+7. Persistence grows by one additive column: [`ListingScoreRow.nearby_places`](../backend/app/wg_agent/db_models.py), added in [`0007_nearby_places.py`](../backend/alembic/versions/0007_nearby_places.py), and exposed to the UI as `ListingDetailDTO.nearby_preference_places`.
+
+**Consequences:** The backend now depends on one location provider key instead of a second Google key, while the browser-side Google autocomplete remains unchanged. Commute scoring keeps the same downstream interfaces, so the migration is mostly isolated to provider clients plus the new nearby-places path. Preference scoring becomes materially better for neighborhood preferences because the agent can say "nearest gym is 240 m away" instead of guessing from listing prose. The free-tier economics remain workable for demos (Geoapify documents 3,000 free requests/day across these APIs), but place enrichment does add more API calls per listing than the previous keyword-only path; in-process caches and radius-bounded `limit=1` lookups keep that bounded.
+
+**Introduced in:** this commit
+
+---
+
+## ADR-017: Consolidate backend location intelligence on Google Maps Platform
+
+- **Date:** 2026-04-18  
+- **Status:** Accepted  
+- **Supersedes:** ADR-016
+
+**Context:** We have access to the relevant Google Maps Platform services and want to use them consistently on the backend instead of splitting browser autocomplete on Google and backend enrichment on Geoapify. The backend still needs the same three capabilities: (1) fallback geocoding when a listing lacks `map_config.markers`, (2) commute times to user-declared important places, and (3) nearby amenity lookup for place-like preferences such as `gym`, `park`, `supermarket`, and `coworking`. We also want to keep explicit request throttling so background hunts do not spike beyond a reasonable QPS ceiling.
+
+**Decision:** Keep the existing frontend Google Places Autocomplete path and move backend enrichment to Google Maps Platform as well:
+
+1. [`geocoder.py`](../backend/app/wg_agent/geocoder.py) now uses the Google Geocoding API with `GOOGLE_MAPS_SERVER_KEY` as the fallback when the listing page provides no map pin.
+2. [`commute.py`](../backend/app/wg_agent/commute.py) now uses the Google Distance Matrix API for `TRANSIT`, `BICYCLE`, and `DRIVE`, preserving the existing `{(place_id, mode): seconds}` contract so the evaluator and drawer logic stay stable.
+3. [`places.py`](../backend/app/wg_agent/places.py) now uses Places API (New): Nearby Search (New) for typed categories and Text Search (New) for `coworking`, still returning the nearest `NearbyPlace` per supported preference inside the 2 km search radius.
+4. New module [`google_maps.py`](../backend/app/wg_agent/google_maps.py) provides a shared async throttle across geocoding, commute, and nearby-place calls. It defaults to `8 req/s` and can be tuned via `GOOGLE_MAPS_MAX_RPS`.
+5. The browser key remains `VITE_GOOGLE_MAPS_API_KEY`, while the backend key is separate as `GOOGLE_MAPS_SERVER_KEY` so it can be IP-restricted and never shipped to the browser bundle.
+
+**Consequences:** Setup becomes simpler again for teams already provisioned in Google Cloud: the APIs to enable are `Geocoding API`, `Distance Matrix API`, and `Places API (New)` for the backend, plus `Maps JavaScript API` and `Places API (New)` for the browser autocomplete. The downstream evaluator, repo persistence, and UI drawer stay unchanged because the provider clients preserve the existing contracts. We deliberately keep explicit throttling even though Google quotas can be higher than Geoapify's free tier, because concurrent hunts can still create avoidable burst traffic. Trade-off: the backend uses one legacy Google service, `Distance Matrix API`, because it preserves the smallest and most reliable matrix-shaped diff across `DRIVE`, `BICYCLE`, and `TRANSIT` in the current codebase.
+
+**Introduced in:** this commit
