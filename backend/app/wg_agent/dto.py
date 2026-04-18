@@ -9,6 +9,7 @@ from pydantic import BaseModel, EmailStr, Field, model_validator
 
 from .models import (
     AgentAction,
+    ComponentScore,
     Hunt,
     Listing,
     PlaceLocation,
@@ -94,6 +95,17 @@ class ActionDTO(BaseModel):
     listing_id: Optional[str] = None
 
 
+class ComponentDTO(BaseModel):
+    """One row of the scorecard breakdown exposed to the UI."""
+
+    key: str
+    score: float
+    weight: float
+    evidence: list[str] = Field(default_factory=list)
+    hard_cap: Optional[float] = None
+    missing_data: bool = False
+
+
 class ListingDTO(BaseModel):
     id: str
     hunt_id: str
@@ -112,6 +124,8 @@ class ListingDTO(BaseModel):
     score_reason: Optional[str] = None
     match_reasons: list[str] = Field(default_factory=list)
     mismatch_reasons: list[str] = Field(default_factory=list)
+    components: list[ComponentDTO] = Field(default_factory=list)
+    veto_reason: Optional[str] = None
 
 
 class HuntDTO(BaseModel):
@@ -192,6 +206,17 @@ def action_to_dto(a: AgentAction) -> ActionDTO:
     )
 
 
+def component_to_dto(c: ComponentScore) -> ComponentDTO:
+    return ComponentDTO(
+        key=c.key,
+        score=c.score,
+        weight=c.weight,
+        evidence=list(c.evidence),
+        hard_cap=c.hard_cap,
+        missing_data=c.missing_data,
+    )
+
+
 def listing_to_dto(l: Listing, hunt_id: str) -> ListingDTO:
     title = l.title if l.title else None
     return ListingDTO(
@@ -212,6 +237,8 @@ def listing_to_dto(l: Listing, hunt_id: str) -> ListingDTO:
         score_reason=l.score_reason,
         match_reasons=list(l.match_reasons),
         mismatch_reasons=list(l.mismatch_reasons),
+        components=[component_to_dto(c) for c in l.components],
+        veto_reason=l.veto_reason,
     )
 
 

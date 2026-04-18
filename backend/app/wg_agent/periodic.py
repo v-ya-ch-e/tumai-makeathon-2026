@@ -10,7 +10,7 @@ from typing import Optional
 
 from sqlmodel import Session
 
-from . import brain, browser, commute, repo
+from . import browser, commute, evaluator, repo
 from . import db as db_module
 from .db_models import HuntRow
 from .models import ActionKind, AgentAction, HuntStatus, Listing, SearchProfile
@@ -144,7 +144,15 @@ class HuntEngine:
                         destinations=sp.main_locations,
                         modes=commute.modes_for(sp),
                     )
-                brain.score_listing(enriched, sp, travel_times=travel_times)
+                result = await evaluator.evaluate(
+                    enriched, sp, travel_times=travel_times
+                )
+                enriched.score = result.score
+                enriched.score_reason = result.summary
+                enriched.match_reasons = list(result.match_reasons)
+                enriched.mismatch_reasons = list(result.mismatch_reasons)
+                enriched.components = list(result.components)
+                enriched.veto_reason = result.veto_reason
             except Exception as exc:  # noqa: BLE001
                 err = AgentAction(
                     kind=ActionKind.error,
@@ -171,23 +179,34 @@ class HuntEngine:
                     match_reasons=list(enriched.match_reasons),
                     mismatch_reasons=list(enriched.mismatch_reasons),
                     travel_minutes=travel_minutes,
+                    components=list(enriched.components),
+                    veto_reason=enriched.veto_reason,
                 )
 
-            ev_detail = (
-                _evaluate_detail(travel_minutes, list(sp.main_locations))
-                if travel_minutes
-                else None
-            )
-            ev = AgentAction(
-                kind=ActionKind.evaluate,
-                summary=(
-                    f"Scored {enriched.id}: {enriched.score:.2f}"
-                    if enriched.score is not None
-                    else f"Scored {enriched.id}"
-                ),
-                detail=ev_detail,
-                listing_id=enriched.id,
-            )
+            if result.veto_reason is not None:
+                ev = AgentAction(
+                    kind=ActionKind.evaluate,
+                    summary=f"Rejected {enriched.id}: {result.veto_reason}",
+                    listing_id=enriched.id,
+                )
+            else:
+                ev_detail_parts: list[str] = []
+                breakdown = evaluator.breakdown_detail(result.components)
+                if breakdown:
+                    ev_detail_parts.append(breakdown)
+                commute_detail = (
+                    _evaluate_detail(travel_minutes, list(sp.main_locations))
+                    if travel_minutes
+                    else None
+                )
+                if commute_detail:
+                    ev_detail_parts.append(commute_detail)
+                ev = AgentAction(
+                    kind=ActionKind.evaluate,
+                    summary=f"Scored {enriched.id}: {enriched.score:.2f}",
+                    detail=" | ".join(ev_detail_parts) or None,
+                    listing_id=enriched.id,
+                )
             with Session(db_module.engine) as session:
                 _append(session, self._hunt_id, ev)
             _safe_put(self._event_queue, ev)

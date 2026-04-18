@@ -159,6 +159,23 @@ class ContactInfo(BaseModel):
 
 # --- Output: what the agent found & did ---------------------------------------
 
+class ComponentScore(BaseModel):
+    """One factor in the scorecard evaluator output.
+
+    Produced by `evaluator.py` (deterministic components plus the narrow
+    LLM `vibe` component) and persisted on `ListingScoreRow.components`.
+    The drawer renders one bar per component using `score`, `evidence`,
+    and `missing_data`.
+    """
+
+    key: str
+    score: float = Field(ge=0, le=1)
+    weight: float = Field(ge=0)
+    evidence: list[str] = Field(default_factory=list)
+    hard_cap: Optional[float] = Field(default=None, ge=0, le=1)
+    missing_data: bool = False
+
+
 class Listing(BaseModel):
     """A single WG-Gesucht listing, normalized."""
 
@@ -182,11 +199,13 @@ class Listing(BaseModel):
     smoking_ok: Optional[bool] = None
     online_viewing: bool = False
 
-    # Populated by the LLM after evaluation.
+    # Populated by the evaluator after scoring.
     score: Optional[float] = Field(default=None, ge=0, le=1)
     score_reason: Optional[str] = None
     match_reasons: list[str] = Field(default_factory=list)
     mismatch_reasons: list[str] = Field(default_factory=list)
+    components: list[ComponentScore] = Field(default_factory=list)
+    veto_reason: Optional[str] = None
 
 
 class MessageDirection(str, Enum):

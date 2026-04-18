@@ -1,11 +1,12 @@
 """OpenAI-powered reasoning for the WG-Gesucht agent.
 
-Three responsibilities:
-  1. `score_listing`   -> is this listing a match for the student's requirements?
+Four responsibilities:
+  1. `score_listing`   -> legacy: one-shot LLM score across all axes (orchestrator).
+  1b. `vibe_score`     -> narrow prose-only score used by `evaluator.py`.
   2. `draft_message`   -> the first message we send to the landlord.
   3. `classify_reply`  -> what does the landlord's answer mean? What should we do next?
 
-All three use the OpenAI Chat Completions API with JSON output. We keep prompts
+All use the OpenAI Chat Completions API with JSON output. We keep prompts
 short (hackathon budget) but specific.
 """
 
@@ -17,7 +18,7 @@ import os
 from typing import Any, Optional
 
 from openai import OpenAI
-from pydantic import ValidationError
+from pydantic import BaseModel, Field, ValidationError
 
 from .models import (
     ContactInfo,
@@ -209,6 +210,10 @@ def score_listing(
     When `travel_times` is provided, the prompt includes a per-main-location
     commute block keyed by `(place_id, mode) -> seconds`. The LLM is told to
     treat long commutes as soft negatives.
+
+    NOTE: The v1 find loop goes through `evaluator.evaluate` instead; this
+    function is kept for the older `orchestrator.py` code path (non-v1) and
+    for ad-hoc scripts that want a single LLM-composed score.
     """
     client = _client()
     user_msg = SCORE_USER_TEMPLATE.format(
@@ -241,6 +246,87 @@ def score_listing(
     listing.match_reasons = [str(x) for x in (data.get("match_reasons") or [])][:6]
     listing.mismatch_reasons = [str(x) for x in (data.get("mismatch_reasons") or [])][:6]
     return listing
+
+
+# -----------------------------------------------------------------------------
+# 1b. Vibe-only score (one component of the scorecard evaluator)
+# -----------------------------------------------------------------------------
+
+
+class VibeScore(BaseModel):
+    """Narrow LLM output: how well the listing's prose matches the user's notes.
+
+    `evaluator.py` composes this with deterministic components (price, size,
+    commute, preferences). The LLM is explicitly told **not** to judge
+    numeric fit — those live in code.
+    """
+
+    score: float = Field(ge=0, le=1)
+    evidence: list[str] = Field(default_factory=list)
+
+
+VIBE_SYSTEM = (
+    "You judge the vibe of a WG-Gesucht listing against a student's free-form "
+    "notes and district preferences. Do NOT judge price, size, WG size, or "
+    "commute times — those are handled by other components. Output strict JSON."
+)
+
+VIBE_USER_TEMPLATE = """
+Rate how well the listing's description and district match the student's vibe
+notes on a 0..1 scale.
+
+STUDENT NOTES:
+{notes}
+
+PREFERRED DISTRICTS: {preferred_districts}
+AVOID DISTRICTS: {avoid_districts}
+
+LISTING DISTRICT: {district}
+LISTING DESCRIPTION:
+\"\"\"
+{description}
+\"\"\"
+
+Return JSON:
+  score (0..1, higher = better vibe match),
+  evidence (list of 1..4 short strings: concrete phrases you relied on).
+
+Rules:
+  * If the student has no notes and no district preferences, return score 0.5
+    with evidence ["no vibe signal"].
+  * If the listing is in an avoid-district, score <= 0.3 and mention the
+    district in evidence.
+  * Do NOT mention rent, size, or commute in the evidence.
+
+Only return valid JSON, no prose.
+"""
+
+
+def vibe_score(listing: Listing, requirements: SearchProfile) -> VibeScore:
+    """Return a narrow vibe score for the evaluator's `vibe_fit` component.
+
+    Raises on HTTP / JSON / ValidationError failure. The evaluator catches
+    these and sets `missing_data=True` on the component.
+    """
+    client = _client()
+    user_msg = VIBE_USER_TEMPLATE.format(
+        notes=(requirements.notes or "(none)").strip()[:1200],
+        preferred_districts=", ".join(requirements.preferred_districts) or "—",
+        avoid_districts=", ".join(requirements.avoid_districts) or "—",
+        district=listing.district or "?",
+        description=(listing.description or "").strip()[:1800],
+    )
+    response = client.chat.completions.create(
+        model=DEFAULT_MODEL,
+        messages=[
+            {"role": "system", "content": VIBE_SYSTEM},
+            {"role": "user", "content": user_msg},
+        ],
+        response_format={"type": "json_object"},
+        temperature=0.2,
+    )
+    content = response.choices[0].message.content or "{}"
+    return VibeScore.model_validate_json(content)
 
 
 # -----------------------------------------------------------------------------

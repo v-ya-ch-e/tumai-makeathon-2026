@@ -58,6 +58,15 @@ export type Action = {
   listingId: string | null
 }
 
+export type Component = {
+  key: string
+  score: number
+  weight: number
+  evidence: string[]
+  hardCap: number | null
+  missingData: boolean
+}
+
 export type Listing = {
   id: string
   huntId: string
@@ -77,6 +86,8 @@ export type Listing = {
   scoreReason: string | null
   matchReasons: string[]
   mismatchReasons: string[]
+  components: Component[]
+  vetoReason: string | null
 }
 
 export type Hunt = {

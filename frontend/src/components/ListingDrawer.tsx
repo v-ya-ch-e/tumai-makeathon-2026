@@ -1,7 +1,8 @@
+import clsx from 'clsx'
 import { useEffect, useState } from 'react'
 import { Button, Drawer, StatusPill, type StatusPillTone } from './ui'
 import { getListingDetail } from '../lib/api'
-import type { Listing, ListingDetail } from '../types'
+import type { Component, Listing, ListingDetail } from '../types'
 
 export type ListingDrawerProps = {
   open: boolean
@@ -18,6 +19,59 @@ function scoreTone(score: number | null): StatusPillTone {
 
 function formatScore(score: number | null): string {
   return score === null ? 'unscored' : score.toFixed(2)
+}
+
+const COMPONENT_LABELS: Record<string, string> = {
+  price: 'Price',
+  size: 'Size',
+  wg_size: 'WG size',
+  availability: 'Availability',
+  commute: 'Commute',
+  preferences: 'Preferences',
+  vibe: 'Vibe',
+}
+
+function componentLabel(key: string): string {
+  return (
+    COMPONENT_LABELS[key] ??
+    key.replace(/_/g, ' ').replace(/\b\w/g, (c) => c.toUpperCase())
+  )
+}
+
+function barClassName(score: number, missing: boolean): string {
+  if (missing) return 'bg-hairline'
+  if (score >= 0.7) return 'bg-good'
+  if (score >= 0.4) return 'bg-warn'
+  return 'bg-bad'
+}
+
+function ComponentBar({ c }: { c: Component }) {
+  const widthPct = c.missingData ? 100 : Math.max(2, Math.round(c.score * 100))
+  const primaryEvidence = c.evidence.slice(0, 2).join(' · ')
+  return (
+    <li
+      className={clsx(
+        'grid grid-cols-[96px_1fr_48px] items-center gap-3 text-[13px]',
+        c.missingData && 'opacity-60',
+      )}
+    >
+      <span className="truncate text-ink-muted">{componentLabel(c.key)}</span>
+      <div className="space-y-1">
+        <div className="h-1.5 w-full rounded-full bg-hairline/60">
+          <div
+            className={clsx('h-1.5 rounded-full', barClassName(c.score, c.missingData))}
+            style={{ width: `${widthPct}%` }}
+          />
+        </div>
+        {primaryEvidence ? (
+          <p className="line-clamp-1 text-[12px] text-ink-muted">{primaryEvidence}</p>
+        ) : null}
+      </div>
+      <span className="text-right tabular-nums text-ink">
+        {c.missingData ? '—' : c.score.toFixed(2)}
+      </span>
+    </li>
+  )
 }
 
 export function ListingDrawer({ open, listing, onClose }: ListingDrawerProps) {
@@ -91,7 +145,24 @@ export function ListingDrawer({ open, listing, onClose }: ListingDrawerProps) {
             </dd>
           </dl>
 
-          {active.scoreReason ? (
+          {active.vetoReason ? (
+            <section className="space-y-1 rounded-card border border-bad/40 bg-bad/5 p-3">
+              <h3 className="text-[14px] font-semibold text-bad">Rejected</h3>
+              <p className="text-[13px] text-ink">{active.vetoReason}</p>
+            </section>
+          ) : active.components.length > 0 ? (
+            <section className="space-y-3">
+              <h3 className="text-[15px] font-semibold text-ink">Score breakdown</h3>
+              {active.scoreReason ? (
+                <p className="text-[13px] text-ink-muted">{active.scoreReason}</p>
+              ) : null}
+              <ul className="space-y-2">
+                {active.components.map((c) => (
+                  <ComponentBar key={c.key} c={c} />
+                ))}
+              </ul>
+            </section>
+          ) : active.scoreReason ? (
             <section className="space-y-2">
               <h3 className="text-[15px] font-semibold text-ink">Why the agent flagged it</h3>
               <p className="text-[14px] text-ink">{active.scoreReason}</p>

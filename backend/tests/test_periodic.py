@@ -19,8 +19,10 @@ sys.path.insert(0, str(pathlib.Path(__file__).resolve().parent.parent))
 from app.wg_agent import db as db_module, repo  # noqa: E402
 from app.wg_agent.db_models import HuntRow  # noqa: E402
 from app.wg_agent.db_models import ListingScoreRow  # noqa: E402
+from app.wg_agent.evaluator import EvaluationResult  # noqa: E402
 from app.wg_agent.models import (  # noqa: E402
     ActionKind,
+    ComponentScore,
     Gender,
     HuntStatus,
     Listing,
@@ -29,6 +31,21 @@ from app.wg_agent.models import (  # noqa: E402
     UserProfile,
 )
 from app.wg_agent.periodic import HuntEngine, PeriodicHunter  # noqa: E402
+
+
+def _stub_result(score: float, summary: str = "ok") -> EvaluationResult:
+    return EvaluationResult(
+        score=score,
+        components=[
+            ComponentScore(
+                key="price", score=score, weight=1.0, evidence=["stub"]
+            )
+        ],
+        veto_reason=None,
+        summary=summary,
+        match_reasons=[],
+        mismatch_reasons=[],
+    )
 
 
 def _fake_listings(
@@ -68,12 +85,10 @@ def test_periodic_hunter_dedupes_new_listings(monkeypatch) -> None:
     async def scrape_identity(lst: Listing, *_args, **_kwargs) -> Listing:
         return lst
 
-    def score_stub(lst: Listing, _sp: SearchProfile, *, travel_times=None) -> Listing:
-        lst.score = 0.9
-        lst.score_reason = "ok"
-        lst.match_reasons = []
-        lst.mismatch_reasons = []
-        return lst
+    async def evaluate_stub(
+        _lst: Listing, _sp: SearchProfile, *, travel_times=None
+    ) -> EvaluationResult:
+        return _stub_result(0.9)
 
     with Session(engine) as session:
         repo.create_user(
@@ -101,7 +116,10 @@ def test_periodic_hunter_dedupes_new_listings(monkeypatch) -> None:
             "app.wg_agent.periodic.browser.anonymous_scrape_listing",
             new=AsyncMock(side_effect=scrape_identity),
         ),
-        patch("app.wg_agent.periodic.brain.score_listing", side_effect=score_stub),
+        patch(
+            "app.wg_agent.periodic.evaluator.evaluate",
+            new=AsyncMock(side_effect=evaluate_stub),
+        ),
     ):
 
         async def run() -> None:
@@ -196,13 +214,11 @@ def test_commute_times_reach_score_listing(monkeypatch) -> None:
 
     captured: dict = {}
 
-    def score_capture(lst: Listing, _sp: SearchProfile, *, travel_times=None) -> Listing:
+    async def evaluate_capture(
+        _lst: Listing, _sp: SearchProfile, *, travel_times=None
+    ) -> EvaluationResult:
         captured["travel_times"] = travel_times
-        lst.score = 0.8
-        lst.score_reason = "ok"
-        lst.match_reasons = []
-        lst.mismatch_reasons = []
-        return lst
+        return _stub_result(0.8)
 
     with Session(engine) as session:
         repo.create_user(
@@ -237,7 +253,10 @@ def test_commute_times_reach_score_listing(monkeypatch) -> None:
             "app.wg_agent.periodic.commute.travel_times",
             new=AsyncMock(return_value=fake_matrix),
         ),
-        patch("app.wg_agent.periodic.brain.score_listing", side_effect=score_capture),
+        patch(
+            "app.wg_agent.periodic.evaluator.evaluate",
+            new=AsyncMock(side_effect=evaluate_capture),
+        ),
     ):
         asyncio.run(he.run_find_only())
 
@@ -269,12 +288,10 @@ def test_commute_skipped_when_listing_lacks_coords(monkeypatch) -> None:
     async def scrape_identity(lst: Listing, *_args, **_kwargs) -> Listing:
         return lst
 
-    def score_stub(lst: Listing, _sp: SearchProfile, *, travel_times=None) -> Listing:
-        lst.score = 0.5
-        lst.score_reason = "no commute"
-        lst.match_reasons = []
-        lst.mismatch_reasons = []
-        return lst
+    async def evaluate_stub(
+        _lst: Listing, _sp: SearchProfile, *, travel_times=None
+    ) -> EvaluationResult:
+        return _stub_result(0.5, summary="no commute")
 
     with Session(engine) as session:
         repo.create_user(
@@ -305,7 +322,10 @@ def test_commute_skipped_when_listing_lacks_coords(monkeypatch) -> None:
             new=AsyncMock(side_effect=scrape_identity),
         ),
         patch("app.wg_agent.periodic.commute.travel_times", new=travel_mock),
-        patch("app.wg_agent.periodic.brain.score_listing", side_effect=score_stub),
+        patch(
+            "app.wg_agent.periodic.evaluator.evaluate",
+            new=AsyncMock(side_effect=evaluate_stub),
+        ),
     ):
         asyncio.run(he.run_find_only())
 

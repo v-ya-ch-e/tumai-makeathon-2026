@@ -24,6 +24,7 @@ from .db_models import (
 from .models import (
     ActionKind,
     AgentAction,
+    ComponentScore,
     Gender,
     Hunt,
     HuntStatus,
@@ -278,8 +279,15 @@ def save_score(
     match_reasons: list[str],
     mismatch_reasons: list[str],
     travel_minutes: Optional[dict] = None,
+    components: Optional[list[ComponentScore]] = None,
+    veto_reason: Optional[str] = None,
 ) -> None:
     now = datetime.utcnow()
+    components_json = (
+        [c.model_dump(mode="json") for c in components]
+        if components is not None
+        else None
+    )
     row = ListingScoreRow(
         listing_id=listing_id,
         hunt_id=hunt_id,
@@ -288,6 +296,8 @@ def save_score(
         match_reasons=list(match_reasons),
         mismatch_reasons=list(mismatch_reasons),
         travel_minutes=travel_minutes,
+        components=components_json,
+        veto_reason=veto_reason,
         scored_at=now,
     )
     session.merge(row)
@@ -363,6 +373,8 @@ def _listing_from_row(
     reason = score_row.reason if score_row else None
     match_reasons = list(score_row.match_reasons or []) if score_row else []
     mismatch_reasons = list(score_row.mismatch_reasons or []) if score_row else []
+    components = _components_from_row(score_row)
+    veto_reason = score_row.veto_reason if score_row else None
     title = row.title or ""
     return Listing(
         id=row.id,
@@ -381,4 +393,27 @@ def _listing_from_row(
         score_reason=reason,
         match_reasons=match_reasons,
         mismatch_reasons=mismatch_reasons,
+        components=components,
+        veto_reason=veto_reason,
     )
+
+
+def _components_from_row(
+    score_row: Optional[ListingScoreRow],
+) -> list[ComponentScore]:
+    """Rehydrate `components` JSON into domain models, skipping malformed rows.
+
+    Pre-migration score rows (no `components` column populated) return
+    []; the UI then falls back to `score_reason` / match lists.
+    """
+    if score_row is None or not score_row.components:
+        return []
+    out: list[ComponentScore] = []
+    for raw in score_row.components:
+        if not isinstance(raw, dict):
+            continue
+        try:
+            out.append(ComponentScore.model_validate(raw))
+        except Exception:  # noqa: BLE001
+            continue
+    return out

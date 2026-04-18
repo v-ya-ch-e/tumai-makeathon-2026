@@ -16,6 +16,7 @@ from . import periodic, repo
 from .db import engine, get_session
 from .db_models import HuntRow, ListingRow, ListingScoreRow, PhotoRow
 from .dto import (
+    ComponentDTO,
     CreateHuntBody,
     CreateUserBody,
     CredentialsBody,
@@ -86,6 +87,8 @@ def _get_listing_detail(
     reason = score_row.reason if score_row else None
     match_reasons = list(score_row.match_reasons or []) if score_row else []
     mismatch_reasons = list(score_row.mismatch_reasons or []) if score_row else []
+    components_dto = _components_dto_from_row(score_row)
+    veto_reason = score_row.veto_reason if score_row else None
     listing_dto = ListingDTO(
         id=row.id,
         hunt_id=hunt_id,
@@ -104,6 +107,8 @@ def _get_listing_detail(
         score_reason=reason,
         match_reasons=match_reasons,
         mismatch_reasons=mismatch_reasons,
+        components=components_dto,
+        veto_reason=veto_reason,
     )
     travel_minutes_per_location = _travel_minutes_by_label(
         session, hunt_id=hunt_id, score_row=score_row
@@ -114,6 +119,27 @@ def _get_listing_detail(
         score=score_val,
         travel_minutes_per_location=travel_minutes_per_location,
     )
+
+
+def _components_dto_from_row(
+    score_row: Optional[ListingScoreRow],
+) -> list[ComponentDTO]:
+    """Rehydrate `components` JSON into DTOs for the listing drawer.
+
+    Pre-migration rows (no `components`) return []; the drawer then
+    falls back to the `score_reason` block.
+    """
+    if score_row is None or not score_row.components:
+        return []
+    out: list[ComponentDTO] = []
+    for raw in score_row.components:
+        if not isinstance(raw, dict):
+            continue
+        try:
+            out.append(ComponentDTO.model_validate(raw))
+        except Exception:  # noqa: BLE001
+            continue
+    return out
 
 
 def _travel_minutes_by_label(
