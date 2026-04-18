@@ -1,14 +1,12 @@
 import logging
 from contextlib import asynccontextmanager
 from pathlib import Path
-from typing import Optional
 
 from alembic import command
 from alembic.config import Config
 from fastapi import FastAPI, HTTPException
 from fastapi.responses import FileResponse
 from fastapi.staticfiles import StaticFiles
-from pydantic import BaseModel
 
 from .wg_agent.api import router as api_router
 
@@ -41,12 +39,6 @@ app = FastAPI(title="TUM.ai Campus Co-Pilot · WG Hunter", lifespan=lifespan)
 app.include_router(api_router)
 
 
-class Item(BaseModel):
-    name: str
-    price: float
-    is_offer: Optional[bool] = None
-
-
 @app.get("/health")
 def healthz() -> dict[str, str]:
     return {"status": "ok"}
@@ -55,16 +47,6 @@ def healthz() -> dict[str, str]:
 @app.get("/api/health")
 def api_healthz() -> dict[str, str]:
     return {"status": "ok"}
-
-
-@app.get("/items/{item_id}")
-def read_item(item_id: int, q: Optional[str] = None):
-    return {"item_id": item_id, "q": q}
-
-
-@app.put("/items/{item_id}")
-def update_item(item_id: int, item: Item):
-    return {"item_name": item.name, "item_id": item_id}
 
 
 # --- SPA serving -------------------------------------------------------------
