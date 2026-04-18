@@ -57,8 +57,6 @@ jobs:
           git reset --hard origin/main
           git remote set-url origin "https://github.com/${REPO}.git"
 
-          cd backend
-
           docker compose down
           docker compose up -d --build
 

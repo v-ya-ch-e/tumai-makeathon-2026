@@ -90,35 +90,18 @@ Full walkthrough in [`DEPLOYMENT.md`](./DEPLOYMENT.md) and CI/CD setup in [`CI-C
 
 The short version:
 
-1. Launch an EC2 instance (t2.micro is enough for demos), open **SSH (22)** and **TCP 8000** in the security group, SSH in.
+1. Launch an EC2 instance (t2.micro is enough for demos), open **SSH (22)** and **HTTP (80)** in the security group, SSH in.
 2. Install Docker + Compose plugin.
-3. Clone the repo on the instance and create `.env` at the repo root with your secrets (`OPENAI_API_KEY`, `GOOGLE_MAPS_SERVER_KEY`, …).
-4. Edit `backend/docker-compose.yml` to pass the secrets through (see [`DEPLOYMENT.md` step 5](./DEPLOYMENT.md)):
-
-   ```yaml
-   services:
-     backend:
-       build: .
-       ports:
-         - "8000:8000"
-       volumes:
-         - .:/app
-       env_file:
-         - ../.env
-       environment:
-         - PYTHONUNBUFFERED=1
-   ```
-
-5. Build + run:
+3. Clone the repo on the instance and create `.env` at the repo root with your secrets (`OPENAI_API_KEY`, `VITE_GOOGLE_MAPS_API_KEY`, `GOOGLE_MAPS_SERVER_KEY`, …).
+4. Build + run from the repo root:
 
    ```bash
-   cd backend
    docker compose up -d --build
    ```
 
-6. Verify: `curl http://<EC2_PUBLIC_IP>:8000/api/health` → `{"status":"ok"}`. Interactive docs at `/docs`.
+   The root [`docker-compose.yml`](./docker-compose.yml) starts an nginx frontend (port 80, with the built Vite SPA and a reverse proxy to `/api/*`) and a FastAPI backend that persists its SQLite database to the `wg_data` named volume.
 
-> **Heads-up on the SPA**: the current `backend/Dockerfile` only bundles the backend; the React SPA is served by FastAPI from `frontend/dist/` at the repo root. Build the frontend on the host (`cd frontend && npm install && npm run build`) and add `../frontend/dist:/frontend/dist:ro` to the compose `volumes:` block, or extend the Dockerfile with a multi-stage Node build. Without the SPA bundle, `/api/*` still responds but `/` returns 503. See [`DEPLOYMENT.md`](./DEPLOYMENT.md) for the full note.
+5. Verify: `curl http://<EC2_PUBLIC_IP>/api/health` → `{"status":"ok"}`. Open `http://<EC2_PUBLIC_IP>/` for the app and `/docs` for interactive API docs.
 
 ### Continuous deployment
 
