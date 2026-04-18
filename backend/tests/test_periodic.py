@@ -11,6 +11,7 @@ import asyncio
 import os
 import pathlib
 import sys
+from datetime import datetime, timedelta
 from unittest.mock import AsyncMock, patch
 
 from cryptography.fernet import Fernet
@@ -22,7 +23,7 @@ os.environ.setdefault("WG_SECRET_KEY", Fernet.generate_key().decode())
 sys.path.insert(0, str(pathlib.Path(__file__).resolve().parent.parent))
 
 from app.wg_agent import db as db_module, repo  # noqa: E402
-from app.wg_agent.db_models import UserListingRow  # noqa: E402
+from app.wg_agent.db_models import ListingRow, UserListingRow, UserRow  # noqa: E402
 from app.wg_agent.evaluator import EvaluationResult  # noqa: E402
 from app.wg_agent.models import (  # noqa: E402
     ActionKind,
@@ -40,6 +41,7 @@ from app.wg_agent.periodic import (  # noqa: E402
     UserAgent,
     _ACTIVE_AGENTS,
     _EVENT_QUEUES,
+    _NOTIFY_STATE,
 )
 
 
@@ -91,12 +93,38 @@ def _make_engine():
     return engine
 
 
-def _seed_user(session: Session, username: str, sp: SearchProfile) -> None:
+def _seed_user(
+    session: Session,
+    username: str,
+    sp: SearchProfile,
+    *,
+    email: str | None = None,
+) -> None:
     repo.create_user(
         session,
-        profile=UserProfile(username=username, age=22, gender=Gender.female),
+        profile=UserProfile(
+            username=username, email=email, age=22, gender=Gender.female
+        ),
     )
     repo.upsert_search_profile(session, username=username, sp=sp)
+
+
+def _set_user_created_at(session: Session, username: str, when) -> None:
+    """Backdate/forward the user's `created_at` so tests can pretend the user
+    was created before (or after) the seeded listings' `first_seen_at`."""
+    row = session.get(UserRow, username)
+    assert row is not None
+    row.created_at = when
+    session.add(row)
+    session.commit()
+
+
+def _set_listing_first_seen_at(session: Session, listing_id: str, when) -> None:
+    row = session.get(ListingRow, listing_id)
+    assert row is not None
+    row.first_seen_at = when
+    session.add(row)
+    session.commit()
 
 
 def test_user_agent_scores_every_pool_listing_once(monkeypatch) -> None:
@@ -430,3 +458,192 @@ def test_commute_skipped_when_listing_lacks_coords(monkeypatch) -> None:
         match_row = session.get(UserListingRow, ("u4", "lst2"))
     assert match_row is not None
     assert match_row.travel_minutes is None
+
+
+# --- Email digest notification behavior ---------------------------------------
+
+
+def _reset_notify_state(username: str) -> None:
+    _NOTIFY_STATE.pop(username, None)
+
+
+def test_initial_evaluation_does_not_send_email(monkeypatch) -> None:
+    """First pass over listings that predate the user must not send any email.
+
+    This guards the "don't email during initial evaluation" requirement: even
+    though every listing scores above the threshold, they were all first seen
+    by the scraper before the user signed up.
+    """
+    engine = _make_engine()
+    monkeypatch.setattr(db_module, "engine", engine)
+    _reset_notify_state("u-initial")
+
+    async def evaluate_stub(
+        _lst: Listing, _sp: SearchProfile, *, travel_times=None, nearby_places=None
+    ) -> EvaluationResult:
+        return _stub_result(0.95)
+
+    with Session(engine) as session:
+        _seed_user(
+            session,
+            "u-initial",
+            SearchProfile(
+                city="München",
+                max_rent_eur=900,
+                rescan_interval_minutes=30,
+                schedule="one_shot",
+            ),
+            email="u-initial@example.com",
+        )
+        _seed_listings(session, ("a", "b", "c"))
+        # Pretend every listing was first seen long before the user existed.
+        for lid in ("a", "b", "c"):
+            _set_listing_first_seen_at(
+                session, lid, datetime(2020, 1, 1)
+            )
+        _set_user_created_at(session, "u-initial", datetime(2024, 1, 1))
+
+    send_spy = patch(
+        "app.wg_agent.periodic.notifier.send_digest_email",
+        return_value=True,
+    )
+
+    q: asyncio.Queue = asyncio.Queue()
+    agent = UserAgent("u-initial", q)
+
+    with (
+        patch(
+            "app.wg_agent.periodic.evaluator.evaluate",
+            new=AsyncMock(side_effect=evaluate_stub),
+        ),
+        send_spy as mocked_send,
+    ):
+        asyncio.run(agent.run_match_pass())
+
+    mocked_send.assert_not_called()
+    assert _NOTIFY_STATE.get("u-initial") is None or not _NOTIFY_STATE["u-initial"].pending
+
+
+def test_new_listings_trigger_single_batched_email(monkeypatch) -> None:
+    """A pass that scores new (post-signup) high-scoring listings sends exactly
+    one digest email containing every queued listing."""
+    engine = _make_engine()
+    monkeypatch.setattr(db_module, "engine", engine)
+    _reset_notify_state("u-new")
+
+    async def evaluate_stub(
+        _lst: Listing, _sp: SearchProfile, *, travel_times=None, nearby_places=None
+    ) -> EvaluationResult:
+        return _stub_result(0.95)
+
+    with Session(engine) as session:
+        _seed_user(
+            session,
+            "u-new",
+            SearchProfile(
+                city="München",
+                max_rent_eur=900,
+                rescan_interval_minutes=30,
+                schedule="one_shot",
+            ),
+            email="u-new@example.com",
+        )
+        _set_user_created_at(session, "u-new", datetime(2024, 1, 1))
+        _seed_listings(session, ("n1", "n2"))
+        # Scraper first-saw these listings AFTER the user was created.
+        for lid in ("n1", "n2"):
+            _set_listing_first_seen_at(
+                session, lid, datetime(2024, 6, 1)
+            )
+
+    q: asyncio.Queue = asyncio.Queue()
+    agent = UserAgent("u-new", q)
+
+    with (
+        patch(
+            "app.wg_agent.periodic.evaluator.evaluate",
+            new=AsyncMock(side_effect=evaluate_stub),
+        ),
+        patch(
+            "app.wg_agent.periodic.notifier.send_digest_email",
+            return_value=True,
+        ) as mocked_send,
+    ):
+        asyncio.run(agent.run_match_pass())
+
+    assert mocked_send.call_count == 1
+    kwargs = mocked_send.call_args.kwargs
+    assert kwargs["to_email"] == "u-new@example.com"
+    assert kwargs["username"] == "u-new"
+    items = list(kwargs["items"])
+    assert {i.listing_url.rstrip("/").rsplit("/", 1)[-1] for i in items} == {
+        "n1.html",
+        "n2.html",
+    }
+
+
+def test_cooldown_suppresses_second_email_and_releases_after(monkeypatch) -> None:
+    """Two passes within the 5-minute cooldown emit one email; once the
+    cooldown elapses, the next pass drains the queued listings."""
+    engine = _make_engine()
+    monkeypatch.setattr(db_module, "engine", engine)
+    monkeypatch.setenv("WG_NOTIFY_COOLDOWN_MINUTES", "5")
+    _reset_notify_state("u-cool")
+
+    async def evaluate_stub(
+        _lst: Listing, _sp: SearchProfile, *, travel_times=None, nearby_places=None
+    ) -> EvaluationResult:
+        return _stub_result(0.95)
+
+    with Session(engine) as session:
+        _seed_user(
+            session,
+            "u-cool",
+            SearchProfile(
+                city="München",
+                max_rent_eur=900,
+                rescan_interval_minutes=30,
+                schedule="one_shot",
+            ),
+            email="u-cool@example.com",
+        )
+        _set_user_created_at(session, "u-cool", datetime(2024, 1, 1))
+        _seed_listings(session, ("c1",))
+        _set_listing_first_seen_at(session, "c1", datetime(2024, 6, 1))
+
+    q: asyncio.Queue = asyncio.Queue()
+    agent = UserAgent("u-cool", q)
+
+    with (
+        patch(
+            "app.wg_agent.periodic.evaluator.evaluate",
+            new=AsyncMock(side_effect=evaluate_stub),
+        ),
+        patch(
+            "app.wg_agent.periodic.notifier.send_digest_email",
+            return_value=True,
+        ) as mocked_send,
+    ):
+        asyncio.run(agent.run_match_pass())
+        assert mocked_send.call_count == 1
+
+        # Add another listing and rerun immediately — cooldown must suppress.
+        with Session(engine) as s:
+            _seed_listings(s, ("c2",))
+            _set_listing_first_seen_at(s, "c2", datetime(2024, 6, 2))
+        asyncio.run(agent.run_match_pass())
+        assert mocked_send.call_count == 1
+        assert [i.listing_url for i in _NOTIFY_STATE["u-cool"].pending][0].endswith(
+            "c2.html"
+        )
+
+        # Pretend the cooldown elapsed and rerun — the queued c2 should now flush.
+        state = _NOTIFY_STATE["u-cool"]
+        state.last_sent_at = datetime.utcnow() - timedelta(minutes=10)
+        asyncio.run(agent.run_match_pass())
+        assert mocked_send.call_count == 2
+        last_kwargs = mocked_send.call_args.kwargs
+        items = list(last_kwargs["items"])
+        assert len(items) == 1
+        assert items[0].listing_url.endswith("c2.html")
+        assert _NOTIFY_STATE["u-cool"].pending == []
