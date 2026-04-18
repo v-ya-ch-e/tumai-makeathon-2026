@@ -84,6 +84,8 @@ Normalized wg-gesucht listing **for one hunt**. Composite PK `(id, hunt_id)` so 
 | `size_m2` | `Optional[float]` | |
 | `wg_size` | `Optional[int]` | |
 | `district` | `Optional[str]` | |
+| `lat` | `Optional[float]` | Filled during `anonymous_scrape_listing` by [`geocoder.geocode`](../backend/app/wg_agent/geocoder.py); `None` when the geocoder is skipped or yields no result. |
+| `lng` | `Optional[float]` | Same origin as `lat`; paired with it for future commute-based scoring. |
 | `available_from` | `Optional[date]` | |
 | `available_to` | `Optional[date]` | |
 | `description` | `Optional[str]` | Filled after deep scrape. |
@@ -282,6 +284,8 @@ Values below are illustrative; timestamps are ISO-8601 strings as JSON would sho
   "size_m2": 14.0,
   "wg_size": 4,
   "district": "Laim",
+  "lat": 48.1432,
+  "lng": 11.5033,
   "available_from": "2026-05-01",
   "available_to": null,
   "description": "Bright room, shared kitchen…",

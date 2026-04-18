@@ -47,7 +47,7 @@ sequenceDiagram
     Engine->>Q: put_nowait(new_listing)
     API-->>SPA: SSE data: new_listing
     Engine->>WG: anonymous_scrape_listing
-    WG-->>Engine: detail HTML → enriched Listing
+    WG-->>Engine: detail HTML → enriched Listing (lat/lng via Geocoding)
     Engine->>OAI: brain.score_listing
     OAI-->>Engine: JSON score fields on Listing
     Engine->>DB: upsert_listing + save_score

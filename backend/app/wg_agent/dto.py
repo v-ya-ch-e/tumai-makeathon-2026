@@ -92,6 +92,8 @@ class ListingDTO(BaseModel):
     url: str
     title: Optional[str] = None
     district: Optional[str] = None
+    lat: Optional[float] = None
+    lng: Optional[float] = None
     price_eur: Optional[int] = None
     size_m2: Optional[float] = None
     wg_size: Optional[int] = None
@@ -189,6 +191,8 @@ def listing_to_dto(l: Listing, hunt_id: str) -> ListingDTO:
         url=str(l.url),
         title=title,
         district=l.district,
+        lat=l.lat,
+        lng=l.lng,
         price_eur=l.price_eur,
         size_m2=l.size_m2,
         wg_size=l.wg_size,

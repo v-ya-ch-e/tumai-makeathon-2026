@@ -15,6 +15,7 @@ backend/app/wg_agent/
   db.py                          SQLModel engine, WAL pragma, `init_db`, `get_session` dependency
   db_models.py                   `*Row` SQLModel table classes (see [DATA_MODEL.md](./DATA_MODEL.md))
   dto.py                         Pydantic DTOs + `*_to_dto` / `upsert_body_to_search_profile` converters
+  geocoder.py                    Server-side Google Geocoding API client with an in-process cache; used by `browser.anonymous_scrape_listing`
   models.py                      Domain Pydantic models + enums + `CITY_CATALOGUE`
   orchestrator.py                Legacy `HuntOrchestrator` (Playwright messaging loop) for tests / future work
   periodic.py                    `HuntEngine`, `PeriodicHunter`, hunter task registry, `resume_running_hunts`
@@ -132,8 +133,12 @@ Internal helpers: `_listing_from_row`, `_default_requirements`.
 ## `browser.py`
 
 1. **Pure parsing** — `build_search_url`, `parse_search_page`, `parse_listing_page` (unit-tested via fixtures and `test_wg_parser`).
-2. **Anonymous httpx** — `anonymous_search`, `anonymous_scrape_listing` using shared headers, timeouts, and polite delays (`ANONYMOUS_PAGE_DELAY_SECONDS`).
+2. **Anonymous httpx** — `anonymous_search`, `anonymous_scrape_listing` using shared headers, timeouts, and polite delays (`ANONYMOUS_PAGE_DELAY_SECONDS`). After parsing the detail page, `anonymous_scrape_listing` calls [`geocoder.geocode`](../backend/app/wg_agent/geocoder.py) with the best available string (`listing.address` → `"{district}, {city or req_city}"` fallback) so `listing.lat` / `listing.lng` are populated before `repo.upsert_listing` persists the row.
 3. **Playwright driver** — `WGBrowser` (`search`, `scrape_listing`, `send_message`, `fetch_inbox`) plus `launch_browser` for authenticated flows retained for future messaging.
+
+## `geocoder.py`
+
+Thin async client around the Google Geocoding API. `geocode(address)` returns `(lat, lng)` or `None` and never raises. Reads `GOOGLE_MAPS_SERVER_KEY` from the environment; if unset, returns `None` without touching the network so local dev works without the key. An in-process dict caches results keyed on `address.strip().lower()` (cleared when it passes 1024 entries) so rescans of the same listing don't re-bill the same string.
 
 ## `brain.py`
 

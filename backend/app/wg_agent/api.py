@@ -92,6 +92,8 @@ def _get_listing_detail(
         url=row.url,
         title=row.title,
         district=row.district,
+        lat=row.lat,
+        lng=row.lng,
         price_eur=row.price_eur,
         size_m2=row.size_m2,
         wg_size=row.wg_size,

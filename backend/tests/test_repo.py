@@ -103,6 +103,8 @@ def test_repo_round_trip() -> None:
             url=HttpUrl("https://www.wg-gesucht.de/wg1"),
             title="Room A",
             price_eur=500,
+            lat=48.137,
+            lng=11.575,
         )
         l2 = Listing(
             id="wg2",
@@ -138,7 +140,11 @@ def test_repo_round_trip() -> None:
         by_id = {x.id: x for x in full.listings}
         assert by_id["wg1"].score == 0.91
         assert by_id["wg1"].score_reason == "ok"
+        assert by_id["wg1"].lat == 48.137
+        assert by_id["wg1"].lng == 11.575
         assert by_id["wg2"].score == 0.42
+        assert by_id["wg2"].lat is None
+        assert by_id["wg2"].lng is None
 
         assert repo.list_hunts_by_status(session, status=HuntStatus.running) == []
 

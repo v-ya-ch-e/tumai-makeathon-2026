@@ -30,6 +30,7 @@ from playwright.async_api import (
     async_playwright,
 )
 
+from . import geocoder
 from .models import CITY_CATALOGUE, Listing, SearchProfile, WGCredentials
 
 BASE_URL = "https://www.wg-gesucht.de"
@@ -543,9 +544,29 @@ async def anonymous_search(
     return out
 
 
-async def anonymous_scrape_listing(listing: Listing) -> Listing:
-    """Deep-scrape a listing's public detail page using httpx + parse_listing_page."""
+async def anonymous_scrape_listing(
+    listing: Listing, *, req_city: Optional[str] = None
+) -> Listing:
+    """Deep-scrape a listing's public detail page using httpx + parse_listing_page.
+
+    After parsing, geocode the best-available address string via
+    `geocoder.geocode` so the listing carries `(lat, lng)` for future
+    commute-aware scoring. `req_city` is the search profile city used
+    as a fallback when the listing's own `city` wasn't parsed.
+    """
     async with _anon_client() as client:
         response = await client.get(str(listing.url))
         response.raise_for_status()
-    return parse_listing_page(response.text, listing)
+    parse_listing_page(response.text, listing)
+
+    query: Optional[str] = None
+    if listing.address:
+        query = listing.address
+    elif listing.district:
+        city = listing.city or req_city
+        query = f"{listing.district}, {city}" if city else listing.district
+    if query:
+        coords = await geocoder.geocode(query)
+        if coords is not None:
+            listing.lat, listing.lng = coords
+    return listing

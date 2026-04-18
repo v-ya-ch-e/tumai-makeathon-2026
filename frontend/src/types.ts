@@ -58,6 +58,8 @@ export type Listing = {
   url: string
   title: string | null
   district: string | null
+  lat: number | null
+  lng: number | null
   priceEur: number | null
   sizeM2: number | null
   wgSize: number | null

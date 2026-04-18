@@ -154,6 +154,8 @@ class Listing(BaseModel):
     city: Optional[str] = None
     district: Optional[str] = None
     address: Optional[str] = None
+    lat: Optional[float] = None
+    lng: Optional[float] = None
     price_eur: Optional[int] = None
     size_m2: Optional[float] = None
     wg_size: Optional[int] = None

@@ -151,3 +151,17 @@ ADR index for WG Hunter. Each entry lists context, decision, consequences, and t
 **Consequences:** One repo-root `.env` now owns the Maps key (Vite reads it via [`envDir: '..'`](../frontend/vite.config.ts)). No backend proxy is needed, so the FastAPI surface stays unchanged. Existing dev rows are wiped by [`alembic/0002_places_main_locations.py`](../backend/alembic/versions/0002_places_main_locations.py); pre-demo users re-pick locations. Listing addresses are not yet geocoded — that's the next piece needed before the Routes API call that commute scoring will depend on.
 
 **Introduced in:** this commit
+
+---
+
+## ADR-011: Server-side Geocoding API call inside `anonymous_scrape_listing`
+
+- **Date:** 2026-04-18  
+- **Status:** Accepted  
+
+**Context:** Main locations carry coordinates (ADR-010), but the other side of the commute equation — the listing's address — was still free text. Commute-aware scoring needs `(lat, lng)` on *both* origin and destination. We also didn't want a second API call path later (e.g. a frontend-side geocode triggered from a map UI) because it would diverge from what the scorer sees.
+
+**Decision:** Call the Google Geocoding API server-side from [`geocoder.py`](../backend/app/wg_agent/geocoder.py) immediately after `parse_listing_page` inside [`browser.anonymous_scrape_listing`](../backend/app/wg_agent/browser.py). Store the result on `ListingRow.lat` / `ListingRow.lng` via the existing `repo.upsert_listing` path (schema widened in [`0003_listing_coords.py`](../backend/alembic/versions/0003_listing_coords.py)) and expose it on `ListingDTO` for future map UIs. Key material is a separate `GOOGLE_MAPS_SERVER_KEY` (no `VITE_` prefix, never shipped to the browser), IP-restricted and scoped to the Geocoding API only in Google Cloud Console.
+
+**Consequences:** Listings get coordinates exactly once per scrape, cached in-process so rescans of the same string don't re-bill the free-tier quota. Missing key / HTTP errors / `ZERO_RESULTS` all degrade gracefully to `None` instead of raising, so the scrape pipeline keeps working without the key in dev. A second key is one more secret to manage, but keeping the browser and server keys separate lets us restrict each to the smallest-possible API set. No scoring logic changes yet — commute-aware scoring is tracked separately as a follow-up that reads `listing.lat/lng` plus `SearchProfile.main_locations[].lat/lng` to call the Routes API.
+
