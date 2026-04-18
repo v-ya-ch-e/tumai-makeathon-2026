@@ -48,6 +48,16 @@ class SearchProfile(BaseModel):
 
     city: str = Field(..., description="City name, e.g. 'München'")
     max_rent_eur: int = Field(..., ge=100, le=3000, description="Max total rent in €/month")
+    price_min_eur: int = Field(default=0, ge=0, le=3000)
+    price_max_eur: Optional[int] = None
+    main_locations: list[str] = Field(default_factory=list)
+    has_car: bool = False
+    has_bike: bool = False
+    mode: Literal["wg", "flat", "both"] = "wg"
+    preferences: list[str] = Field(default_factory=list)
+    rescan_interval_minutes: int = Field(default=30, ge=5, le=1440)
+    schedule: Literal["one_shot", "periodic"] = "one_shot"
+    updated_at: datetime = Field(default_factory=datetime.utcnow)
     min_rent_eur: int = Field(default=0, ge=0, le=3000)
     min_size_m2: int = Field(default=10, ge=5, le=80)
     max_size_m2: int = Field(default=40, ge=5, le=200)
@@ -199,6 +209,8 @@ class ActionKind(str, Enum):
     rate_limit = "rate_limit"
     error = "error"
     done = "done"
+    new_listing = "new_listing"
+    rescan = "rescan"
 
 
 class AgentAction(BaseModel):
