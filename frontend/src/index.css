@@ -4,30 +4,46 @@
 
 :root {
   /* Surfaces */
-  --canvas: #F5F0E6;       /* page background */
-  --surface: #FAF6EE;      /* cards */
-  --surface-raised: #FFFCF6; /* inputs, modals */
-  --hairline: #E6DECF;     /* 1px borders */
+  --canvas: #F5F0E6;
+  --surface: #FAF6EE;
+  --surface-raised: #FFFCF6;
+  --hairline: #E6DECF;
 
   /* Text */
-  --ink: #2B2623;          /* primary text, near-black warm */
-  --ink-muted: #7A6E60;    /* labels, hints */
+  --ink: #2B2623;
+  --ink-muted: #7A6E60;
 
-  /* Accent (used sparingly — primary buttons, focus rings, active states) */
-  --accent: #8A5A3B;       /* terracotta / cognac */
-  --accent-muted: #C8A586; /* hover, selected chip bg */
+  /* Accent */
+  --accent: #8A5A3B;
+  --accent-muted: #C8A586;
 
   /* Signal */
-  --good: #6B8E5A;         /* sage — high score, agent running */
-  --warn: #C08A3E;         /* amber — dry-run skip, pacing */
-  --bad:  #A85C4A;         /* rust — errors, rejected */
+  --good: #6B8E5A;
+  --warn: #C08A3E;
+  --bad: #A85C4A;
 }
 
-html,
+html {
+  min-height: 100%;
+  background:
+    radial-gradient(circle at top left, rgba(138, 90, 59, 0.12), transparent 30%),
+    radial-gradient(circle at bottom right, rgba(107, 142, 90, 0.08), transparent 24%),
+    var(--canvas);
+}
+
 body {
+  min-height: 100vh;
   color: var(--ink);
-  background-color: var(--canvas);
+  background: transparent;
   font-family: Geist, ui-sans-serif, system-ui, sans-serif;
   font-size: 15px;
   line-height: 1.5;
+}
+
+* {
+  scrollbar-color: rgba(122, 110, 96, 0.45) transparent;
+}
+
+::selection {
+  background: rgba(138, 90, 59, 0.18);
 }
