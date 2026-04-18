@@ -87,7 +87,7 @@ Narrow surface (domain in/out unless noted):
 | `create_user` | Insert `UserRow` from `UserProfile` |
 | `get_user` | `UserRow` → `UserProfile` or `None` |
 | `upsert_search_profile` | Merge `SearchProfile` into `SearchProfileRow` |
-| `get_search_profile` | Row → `SearchProfile`, deriving `city` and `max_rent_eur` from `main_locations` / `price_max_eur` when absent |
+| `get_search_profile` | Row → `SearchProfile`, deriving `city` from `main_locations[0].label` and `max_rent_eur` from `price_max_eur` when absent (parses `main_locations` via `PlaceLocation.model_validate`) |
 | `upsert_credentials` | JSON-encode `WGCredentials`, Fernet-encrypt, upsert `WgCredentialsRow` |
 | `delete_credentials` | Remove credential row |
 | `credentials_status` | `(connected, saved_at)` tuple |

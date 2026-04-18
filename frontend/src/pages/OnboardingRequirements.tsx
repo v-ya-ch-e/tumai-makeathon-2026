@@ -1,15 +1,16 @@
 import { useEffect, useState, type ReactNode } from 'react'
 import { useNavigate } from 'react-router-dom'
 import { OnboardingShell } from '../components/OnboardingShell'
+import { PlaceAutocomplete } from '../components/PlaceAutocomplete'
 import { Chip, Input } from '../components/ui'
 import { ApiError, getSearchProfile, putSearchProfile } from '../lib/api'
 import { useSession } from '../lib/session'
-import type { Mode, Schedule, UpsertSearchProfileBody } from '../types'
+import type { Mode, PlaceLocation, Schedule, UpsertSearchProfileBody } from '../types'
 
 type LocalState = {
   priceMin: string
   priceMax: string
-  mainLocations: string
+  mainLocations: PlaceLocation[]
   hasCar: boolean
   hasBike: boolean
   mode: Mode
@@ -22,7 +23,7 @@ type LocalState = {
 const DEFAULT_STATE: LocalState = {
   priceMin: '400',
   priceMax: '900',
-  mainLocations: '',
+  mainLocations: [],
   hasCar: false,
   hasBike: true,
   mode: 'wg',
@@ -30,13 +31,6 @@ const DEFAULT_STATE: LocalState = {
   moveInUntil: '',
   schedule: 'periodic',
   rescanIntervalMinutes: '30',
-}
-
-function splitLocations(raw: string): string[] {
-  return raw
-    .split(',')
-    .map((s) => s.trim())
-    .filter(Boolean)
 }
 
 export default function OnboardingRequirements() {
@@ -64,7 +58,7 @@ export default function OnboardingRequirements() {
         setState({
           priceMin: String(sp.priceMinEur),
           priceMax: sp.priceMaxEur !== null ? String(sp.priceMaxEur) : '',
-          mainLocations: sp.mainLocations.join(', '),
+          mainLocations: sp.mainLocations,
           hasCar: sp.hasCar,
           hasBike: sp.hasBike,
           mode: sp.mode,
@@ -103,8 +97,7 @@ export default function OnboardingRequirements() {
       setFooter(<p className="text-[15px] text-bad">Rescan interval must be between 5 and 1440 minutes.</p>)
       return
     }
-    const mainLocations = splitLocations(state.mainLocations)
-    if (mainLocations.length === 0) {
+    if (state.mainLocations.length === 0) {
       setFooter(<p className="text-[15px] text-bad">Add at least one city, university, or neighbourhood.</p>)
       return
     }
@@ -112,7 +105,7 @@ export default function OnboardingRequirements() {
     const body: UpsertSearchProfileBody = {
       priceMinEur: priceMin,
       priceMaxEur: priceMax,
-      mainLocations,
+      mainLocations: state.mainLocations,
       hasCar: state.hasCar,
       hasBike: state.hasBike,
       mode: state.mode,
@@ -195,14 +188,13 @@ export default function OnboardingRequirements() {
           <label htmlFor="req-main-locations" className="block text-[15px] text-ink">
             Main locations
           </label>
-          <Input
+          <PlaceAutocomplete
             id="req-main-locations"
-            placeholder="München, TUM, Maxvorstadt"
             value={state.mainLocations}
-            onChange={(e) => setState({ ...state, mainLocations: e.target.value })}
+            onChange={(mainLocations) => setState({ ...state, mainLocations })}
           />
           <p className="text-[13px] text-ink-muted">
-            A city, university, or neighbourhood the agent should stay close to. Comma-separated.
+            Pick cities, universities, or addresses. These drive how we score listings by location.
           </p>
         </div>
 

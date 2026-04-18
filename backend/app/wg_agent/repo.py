@@ -28,6 +28,7 @@ from .models import (
     Hunt,
     HuntStatus,
     Listing,
+    PlaceLocation,
     SearchProfile,
     UserProfile,
     WGCredentials,
@@ -72,7 +73,7 @@ def upsert_search_profile(
         session.add(row)
     row.price_min_eur = sp.price_min_eur
     row.price_max_eur = sp.price_max_eur
-    row.main_locations = list(sp.main_locations)
+    row.main_locations = [ml.model_dump() for ml in sp.main_locations]
     row.has_car = sp.has_car
     row.has_bike = sp.has_bike
     row.mode = sp.mode
@@ -91,9 +92,9 @@ def get_search_profile(session: Session, *, username: str) -> Optional[SearchPro
     row = session.get(SearchProfileRow, username)
     if row is None:
         return None
-    main = list(row.main_locations or [])
+    main = [PlaceLocation.model_validate(d) for d in (row.main_locations or [])]
     # transitional: browser.py still reads these
-    city = main[0] if main else "München"
+    city = main[0].label if main else "München"
     max_rent_eur = row.price_max_eur if row.price_max_eur is not None else 2000
     min_rent_eur = row.price_min_eur
     return SearchProfile(

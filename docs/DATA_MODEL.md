@@ -40,7 +40,7 @@ One-to-one requirements/preferences schedule slice persisted for the wizard. Map
 | `username` | `str` | PK + FK → `userrow.username`. |
 | `price_min_eur` | `int` | Lower rent bound. |
 | `price_max_eur` | `Optional[int]` | Upper bound; `None` triggers defaults in repo when building `SearchProfile`. |
-| `main_locations` | `JSON` / `list` | District or place names; first entry seeds `SearchProfile.city` for search URL building. |
+| `main_locations` | `JSON` / `list[PlaceLocation]` | User-picked places from Google Places Autocomplete. Each element is `{label, place_id, lat, lng}`; the first entry's `label` seeds `SearchProfile.city` for the wg-gesucht search URL builder. `lat`/`lng` are reserved for future commute-based scoring. |
 | `has_car` | `bool` | Commute / POI hint. |
 | `has_bike` | `bool` | Same. |
 | `mode` | `str` | `"wg"`, `"flat"`, or `"both"`. |
@@ -231,7 +231,20 @@ Values below are illustrative; timestamps are ISO-8601 strings as JSON would sho
   "username": "lea",
   "price_min_eur": 400,
   "price_max_eur": 950,
-  "main_locations": ["Sendling", "Laim"],
+  "main_locations": [
+    {
+      "label": "Technische Universität München, Arcisstraße 21",
+      "place_id": "ChIJ2V-Mo_l1nkcRfZixfUq4DAE",
+      "lat": 48.1497,
+      "lng": 11.5679
+    },
+    {
+      "label": "Sendling, München",
+      "place_id": "ChIJsendlingPlaceId",
+      "lat": 48.1168,
+      "lng": 11.5483
+    }
+  ],
   "has_car": true,
   "has_bike": false,
   "mode": "flat",

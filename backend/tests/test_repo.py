@@ -23,6 +23,7 @@ from app.wg_agent.models import (  # noqa: E402
     Gender,
     HuntStatus,
     Listing,
+    PlaceLocation,
     SearchProfile,
     UserProfile,
     WGCredentials,
@@ -41,12 +42,18 @@ def test_repo_round_trip() -> None:
         assert repo.create_user(session, profile=u) == u
         assert repo.get_user(session, username="lea") == u
 
+        sendling = PlaceLocation(
+            label="Sendling, München", place_id="ChIJsendling", lat=48.116, lng=11.548
+        )
+        laim = PlaceLocation(
+            label="Laim, München", place_id="ChIJlaim", lat=48.143, lng=11.503
+        )
         sp = SearchProfile(
             city="München",
             max_rent_eur=900,
             price_min_eur=400,
             price_max_eur=950,
-            main_locations=["Sendling", "Laim"],
+            main_locations=[sendling, laim],
             has_car=True,
             has_bike=False,
             mode="flat",
@@ -58,7 +65,10 @@ def test_repo_round_trip() -> None:
         out = repo.upsert_search_profile(session, username="lea", sp=sp)
         assert out.price_min_eur == 400
         assert out.price_max_eur == 950
-        assert out.main_locations == ["Sendling", "Laim"]
+        assert out.main_locations == [sendling, laim]
+        assert out.main_locations[0].place_id == "ChIJsendling"
+        assert out.main_locations[0].lat == 48.116
+        assert out.main_locations[1].lng == 11.503
         assert out.has_car is True
         assert out.has_bike is False
         assert out.mode == "flat"

@@ -9,6 +9,7 @@
     "test": "vitest run"
   },
   "dependencies": {
+    "@vis.gl/react-google-maps": "^1.8.3",
     "clsx": "^2.1.1",
     "react": "^19.2.5",
     "react-dom": "^19.2.5",

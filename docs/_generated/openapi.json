@@ -1001,6 +1001,35 @@
         ],
         "title": "ListingDetailDTO"
       },
+      "PlaceLocation": {
+        "properties": {
+          "label": {
+            "type": "string",
+            "title": "Label"
+          },
+          "place_id": {
+            "type": "string",
+            "title": "Place Id"
+          },
+          "lat": {
+            "type": "number",
+            "title": "Lat"
+          },
+          "lng": {
+            "type": "number",
+            "title": "Lng"
+          }
+        },
+        "type": "object",
+        "required": [
+          "label",
+          "place_id",
+          "lat",
+          "lng"
+        ],
+        "title": "PlaceLocation",
+        "description": "A user-picked location anchored by a Google Places place_id.\n\nProduced by the frontend's Places Autocomplete widget and stored as\nJSON in `SearchProfileRow.main_locations`. The lat/lng pair is what\nfuture commute-based scoring will consume; `label` is what we show\nto the user and the LLM."
+      },
       "SearchProfileDTO": {
         "properties": {
           "price_min_eur": {
@@ -1020,7 +1049,7 @@
           },
           "main_locations": {
             "items": {
-              "type": "string"
+              "$ref": "#/components/schemas/PlaceLocation"
             },
             "type": "array",
             "title": "Main Locations"
@@ -1129,7 +1158,7 @@
           },
           "main_locations": {
             "items": {
-              "type": "string"
+              "$ref": "#/components/schemas/PlaceLocation"
             },
             "type": "array",
             "title": "Main Locations"

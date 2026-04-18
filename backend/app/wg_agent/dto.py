@@ -7,7 +7,7 @@ from typing import Literal, Optional
 
 from pydantic import BaseModel, EmailStr, Field, model_validator
 
-from .models import AgentAction, Hunt, Listing, SearchProfile, UserProfile
+from .models import AgentAction, Hunt, Listing, PlaceLocation, SearchProfile, UserProfile
 
 
 class UserDTO(BaseModel):
@@ -26,7 +26,7 @@ class CreateUserBody(BaseModel):
 class SearchProfileDTO(BaseModel):
     price_min_eur: int
     price_max_eur: Optional[int] = None
-    main_locations: list[str]
+    main_locations: list[PlaceLocation]
     has_car: bool
     has_bike: bool
     mode: Literal["wg", "flat", "both"]
@@ -41,7 +41,7 @@ class SearchProfileDTO(BaseModel):
 class UpsertSearchProfileBody(BaseModel):
     price_min_eur: int = Field(0, ge=0, le=5000)
     price_max_eur: Optional[int] = Field(None, ge=0, le=5000)
-    main_locations: list[str] = Field(default_factory=list)
+    main_locations: list[PlaceLocation] = Field(default_factory=list)
     has_car: bool = False
     has_bike: bool = False
     mode: Literal["wg", "flat", "both"] = "wg"
@@ -151,7 +151,7 @@ def upsert_body_to_search_profile(b: UpsertSearchProfileBody) -> SearchProfile:
     # Transitional defaults so browser.py / brain.py keep working during API migration.
     max_eur = b.price_max_eur if b.price_max_eur is not None else 2000
     main = list(b.main_locations)
-    city = main[0] if main else "München"
+    city = main[0].label if main else "München"
     return SearchProfile(
         city=city,
         max_rent_eur=max_eur,

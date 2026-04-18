@@ -11,10 +11,17 @@ export type User = {
   createdAt: string
 }
 
+export type PlaceLocation = {
+  label: string
+  placeId: string
+  lat: number
+  lng: number
+}
+
 export type SearchProfile = {
   priceMinEur: number
   priceMaxEur: number | null
-  mainLocations: string[]
+  mainLocations: PlaceLocation[]
   hasCar: boolean
   hasBike: boolean
   mode: Mode

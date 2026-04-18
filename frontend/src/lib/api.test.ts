@@ -29,14 +29,18 @@ describe('toCamel / toSnake', () => {
     const camel = {
       priceMinEur: 400,
       priceMaxEur: null,
-      mainLocations: ['Muenchen'],
+      mainLocations: [
+        { label: 'Muenchen', placeId: 'ChIJ2V-Mo_l1nkcRfZixfUq4DAE', lat: 48.1351, lng: 11.582 },
+      ],
       hasCar: false,
       huntId: 'abc',
     }
     const snake = toSnake(camel) as Record<string, unknown>
     expect(snake.price_min_eur).toBe(400)
     expect(snake.price_max_eur).toBeNull()
-    expect(snake.main_locations).toEqual(['Muenchen'])
+    expect(snake.main_locations).toEqual([
+      { label: 'Muenchen', place_id: 'ChIJ2V-Mo_l1nkcRfZixfUq4DAE', lat: 48.1351, lng: 11.582 },
+    ])
     expect(snake.has_car).toBe(false)
     expect(snake.hunt_id).toBe('abc')
   })

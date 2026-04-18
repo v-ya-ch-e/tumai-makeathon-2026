@@ -10,6 +10,7 @@ Vite-built React SPA for onboarding, dashboard controls, SSE-fed action log, and
 - **TypeScript** 6 (`tsc -b` before production build)
 - **Tailwind CSS** 3 (theme extension maps CSS variables)
 - **clsx** for conditional class names
+- **`@vis.gl/react-google-maps`** — Google Maps JS SDK loader used for Places Autocomplete in onboarding (`APIProvider` in [`App.tsx`](../frontend/src/App.tsx), hooks in [`PlaceAutocomplete`](../frontend/src/components/PlaceAutocomplete.tsx))
 - No global state library: **React Context** (`SessionProvider`) plus local component state
 
 ## File map
@@ -33,6 +34,7 @@ frontend/src/components/ui/StatusPill.tsx  Dot + label status badge
 frontend/src/components/ui/index.ts        Re-export barrel
 frontend/src/components/OnboardingShell.tsx  Wizard chrome (progress + nav)
 frontend/src/components/ConnectWGDialog.tsx  Modal to save wg credentials (optional)
+frontend/src/components/PlaceAutocomplete.tsx  Google Places combobox + removable chips (used in step 2)
 frontend/src/components/ActionLog.tsx        Monospace-tagged SSE log
 frontend/src/components/ListingList.tsx      Ranked cards + selection callback
 frontend/src/components/ListingDrawer.tsx    Detail fetch + `Drawer` presentation
@@ -83,14 +85,14 @@ frontend/src/pages/Health.tsx                Simple connectivity check page
 ## Pages
 
 - **`OnboardingProfile`** — Collects username/age/gender, `POST /api/users` on first save, `setUsername`, navigates forward when `user` exists.
-- **`OnboardingRequirements`** — Binds sliders, chips, mode select, move-in dates, schedule fields to `UpsertSearchProfileBody`, persists with `putSearchProfile`.
+- **`OnboardingRequirements`** — Binds sliders, chips, mode select, move-in dates, schedule fields to `UpsertSearchProfileBody`, persists with `putSearchProfile`. Main locations are collected via [`PlaceAutocomplete`](../frontend/src/components/PlaceAutocomplete.tsx) as structured `PlaceLocation[]` (`label`, `placeId`, `lat`, `lng`).
 - **`OnboardingPreferences`** — Grid of inline-SVG tiles toggling `preferences` string tags; saves merged profile before routing to `/dashboard`.
 - **`Dashboard`** — Loads search profile + optional credentials status, persists last hunt id in `localStorage` (`wg-hunter.hunt-id`), starts hunts (`createHunt`), attaches `streamHunt`, hydrates listings from periodic `getHunt` polling / SSE merges, hosts `ListingDrawer` + `ConnectWGDialog`, maps backend hunt status to UI pill tones.
 - **`HealthPage`** — Minimal read-only check (useful when verifying proxy + API reachability during dev).
 
 ## Build & dev
 
-- **`npm run dev`** — Vite dev server; [`vite.config.ts`](../frontend/vite.config.ts) proxies `/api` to the FastAPI origin.
+- **`npm run dev`** — Vite dev server; [`vite.config.ts`](../frontend/vite.config.ts) proxies `/api` to the FastAPI origin and sets `envDir: '..'` so `VITE_*` values come from the repo-root `.env`.
 - **`npm run build`** — `tsc -b && vite build` emits static assets under `frontend/dist/` for [`main.py`](../backend/app/main.py) to serve.
 - **`npm test`** — `vitest run` (includes [`lib/api.test.ts`](../frontend/src/lib/api.test.ts)).
 

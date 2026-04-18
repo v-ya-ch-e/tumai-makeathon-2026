@@ -43,6 +43,21 @@ class RentType(int, Enum):
     overnight = 3
 
 
+class PlaceLocation(BaseModel):
+    """A user-picked location anchored by a Google Places place_id.
+
+    Produced by the frontend's Places Autocomplete widget and stored as
+    JSON in `SearchProfileRow.main_locations`. The lat/lng pair is what
+    future commute-based scoring will consume; `label` is what we show
+    to the user and the LLM.
+    """
+
+    label: str
+    place_id: str
+    lat: float
+    lng: float
+
+
 class SearchProfile(BaseModel):
     """What kind of WG room the student is hunting for."""
 
@@ -50,7 +65,7 @@ class SearchProfile(BaseModel):
     max_rent_eur: int = Field(..., ge=100, le=3000, description="Max total rent in €/month")
     price_min_eur: int = Field(default=0, ge=0, le=3000)
     price_max_eur: Optional[int] = None
-    main_locations: list[str] = Field(default_factory=list)
+    main_locations: list[PlaceLocation] = Field(default_factory=list)
     has_car: bool = False
     has_bike: bool = False
     mode: Literal["wg", "flat", "both"] = "wg"

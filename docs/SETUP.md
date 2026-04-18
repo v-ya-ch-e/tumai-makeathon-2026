@@ -8,6 +8,7 @@ Clone the repo and run the WG Hunter stack locally: FastAPI backend + Vite-built
 - **Node.js** 20+ (Node **24** is what we use day-to-day; it works with the checked-in lockfile)
 - **npm** 10+
 - A working **`OPENAI_API_KEY`** (see [`.env.example`](../.env.example))
+- A **Google Maps Platform API key** with **Maps JavaScript API** and **Places API (New)** enabled, exposed as `VITE_GOOGLE_MAPS_API_KEY`. Used by the onboarding wizard's Main locations autocomplete ([`frontend/src/components/PlaceAutocomplete.tsx`](../frontend/src/components/PlaceAutocomplete.tsx)). Without it the field falls back to a disabled placeholder but the rest of onboarding still works. Restrict the key to HTTP referrers (`http://localhost:5173/*`, `http://localhost:8000/*`, and your deployed origin) and to the two APIs above.
 
 ## One-shot setup
 
@@ -19,7 +20,7 @@ Clone the repo and run the WG Hunter stack locally: FastAPI backend + Vite-built
    cp .env.example .env
    ```
 
-   Edit `.env` and set `OPENAI_API_KEY`.
+   Edit `.env` and set `OPENAI_API_KEY`. Optionally set `VITE_GOOGLE_MAPS_API_KEY` for the Places Autocomplete widget; Vite reads this file via [`envDir: '..'`](../frontend/vite.config.ts) from `frontend/`, so one repo-root `.env` covers both backend and frontend.
 
 3. **Backend**
 

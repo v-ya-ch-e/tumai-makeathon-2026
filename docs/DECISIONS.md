@@ -136,3 +136,18 @@ ADR index for WG Hunter. Each entry lists context, decision, consequences, and t
 **Consequences:** One obvious conversion layer; grep-friendly distinction between transport and UI types; Vitest covers parsing edge cases (`1a3af89`).
 
 **Introduced in:** `afdf8cf` (client scaffolding) with tests in `1a3af89`
+
+---
+
+## ADR-010: Structured `main_locations` via client-side Google Places Autocomplete
+
+- **Date:** 2026-04-18  
+- **Status:** Accepted  
+
+**Context:** Free-text `main_locations: list[str]` could not feed commute-aware scoring — the LLM got a token like `"TUM"` with no coordinate. We also wanted the user to pick a concrete place (building, S-Bahn, district) rather than spell out a string.
+
+**Decision:** Collect main locations as structured `PlaceLocation { label, place_id, lat, lng }` via Google Places Autocomplete (New). Load the Maps JavaScript API client-side with [`@vis.gl/react-google-maps`](https://github.com/visgl/react-google-maps); the `VITE_GOOGLE_MAPS_API_KEY` ships in the bundle but is referrer + API restricted per Google's documented pattern. Store the structured shape end-to-end through DTOs, domain model, and the existing `JSON` column; derive the legacy wg-gesucht `city` from `main_locations[0].label`.
+
+**Consequences:** One repo-root `.env` now owns the Maps key (Vite reads it via [`envDir: '..'`](../frontend/vite.config.ts)). No backend proxy is needed, so the FastAPI surface stays unchanged. Existing dev rows are wiped by [`alembic/0002_places_main_locations.py`](../backend/alembic/versions/0002_places_main_locations.py); pre-demo users re-pick locations. Listing addresses are not yet geocoded — that's the next piece needed before the Routes API call that commute scoring will depend on.
+
+**Introduced in:** this commit
