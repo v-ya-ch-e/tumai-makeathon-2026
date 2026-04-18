@@ -26,7 +26,7 @@ No messaging in v1 — the orchestrator has that code staged for a future iterat
 | --- | --- | --- |
 | Backend | **FastAPI** + async matcher tasks | Hosts API, SSE, per-hunt matcher loops, and the built SPA |
 | Scraper | **Standalone Python container** | Sole writer of `ListingRow` + `PhotoRow`; decouples scrape cadence from hunt cadence (ADR-018) |
-| Persistence | **MySQL (AWS RDS) + SQLModel** | One shared DB for all developers via `WG_DB_URL`; schema is bootstrapped via `SQLModel.metadata.create_all` on startup (ADR-018) |
+| Persistence | **MySQL (AWS RDS) + SQLModel** | One shared DB for all developers via five `DB_*` env vars; schema is bootstrapped via `SQLModel.metadata.create_all` on startup (ADR-018) |
 | Frontend | **Vite + React 19 + TypeScript + Tailwind 3** | Desktop-first SPA, no SSR (ADR-002) |
 | Scoring | **Scorecard evaluator** (code) + **OpenAI** (narrow vibe call) | Deterministic components are unit-testable; LLM only judges what it's good at (ADR-015) |
 | External | **wg-gesucht.de** (httpx scrape), **Google Maps Platform** (frontend autocomplete + backend geocoding/routing/nearby places), **OpenAI** | No APIs for wg-gesucht exist; we scrape defensively |

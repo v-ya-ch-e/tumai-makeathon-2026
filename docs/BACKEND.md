@@ -17,7 +17,7 @@ backend/app/wg_agent/
   browser.py                     URL builders, HTML parsers, httpx anonymous path, Playwright `WGBrowser` + factory
   commute.py                     Google Distance Matrix client (`travel_times`, `modes_for`); called from the hunter before scoring
   crypto.py                      Fernet key resolution + encrypt/decrypt for credential blobs
-  db.py                          SQLModel engine on MySQL (`WG_DB_URL`, pool_pre_ping + pool_recycle), `init_db`, `get_session` dependency
+  db.py                          SQLModel engine on MySQL (DSN assembled from DB_HOST/PORT/USER/PASSWORD/NAME, pool_pre_ping + pool_recycle), `init_db`, `get_session` dependency
   db_models.py                   `*Row` SQLModel table classes (see [DATA_MODEL.md](./DATA_MODEL.md))
   dto.py                         Pydantic DTOs + `*_to_dto` / `upsert_body_to_search_profile` converters
   evaluator.py                   Scorecard: `hard_filter` + deterministic components (price/size/wg_size/availability/commute/preferences) + `vibe_fit` + `compose`
@@ -32,15 +32,15 @@ backend/app/wg_agent/
 
 ## `main.py`
 
-`FastAPI` is constructed with `lifespan=lifespan`. On startup the async context runs, in order: `wg_db.init_db()` (ensures Fernet key material and calls `SQLModel.metadata.create_all(engine)` to create any missing tables on MySQL), logs `DATABASE_URL`, then `await wg_periodic.resume_running_hunts()`. The API router from [`api.py`](../backend/app/wg_agent/api.py) is included under `/api`. Two sibling health probes are defined at the app level: `/health` and `/api/health` (both return `{"status": "ok"}`). When `frontend/dist/assets` exists, `/assets` is mounted; the catch-all `GET /{full_path:path}` returns `index.html` for non-`api/` and non-`assets/` paths (503 if the bundle is missing).
+`FastAPI` is constructed with `lifespan=lifespan`. On startup the async context runs, in order: `wg_db.init_db()` (ensures Fernet key material and calls `SQLModel.metadata.create_all(engine)` to create any missing tables on MySQL), logs a password-free database identifier via `wg_db.describe_database()`, then `await wg_periodic.resume_running_hunts()`. The API router from [`api.py`](../backend/app/wg_agent/api.py) is included under `/api`. Two sibling health probes are defined at the app level: `/health` and `/api/health` (both return `{"status": "ok"}`). When `frontend/dist/assets` exists, `/assets` is mounted; the catch-all `GET /{full_path:path}` returns `index.html` for non-`api/` and non-`assets/` paths (503 if the bundle is missing).
 
-```22:31:backend/app/main.py
+```19:28:backend/app/main.py
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     from .wg_agent import db as wg_db
 
     wg_db.init_db()
-    logger.info("WG database URL: %s", wg_db.DATABASE_URL)
+    logger.info("WG database: %s", wg_db.describe_database())
     from .wg_agent import periodic as wg_periodic
 
     await wg_periodic.resume_running_hunts()
@@ -72,11 +72,12 @@ Conversion helpers: `user_to_dto`, `search_profile_to_dto`, `upsert_body_to_sear
 
 ## `db.py`
 
-- Requires `WG_DB_URL` (AWS-hosted MySQL DSN, e.g. `mysql+pymysql://user:pass@host:3306/wg_hunter?charset=utf8mb4`). Absent / empty → `RuntimeError` at import time so misconfigured environments fail fast instead of writing to a phantom DB.
+- Requires five env vars: `DB_HOST`, `DB_PORT`, `DB_USER`, `DB_PASSWORD`, `DB_NAME`. `_resolve_database_url()` assembles the MySQL DSN (`mysql+pymysql://user:password@host:port/name?charset=utf8mb4`) at import time, URL-encoding user + password. Any missing / empty var → a single `RuntimeError` listing every missing name so contributors see all fixups at once.
 - `create_engine(..., pool_pre_ping=True, pool_recycle=1800)` — standard MySQL hygiene for long-lived RDS connections.
+- `describe_database()` returns a password-free `user@host:port/name` string; entrypoints use it for startup logs instead of printing the raw DSN.
 - `init_db()` calls `crypto.ensure_key()` and then `SQLModel.metadata.create_all(engine)`, which creates any missing tables on first boot and silently no-ops once the schema is already up to date. No Alembic — destructive schema changes require a `DROP DATABASE; CREATE DATABASE` (see [SETUP.md](./SETUP.md#reset-the-database)).
 - `get_session()` is a FastAPI dependency yielding a `Session` context manager.
-- Tests bypass this module's engine: [`backend/tests/conftest.py`](../backend/tests/conftest.py) sets `WG_DB_URL=sqlite://` before imports, and individual tests build their own in-memory SQLite engine + monkey-patch `db_module.engine`.
+- Tests bypass this module's engine: [`backend/tests/conftest.py`](../backend/tests/conftest.py) sets inert `DB_*` placeholders before imports (so `db.py` can construct a phantom engine without crashing), and individual tests build their own in-memory SQLite engine + monkey-patch `db_module.engine`.
 
 ## `db_models.py`
 

@@ -7,7 +7,7 @@ Clone the repo and run the WG Hunter stack locally: FastAPI backend + background
 - Python **3.11+**
 - **Node.js** 20+ (Node **24** is what we use day-to-day; it works with the checked-in lockfile)
 - **npm** 10+
-- **MySQL connection string** — WG Hunter is MySQL-only. Developers use the team-shared AWS RDS instance by setting `WG_DB_URL` in `.env`; no local MySQL install is required.
+- **MySQL credentials** — WG Hunter is MySQL-only. Developers use the team-shared AWS RDS instance by setting the five `DB_*` vars (`DB_HOST`, `DB_PORT`, `DB_USER`, `DB_PASSWORD`, `DB_NAME`) in `.env`; no local MySQL install is required.
 - A working **`OPENAI_API_KEY`** (see [`.env.example`](../.env.example)). The evaluator's `vibe_fit` component calls OpenAI once per scored listing; without it, every listing's vibe component degrades to `missing_data` and the composite score uses only the deterministic components.
 - Optional location API keys:
   - `VITE_GOOGLE_MAPS_API_KEY` — **Maps JavaScript API** + **Places API (New)**, referrer-restricted to `http://localhost:5173/*`, `http://localhost:8000/*`, and your deployed origin. Used only by the onboarding wizard's Main locations autocomplete ([`PlaceAutocomplete.tsx`](../frontend/src/components/PlaceAutocomplete.tsx)). Without it the field falls back to a disabled placeholder.
@@ -24,7 +24,7 @@ Clone the repo and run the WG Hunter stack locally: FastAPI backend + background
    ```
 
    Edit `.env` and set:
-   - `WG_DB_URL` — MySQL DSN for the team-shared AWS RDS (ask a teammate; format `mysql+pymysql://user:pass@host:3306/wg_hunter?charset=utf8mb4`). Required for both the backend and scraper processes.
+   - `DB_HOST`, `DB_PORT`, `DB_USER`, `DB_PASSWORD`, `DB_NAME` — AWS RDS credentials (ask a teammate). All five are required for both the backend and scraper processes; `db.py` assembles the `mysql+pymysql://` DSN from them at import time and refuses to boot if any are missing.
    - `OPENAI_API_KEY` — OpenAI key for the vibe-score component.
    - Optionally `VITE_GOOGLE_MAPS_API_KEY` for the Places Autocomplete widget and `GOOGLE_MAPS_SERVER_KEY` for backend routing/geocoding/place enrichment; Vite reads this file via [`envDir: '..'`](../frontend/vite.config.ts) from `frontend/`, so one repo-root `.env` covers backend, scraper, and frontend.
    - Optionally tune the scraper via `SCRAPER_CITY`, `SCRAPER_MAX_RENT`, `SCRAPER_MAX_PAGES`, `SCRAPER_INTERVAL_SECONDS`, `SCRAPER_REFRESH_HOURS` (defaults in [`.env.example`](../.env.example)).
@@ -115,7 +115,7 @@ Every component in [`evaluator.py`](../backend/app/wg_agent/evaluator.py) is pur
 
 ## Troubleshooting
 
-- **`WG_DB_URL is not set` at startup** — The backend and scraper both raise if this env var is missing. Re-source `.env` (`set -a && source ../.env && set +a`) in the terminal you launch from, and confirm the MySQL DSN is present.
+- **`Database credentials are incomplete` at startup** — The backend and scraper both raise if any of `DB_HOST`, `DB_PORT`, `DB_USER`, `DB_PASSWORD`, `DB_NAME` is missing or empty. Re-source `.env` (`set -a && source ../.env && set +a`) in the terminal you launch from, and confirm all five values are set.
 
 - **`Can't connect to MySQL server` / SSL handshake errors** — Check that the RDS instance accepts connections from your IP and that the DSN includes `?charset=utf8mb4`. The engine uses `pool_pre_ping=True` so stale connections are transparently reopened, but first-connect failures will still surface on startup.
 

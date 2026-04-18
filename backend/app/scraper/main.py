@@ -18,7 +18,7 @@ logger = logging.getLogger(__name__)
 
 async def _main() -> None:
     db_module.init_db()
-    logger.info("Scraper database URL: %s", db_module.DATABASE_URL)
+    logger.info("Scraper database: %s", db_module.describe_database())
     await ScraperAgent().run_forever()
 
 

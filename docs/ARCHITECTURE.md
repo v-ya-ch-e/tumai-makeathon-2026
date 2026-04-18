@@ -22,7 +22,7 @@ flowchart LR
     OAI["OpenAI API"]
     GM["Google Maps Platform"]
   end
-  MySQL[("AWS MySQL<br/>WG_DB_URL")]
+  MySQL[("AWS MySQL<br/>DB_HOST / DB_PORT / DB_USER / DB_PASSWORD / DB_NAME")]
   SA -->|"anonymous_search + anonymous_scrape_listing"| WG
   SA -->|"upsert_global_listing + save_photos"| MySQL
   React["React (Vite)"] -->|"fetch /api"| API
@@ -47,7 +47,7 @@ Fernet key material for credential blobs is resolved in [`crypto.py`](../backend
 ## Why these choices
 
 - **Split scraping from matching** — The scraper writes once per listing across all users; per-hunt work is pure scoring. See [ADR-018](./DECISIONS.md#adr-018-separate-scraper-container--global-listingrow-mysql-only).
-- **MySQL on AWS, no local DB** — All developers share one AWS RDS instance via `WG_DB_URL` in `.env`. No docker-compose `mysql` service, no per-developer schema drift. Tests use in-memory SQLite for isolation ([`backend/tests/conftest.py`](../backend/tests/conftest.py) sets `WG_DB_URL=sqlite://` before any test module imports).
+- **MySQL on AWS, no local DB** — All developers share one AWS RDS instance via five `DB_*` env vars (`DB_HOST`, `DB_PORT`, `DB_USER`, `DB_PASSWORD`, `DB_NAME`) in `.env`. No docker-compose `mysql` service, no per-developer schema drift. Tests use in-memory SQLite for isolation ([`backend/tests/conftest.py`](../backend/tests/conftest.py) sets inert `DB_*` placeholders so the production `db.py` can import; individual tests then build their own SQLite engine and monkey-patch `db_module.engine`).
 - **Vite + React, not Next.js** — No SSR requirement; the UI is a desktop-first SPA. FastAPI serves `frontend/dist/` so one service covers API + static assets.
 - **httpx anonymous path** — Both the scraper and the legacy orchestrator use `browser.anonymous_search` / `anonymous_scrape_listing` without Playwright, keeping cold starts short.
 - **SSE instead of WebSockets** — The action log is server → client only. [`api.stream_hunt`](../backend/app/wg_agent/api.py) streams JSON lines plus keep-alives.

@@ -136,12 +136,12 @@ From [`.env.example`](./.env.example). Vite reads the same file via [`envDir: '.
 
 | Variable | Required | Consumer | Purpose |
 | -------- | -------- | -------- | ------- |
+| `DB_HOST`, `DB_PORT`, `DB_USER`, `DB_PASSWORD`, `DB_NAME` | **yes** | backend + scraper | AWS RDS MySQL credentials. `backend/app/wg_agent/db.py` assembles the `mysql+pymysql://…` DSN from these at import time and refuses to boot if any are missing |
 | `OPENAI_API_KEY` | **yes** | backend | OpenAI Chat Completions for the evaluator's narrow vibe component ([`brain.vibe_score`](./backend/app/wg_agent/brain.py)) plus the legacy orchestrator path |
 | `OPENAI_MODEL` | no | backend | Override model (`gpt-4o-mini` by default) |
 | `VITE_GOOGLE_MAPS_API_KEY` | optional | browser | Places Autocomplete in onboarding (referrer- + API-restricted) |
 | `GOOGLE_MAPS_SERVER_KEY` | optional | backend | Google Geocoding API + Distance Matrix API + Places API (New) for listing fallback geocoding, commute times, and nearby amenity distances |
 | `GOOGLE_MAPS_MAX_RPS` | no | backend | Process-wide throttle for backend Google Maps requests; defaults to `8` |
-| `WG_DB_URL` | no | backend | Override SQLite path / swap in Postgres |
 | `WG_SECRET_KEY` | no | backend | Pin the Fernet key used to encrypt credentials (else auto-generated at `~/.wg_hunter/secret.key`) |
 | `WG_RESCAN_INTERVAL_MINUTES` | no | backend | Shorten rescan interval during demos |
 | `WG_STATE_FILE` | no | backend | Playwright `storage_state.json` for authenticated flows (reserved for post-v1) |
