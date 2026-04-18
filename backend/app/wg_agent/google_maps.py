@@ -8,7 +8,6 @@ so this module spaces requests process-wide behind a single async gate.
 from __future__ import annotations
 
 import asyncio
-import os
 import time
 
 DEFAULT_MAX_RPS = 8.0
@@ -24,24 +23,11 @@ async def _sleep(seconds: float) -> None:
     await asyncio.sleep(seconds)
 
 
-def max_rps() -> float:
-    raw = os.environ.get("GOOGLE_MAPS_MAX_RPS", "").strip()
-    if not raw:
-        return DEFAULT_MAX_RPS
-    try:
-        value = float(raw)
-    except ValueError:
-        return DEFAULT_MAX_RPS
-    if value <= 0:
-        return DEFAULT_MAX_RPS
-    return value
-
-
 async def wait_turn() -> None:
     """Space Google Maps requests so aggregate traffic stays bounded."""
     global _next_slot_at
 
-    interval = 1.0 / max_rps()
+    interval = 1.0 / DEFAULT_MAX_RPS
     async with _lock:
         now = _now()
         wait_for = _next_slot_at - now
