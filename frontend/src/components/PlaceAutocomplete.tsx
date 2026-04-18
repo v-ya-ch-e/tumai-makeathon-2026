@@ -203,12 +203,22 @@ export function PlaceAutocomplete({
             return (
               <li
                 key={loc.placeId}
-                className="flex items-center gap-3 rounded border border-hairline bg-surface-raised px-3 py-2"
+                className="rounded border border-hairline bg-surface-raised px-3 py-2"
               >
-                <span className="flex-1 truncate text-[14px] text-ink" title={loc.label}>
-                  {loc.label}
-                </span>
-                <div className="flex items-center gap-1.5">
+                <div className="flex items-start justify-between gap-3">
+                  <span className="min-w-0 flex-1 text-[14px] text-ink sm:truncate" title={loc.label}>
+                    {loc.label}
+                  </span>
+                  <button
+                    type="button"
+                    onClick={() => removeAt(idx)}
+                    aria-label={`Remove ${loc.label}`}
+                    className="flex h-6 w-6 shrink-0 items-center justify-center rounded-full text-ink-muted transition-colors duration-150 ease-out hover:bg-accent-muted hover:text-bad"
+                  >
+                    <span aria-hidden="true">×</span>
+                  </button>
+                </div>
+                <div className="mt-3 flex flex-wrap items-center gap-1.5 sm:mt-2">
                   <label htmlFor={commuteId} className="text-[12px] text-ink-muted">
                     Max tolerated
                   </label>
@@ -225,14 +235,6 @@ export function PlaceAutocomplete({
                   />
                   <span className="text-[12px] text-ink-muted">min</span>
                 </div>
-                <button
-                  type="button"
-                  onClick={() => removeAt(idx)}
-                  aria-label={`Remove ${loc.label}`}
-                  className="flex h-6 w-6 items-center justify-center rounded-full text-ink-muted transition-colors duration-150 ease-out hover:bg-accent-muted hover:text-bad"
-                >
-                  <span aria-hidden="true">×</span>
-                </button>
               </li>
             )
           })}

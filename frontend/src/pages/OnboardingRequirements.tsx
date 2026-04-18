@@ -36,15 +36,9 @@ const DEFAULT_STATE: LocalState = {
   mode: 'both',
   moveInFrom: '',
   moveInUntil: '',
-  schedule: 'periodic',
+  schedule: 'one_shot',
   rescanIntervalMinutes: '30',
 }
-
-const BUDGET_PRESETS = [
-  { label: 'Lean', max: '700' },
-  { label: 'Typical', max: '950' },
-  { label: 'Flexible', max: '1400' },
-]
 
 export default function OnboardingRequirements() {
   const navigate = useNavigate()
@@ -222,22 +216,7 @@ export default function OnboardingRequirements() {
           hint={errors.price ?? 'Set the highest monthly rent you would still consider, including cases the agent should reject immediately.'}
           error={Boolean(errors.price)}
         >
-          <div className="flex flex-wrap gap-2">
-            {BUDGET_PRESETS.map((preset) => (
-              <button
-                key={preset.label}
-                type="button"
-                onClick={() => {
-                  setState((prev) => ({ ...prev, priceMax: preset.max }))
-                  setErrors((prev) => ({ ...prev, price: undefined }))
-                }}
-                className="rounded border border-hairline bg-surface px-3 py-2 text-[13px] text-ink transition-colors hover:border-ink hover:bg-surface-raised"
-              >
-                {preset.label}
-              </button>
-            ))}
-          </div>
-          <div className="mt-4 max-w-sm">
+          <div className="max-w-sm">
             <Input
               id="req-price-max"
               type="number"
