@@ -344,7 +344,15 @@ def list_listings_for_hunt(session: Session, *, hunt_id: str) -> list[Listing]:
                 ListingScoreRow.hunt_id == hunt_id,
             )
         ).first()
-        out.append(_listing_from_row(lr, score_row))
+        out.append(
+            _listing_from_row(
+                lr,
+                score_row,
+                cover_photo_url=_cover_photo_url(
+                    session, hunt_id=hunt_id, listing_id=lr.id
+                ),
+            )
+        )
     return out
 
 
@@ -367,7 +375,10 @@ def list_actions_for_hunt(session: Session, *, hunt_id: str) -> list[AgentAction
 
 
 def _listing_from_row(
-    row: ListingRow, score_row: Optional[ListingScoreRow]
+    row: ListingRow,
+    score_row: Optional[ListingScoreRow],
+    *,
+    cover_photo_url: Optional[str] = None,
 ) -> Listing:
     score = score_row.score if score_row else None
     reason = score_row.reason if score_row else None
@@ -389,6 +400,7 @@ def _listing_from_row(
         available_from=row.available_from,
         available_to=row.available_to,
         description=row.description,
+        cover_photo_url=cover_photo_url,
         score=score,
         score_reason=reason,
         match_reasons=match_reasons,
@@ -417,3 +429,14 @@ def _components_from_row(
         except Exception:  # noqa: BLE001
             continue
     return out
+
+
+def _cover_photo_url(
+    session: Session, *, hunt_id: str, listing_id: str
+) -> Optional[str]:
+    photo_row = session.exec(
+        select(PhotoRow)
+        .where(PhotoRow.listing_id == listing_id, PhotoRow.hunt_id == hunt_id)
+        .order_by(PhotoRow.ordinal)
+    ).first()
+    return photo_row.url if photo_row is not None else None

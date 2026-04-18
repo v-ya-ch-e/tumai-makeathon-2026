@@ -103,6 +103,7 @@ def _get_listing_detail(
         available_from=row.available_from,
         available_to=row.available_to,
         description=row.description,
+        cover_photo_url=photos[0] if photos else None,
         score=score_val,
         score_reason=reason,
         match_reasons=match_reasons,

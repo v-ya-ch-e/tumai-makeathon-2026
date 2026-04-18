@@ -29,6 +29,10 @@ function metaLine(l: Listing): string {
   return parts.join(' · ')
 }
 
+function coverFallback(index: number): string {
+  return `linear-gradient(135deg, rgba(255,56,92,0.16), rgba(255,181,167,0.4) ${45 + index * 7}%, rgba(255,255,255,0.96))`
+}
+
 export function ListingList({ listings, onOpen, emptyLabel }: ListingListProps) {
   if (listings.length === 0) {
     return (
@@ -41,31 +45,56 @@ export function ListingList({ listings, onOpen, emptyLabel }: ListingListProps) 
   const sorted = [...listings].sort((a, b) => (b.score ?? -1) - (a.score ?? -1))
 
   return (
-    <ul className="space-y-4">
+    <ul className="grid gap-5 md:grid-cols-2 xl:grid-cols-1 2xl:grid-cols-2">
       {sorted.map((l, index) => (
         <li key={l.id}>
           <button
             type="button"
             onClick={() => onOpen(l)}
             className={clsx(
-              'flex w-full items-start gap-4 rounded-[24px] border border-hairline/80 bg-surface-raised/90 p-5 text-left transition-all duration-150 ease-out',
-              'hover:-translate-y-px hover:border-accent/35 hover:bg-surface hover:shadow-[0_18px_38px_rgba(39,33,29,0.06)]',
+              'group w-full overflow-hidden rounded-[28px] border border-hairline/70 bg-surface text-left transition-all duration-200 ease-out',
+              'hover:-translate-y-0.5 hover:border-accent/35 hover:shadow-[0_22px_48px_rgba(15,23,42,0.09)]',
             )}
           >
-            <div className="flex h-12 w-12 shrink-0 items-center justify-center rounded-[18px] border border-hairline/70 bg-[#f4e7d8] font-mono text-[12px] uppercase tracking-[0.16em] text-accent">
-              {String(index + 1).padStart(2, '0')}
+            <div className="relative aspect-[4/3] w-full overflow-hidden bg-[#fff1ee]">
+              {l.coverPhotoUrl ? (
+                <img
+                  src={l.coverPhotoUrl}
+                  alt={l.title ?? `Listing ${l.id}`}
+                  className="h-full w-full object-cover transition-transform duration-300 ease-out group-hover:scale-[1.03]"
+                  loading="lazy"
+                />
+              ) : (
+                <div
+                  className="flex h-full w-full items-end justify-between px-5 py-4"
+                  style={{ backgroundImage: coverFallback(index) }}
+                >
+                  <span className="rounded-full bg-white/82 px-3 py-1 text-[11px] font-medium uppercase tracking-[0.14em] text-accent shadow-sm">
+                    No photo yet
+                  </span>
+                  <span className="text-[34px]">🏠</span>
+                </div>
+              )}
+              <div className="absolute left-4 top-4 flex h-10 min-w-10 items-center justify-center rounded-full bg-white/92 px-3 font-mono text-[12px] uppercase tracking-[0.16em] text-accent shadow-[0_10px_24px_rgba(15,23,42,0.08)]">
+                {String(index + 1).padStart(2, '0')}
+              </div>
+              <StatusPill
+                tone={scoreTone(l.score)}
+                className="absolute right-4 top-4 border-white/80 bg-white/92 shadow-[0_10px_24px_rgba(15,23,42,0.08)]"
+              >
+                {scoreLabel(l.score)}
+              </StatusPill>
             </div>
-            <div className="min-w-0 flex-1 space-y-3">
+            <div className="space-y-3 p-5">
               <div className="flex flex-wrap items-start justify-between gap-3">
                 <div className="min-w-0">
-                  <h3 className="truncate text-[17px] font-semibold tracking-[-0.02em] text-ink">
+                  <h3 className="truncate text-[18px] font-semibold tracking-[-0.02em] text-ink">
                     {l.title ?? `Listing ${l.id}`}
                   </h3>
                   <p className="mt-1 truncate text-[13px] text-ink-muted">
                     {metaLine(l) || 'Pricing and size still loading'}
                   </p>
                 </div>
-                <StatusPill tone={scoreTone(l.score)}>{scoreLabel(l.score)}</StatusPill>
               </div>
 
               {l.scoreReason ? (
@@ -98,9 +127,13 @@ export function ListingList({ listings, onOpen, emptyLabel }: ListingListProps) 
                   Watchouts: {l.mismatchReasons.slice(0, 2).join(' · ')}
                 </p>
               ) : null}
-            </div>
-            <div className="hidden self-center text-[18px] text-ink-muted sm:block" aria-hidden>
-              →
+
+              <div className="flex items-center justify-between border-t border-hairline/60 pt-3 text-[13px] text-ink-muted">
+                <span>{l.coverPhotoUrl ? 'Photo available' : 'Text-only listing'}</span>
+                <span aria-hidden className="text-[18px] transition-transform duration-150 group-hover:translate-x-0.5">
+                  →
+                </span>
+              </div>
             </div>
           </button>
         </li>

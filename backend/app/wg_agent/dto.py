@@ -120,6 +120,7 @@ class ListingDTO(BaseModel):
     available_from: Optional[date] = None
     available_to: Optional[date] = None
     description: Optional[str] = None
+    cover_photo_url: Optional[str] = None
     score: Optional[float] = None
     score_reason: Optional[str] = None
     match_reasons: list[str] = Field(default_factory=list)
@@ -231,6 +232,7 @@ def listing_to_dto(l: Listing, hunt_id: str) -> ListingDTO:
         available_from=l.available_from,
         available_to=l.available_to,
         description=l.description,
+        cover_photo_url=l.cover_photo_url,
         score=l.score,
         score_reason=l.score_reason,
         match_reasons=list(l.match_reasons),

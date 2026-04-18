@@ -198,6 +198,8 @@ class Listing(BaseModel):
     pets_allowed: Optional[bool] = None
     smoking_ok: Optional[bool] = None
     online_viewing: bool = False
+    photo_urls: list[str] = Field(default_factory=list)
+    cover_photo_url: Optional[str] = None
 
     # Populated by the evaluator after scoring.
     score: Optional[float] = Field(default=None, ge=0, le=1)

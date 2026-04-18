@@ -128,6 +128,15 @@ def test_repo_round_trip() -> None:
         )
         repo.upsert_listing(session, hunt_id=hunt.id, listing=l1)
         repo.upsert_listing(session, hunt_id=hunt.id, listing=l2)
+        repo.save_photos(
+            session,
+            hunt_id=hunt.id,
+            listing_id="wg1",
+            urls=[
+                "https://img.wg-gesucht.de/photos/wg1-cover.jpg",
+                "https://img.wg-gesucht.de/photos/wg1-detail.jpg",
+            ],
+        )
         repo.save_score(
             session,
             hunt_id=hunt.id,
@@ -156,9 +165,11 @@ def test_repo_round_trip() -> None:
         assert by_id["wg1"].score_reason == "ok"
         assert by_id["wg1"].lat == 48.137
         assert by_id["wg1"].lng == 11.575
+        assert by_id["wg1"].cover_photo_url == "https://img.wg-gesucht.de/photos/wg1-cover.jpg"
         assert by_id["wg2"].score == 0.42
         assert by_id["wg2"].lat is None
         assert by_id["wg2"].lng is None
+        assert by_id["wg2"].cover_photo_url is None
 
         assert repo.list_hunts_by_status(session, status=HuntStatus.running) == []
 

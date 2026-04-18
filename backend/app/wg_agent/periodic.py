@@ -170,6 +170,12 @@ class HuntEngine:
             )
             with Session(db_module.engine) as session:
                 repo.upsert_listing(session, hunt_id=self._hunt_id, listing=enriched)
+                repo.save_photos(
+                    session,
+                    hunt_id=self._hunt_id,
+                    listing_id=enriched.id,
+                    urls=list(enriched.photo_urls),
+                )
                 repo.save_score(
                     session,
                     hunt_id=self._hunt_id,

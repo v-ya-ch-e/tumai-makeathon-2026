@@ -17,7 +17,7 @@ from dataclasses import dataclass
 from datetime import date
 from pathlib import Path
 from typing import Optional
-from urllib.parse import urlencode
+from urllib.parse import urlencode, urljoin
 
 import httpx
 from bs4 import BeautifulSoup, Tag
@@ -111,6 +111,68 @@ def _clean(text: Optional[str]) -> str:
     if not text:
         return ""
     return re.sub(r"\s+", " ", text).strip()
+
+
+def _normalized_photo_url(raw: Optional[str]) -> Optional[str]:
+    if not raw:
+        return None
+    candidate = raw.strip()
+    if not candidate or candidate.startswith("data:"):
+        return None
+    if candidate.startswith("//"):
+        candidate = f"https:{candidate}"
+    elif candidate.startswith("/"):
+        candidate = urljoin(BASE_URL, candidate)
+    lowered = candidate.lower()
+    if any(
+        token in lowered
+        for token in ("logo", "avatar", "icon", "flag", "tracking", "googleads")
+    ):
+        return None
+    return candidate
+
+
+def _parse_photo_urls(soup: BeautifulSoup) -> list[str]:
+    """Return likely listing-gallery image URLs, deduplicated and ordered."""
+    candidates: list[str] = []
+
+    meta_image = soup.find("meta", attrs={"property": "og:image"})
+    if meta_image is not None:
+        normalized = _normalized_photo_url(meta_image.get("content"))
+        if normalized:
+            candidates.append(normalized)
+
+    selectors = (
+        '[data-full-image]',
+        'img[data-src]',
+        'img[data-lazy]',
+        'img[src]',
+        'source[srcset]',
+    )
+    for selector in selectors:
+        for el in soup.select(selector):
+            values: list[str] = []
+            for attr in ("data-full-image", "data-src", "data-lazy", "src", "srcset"):
+                raw = el.get(attr)
+                if not raw:
+                    continue
+                if attr == "srcset":
+                    values.extend(part.strip().split(" ")[0] for part in raw.split(","))
+                else:
+                    values.append(raw)
+            for raw in values:
+                normalized = _normalized_photo_url(raw)
+                if normalized:
+                    candidates.append(normalized)
+
+    out: list[str] = []
+    seen: set[str] = set()
+    for url in candidates:
+        if url in seen:
+            continue
+        seen.add(url)
+        out.append(url)
+    return out[:12]
 
 
 # --- Parsers ------------------------------------------------------------------
@@ -498,6 +560,11 @@ def parse_listing_page(html: str, listing: Listing) -> Listing:
     coords = _parse_map_lat_lng(html)
     if coords is not None:
         listing.lat, listing.lng = coords
+
+    photo_urls = _parse_photo_urls(soup)
+    if photo_urls:
+        listing.photo_urls = photo_urls
+        listing.cover_photo_url = photo_urls[0]
 
     return listing
 

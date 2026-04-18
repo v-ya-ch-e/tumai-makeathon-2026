@@ -117,9 +117,37 @@ def test_parse_listing_description_is_not_page_chrome() -> None:
     assert "Alle akzeptieren" not in enriched.description
 
 
+def test_parse_listing_photo_urls() -> None:
+    html = """
+    <html>
+      <head>
+        <meta property="og:image" content="https://img.wg-gesucht.de/cover.jpg" />
+      </head>
+      <body>
+        <div class="gallery">
+          <img src="/images/logo.svg" alt="logo" />
+          <img data-src="https://img.wg-gesucht.de/room-1.jpg" alt="room" />
+          <img src="https://img.wg-gesucht.de/room-2.jpg" alt="room 2" />
+        </div>
+      </body>
+    </html>
+    """
+    enriched = parse_listing_page(
+        html, Listing(id="photo-test", url="https://www.wg-gesucht.de/1.html", title="stub")
+    )
+
+    assert enriched.cover_photo_url == "https://img.wg-gesucht.de/cover.jpg"
+    assert enriched.photo_urls == [
+        "https://img.wg-gesucht.de/cover.jpg",
+        "https://img.wg-gesucht.de/room-1.jpg",
+        "https://img.wg-gesucht.de/room-2.jpg",
+    ]
+
+
 if __name__ == "__main__":
     test_parse_search_page()
     test_parse_listing_page()
     test_parse_listing_structured_fields()
     test_parse_listing_description_is_not_page_chrome()
+    test_parse_listing_photo_urls()
     print("parser smoke tests passed")
