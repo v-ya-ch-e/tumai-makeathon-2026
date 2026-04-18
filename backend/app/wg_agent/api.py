@@ -30,7 +30,9 @@ from .dto import (
     UpsertSearchProfileBody,
     UserDTO,
     action_to_dto,
+    FIXED_RESCAN_INTERVAL_MINUTES,
     listing_to_dto,
+    normalize_score_text,
     search_profile_to_dto,
     upsert_body_to_search_profile,
     user_to_dto,
@@ -121,7 +123,7 @@ async def put_search_profile(
     out = repo.upsert_search_profile(session, username=username, sp=sp)
     # Boot (or refresh) the per-user agent. spawn_user_agent is idempotent.
     periodic.spawn_user_agent(
-        username, interval_minutes=body.rescan_interval_minutes
+        username, interval_minutes=FIXED_RESCAN_INTERVAL_MINUTES
     )
     return search_profile_to_dto(out)
 
@@ -196,7 +198,7 @@ async def start_agent(
     if sp is None:
         raise HTTPException(status_code=400, detail="User has no search profile yet")
     periodic.spawn_user_agent(
-        username, interval_minutes=sp.rescan_interval_minutes
+        username, interval_minutes=FIXED_RESCAN_INTERVAL_MINUTES
     )
     return Response(status_code=204)
 
@@ -355,9 +357,9 @@ def _get_listing_detail(
     ).all()
     photos = [p.url for p in photo_rows]
     score_val = match_row.score
-    reason = match_row.reason
-    match_reasons = list(match_row.match_reasons or [])
-    mismatch_reasons = list(match_row.mismatch_reasons or [])
+    reason = normalize_score_text(match_row.reason)
+    match_reasons = [normalize_score_text(item) or "" for item in (match_row.match_reasons or [])]
+    mismatch_reasons = [normalize_score_text(item) or "" for item in (match_row.mismatch_reasons or [])]
     components_dto = _components_dto_from_row(match_row)
     veto_reason = match_row.veto_reason
     listing_dto = ListingDTO(
@@ -414,6 +416,8 @@ def _components_dto_from_row(
             out.append(ComponentDTO.model_validate(raw))
         except Exception:  # noqa: BLE001
             continue
+    for item in out:
+        item.evidence = [normalize_score_text(text) or "" for text in item.evidence]
     return out
 
 

@@ -361,7 +361,7 @@ Return JSON:
 
 Rules:
   * If the student has no notes, no district preferences, and no nearby-place
-    context, return score 0.5 with evidence ["no vibe signal"].
+    context, return score 0.5 with evidence ["not enough vibe information"].
   * If the listing is in an avoid-district, score <= 0.3 and mention the
     district in evidence.
   * Nearby place facts can support lifestyle fit, especially for place-based

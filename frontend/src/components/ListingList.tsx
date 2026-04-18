@@ -1,5 +1,4 @@
-import clsx from 'clsx'
-import { useState } from 'react'
+import { formatGermanDate } from '../lib/date'
 import type { Listing } from '../types'
 import { StatusPill, type StatusPillTone } from './ui'
 
@@ -39,33 +38,24 @@ function distanceLabel(listing: Listing): string {
   return 'Route pending'
 }
 
+function availabilityLabel(listing: Listing): string | null {
+  if (listing.availableFrom && listing.availableTo) {
+    return `${formatGermanDate(listing.availableFrom)} - ${formatGermanDate(listing.availableTo)}`
+  }
+  if (listing.availableFrom) return `From ${formatGermanDate(listing.availableFrom)}`
+  if (listing.availableTo) return `Until ${formatGermanDate(listing.availableTo)}`
+  return null
+}
+
 function subline(listing: Listing): string {
   const parts: string[] = []
   if (listing.district) parts.push(listing.district)
-  if (listing.availableFrom) parts.push(`From ${listing.availableFrom}`)
+  const availability = availabilityLabel(listing)
+  if (availability) parts.push(availability)
   return parts.join(' · ')
 }
 
-function listingState(
-  listing: Listing,
-  strongMatchIds: Set<string>,
-): { tone: StatusPillTone; label: string } | null {
-  if (listing.vetoReason) return { tone: 'bad', label: 'Rejected' }
-  if (strongMatchIds.has(listing.id)) return { tone: 'good', label: 'Strong match' }
-  if (listing.mismatchReasons.length > 0) return { tone: 'warn', label: 'Needs review' }
-  return null
-}
-
-function listingNote(listing: Listing): string | null {
-  if (listing.vetoReason) return listing.vetoReason
-  if (listing.mismatchReasons.length > 0) return listing.mismatchReasons[0]
-  if (listing.matchReasons.length > 0) return listing.matchReasons[0]
-  return null
-}
-
 export function ListingList({ listings, onOpen, emptyLabel }: ListingListProps) {
-  const [expandedNotes, setExpandedNotes] = useState<Set<string>>(new Set())
-
   if (listings.length === 0) {
     return (
       <p className="text-[13px] text-ink-muted">
@@ -75,23 +65,9 @@ export function ListingList({ listings, onOpen, emptyLabel }: ListingListProps) 
   }
 
   const sorted = [...listings].sort((a, b) => (b.score ?? -1) - (a.score ?? -1))
-  const strongMatches = sorted.filter(
-    (listing) =>
-      listing.score !== null &&
-      listing.score >= 0.75 &&
-      !listing.vetoReason &&
-      listing.matchReasons.length > 0 &&
-      listing.mismatchReasons.length === 0,
-  )
-  const strongMatchIds = new Set(strongMatches.slice(0, Math.max(1, Math.min(3, Math.ceil(sorted.length * 0.2)))).map((listing) => listing.id))
-
   return (
     <ul className="divide-y divide-hairline">
       {sorted.map((listing) => {
-        const state = listingState(listing, strongMatchIds)
-        const note = listingNote(listing)
-        const noteExpanded = expandedNotes.has(listing.id)
-        const canExpand = note !== null && note.length > 140
         return (
           <li key={listing.id}>
             <button
@@ -127,7 +103,6 @@ export function ListingList({ listings, onOpen, emptyLabel }: ListingListProps) 
                   </div>
                   <div className="flex flex-wrap items-center gap-2">
                     <StatusPill tone={scoreTone(listing.score)}>{scoreLabel(listing.score)}</StatusPill>
-                    {state ? <StatusPill tone={state.tone}>{state.label}</StatusPill> : null}
                   </div>
                 </div>
 
@@ -137,44 +112,8 @@ export function ListingList({ listings, onOpen, emptyLabel }: ListingListProps) 
                   <Fact label="Commute" value={distanceLabel(listing)} />
                 </dl>
 
-                {note ? (
-                  <div className="mt-4">
-                    <div className="relative">
-                      <p
-                        className={clsx(
-                          'text-[14px] leading-6',
-                          !noteExpanded && 'max-h-[4.5rem] overflow-hidden',
-                          listing.vetoReason ? 'text-bad' : 'text-ink-muted',
-                        )}
-                      >
-                        {note}
-                      </p>
-                      {!noteExpanded && canExpand ? (
-                        <div className="pointer-events-none absolute inset-x-0 bottom-0 h-8 bg-gradient-to-t from-surface-raised to-transparent" />
-                      ) : null}
-                    </div>
-                    {canExpand ? (
-                      <button
-                        type="button"
-                        onClick={(event) => {
-                          event.stopPropagation()
-                          setExpandedNotes((prev) => {
-                            const next = new Set(prev)
-                            if (next.has(listing.id)) next.delete(listing.id)
-                            else next.add(listing.id)
-                            return next
-                          })
-                        }}
-                        className="mt-2 text-[12px] font-medium text-ink-muted transition-colors hover:text-ink"
-                      >
-                        {noteExpanded ? 'Show less' : 'Read full analysis'}
-                      </button>
-                    ) : null}
-                  </div>
-                ) : null}
-
                 <div className="mt-4 flex items-center justify-between border-t border-hairline pt-3 text-[13px] text-ink-muted">
-                  <span>{listing.coverPhotoUrl ? 'Photo available' : 'Text-only listing'}</span>
+                  <span>See details and original listing</span>
                   <span aria-hidden className="text-ink transition-transform duration-150 group-hover:translate-x-0.5">
                     Open →
                   </span>

@@ -145,7 +145,7 @@ export default function OnboardingProfile() {
       title={createMode ? 'Create your profile' : 'Welcome back'}
       description={
         createMode
-          ? 'Start with the core details Sherlock Homes uses to personalize your search.'
+          ? 'Tell us what matters to you. Sherlock Homes searches WG-Gesucht, ranks the best fits, and keeps them in one clear shortlist.'
           : 'Use the same username you created earlier to reopen your saved search.'
       }
       onNext={() => void (createMode ? handleCreate() : handleSignIn())}
@@ -173,11 +173,11 @@ export default function OnboardingProfile() {
               </dl>
             </Card>
             <Card className="panel p-6">
-              <p className="text-[15px] font-semibold text-ink">What happens next</p>
+              <p className="text-[15px] font-semibold text-ink">What Sherlock Homes does</p>
               <ul className="mt-3 space-y-2 text-[14px] leading-6 text-ink-muted">
-                <li>Set your budget and the locations that matter most.</li>
-                <li>Choose the preferences that should affect ranking.</li>
-                <li>Review your best matches in one clear shortlist.</li>
+                <li>Finds relevant WG-Gesucht listings for your budget and preferred area.</li>
+                <li>Ranks them by fit, including commute, timing, and the preferences you choose.</li>
+                <li>Keeps your shortlist fresh automatically, so you only review the strongest options.</li>
               </ul>
             </Card>
           </div>

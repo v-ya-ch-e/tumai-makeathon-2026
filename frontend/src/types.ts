@@ -46,11 +46,6 @@ export type SearchProfile = {
 
 export type UpsertSearchProfileBody = Omit<SearchProfile, 'updatedAt'>
 
-export type CredentialsStatus = {
-  connected: boolean
-  savedAt: string | null
-}
-
 export type AgentStatus = 'idle' | 'running' | 'rescanning' | 'error'
 
 export type Action = {
