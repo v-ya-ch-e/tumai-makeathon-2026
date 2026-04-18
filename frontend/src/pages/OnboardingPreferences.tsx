@@ -1,8 +1,8 @@
 import clsx from 'clsx'
-import { useEffect, useMemo, useState, type KeyboardEvent, type ReactNode } from 'react'
+import { useEffect, useMemo, useState, type KeyboardEvent, type ReactNode, type SVGProps } from 'react'
 import { useNavigate } from 'react-router-dom'
 import { OnboardingShell } from '../components/OnboardingShell'
-import { Button, Card, WeightSlider } from '../components/ui'
+import { Card, WeightSlider } from '../components/ui'
 import { ApiError, getSearchProfile, putSearchProfile } from '../lib/api'
 import { onboardingSteps } from '../lib/onboarding'
 import { useSession } from '../lib/session'
@@ -70,6 +70,33 @@ const GROUPS: PreferenceGroup[] = [
 ]
 
 const DEFAULT_WEIGHT = 3
+
+const ICONS: Record<string, (props: SVGProps<SVGSVGElement>) => ReactNode> = {
+  supermarket: StoreIcon,
+  gym: DumbbellIcon,
+  park: LeafIcon,
+  cafe: CupIcon,
+  bars: GlassIcon,
+  library: BookIcon,
+  coworking: DeskIcon,
+  nightlife: MoonIcon,
+  green_space: LeafIcon,
+  quiet_area: QuietIcon,
+  furnished: SofaIcon,
+  balcony: BalconyIcon,
+  washing_machine: WasherIcon,
+  dishwasher: PlateIcon,
+  garden: FlowerIcon,
+  elevator: LiftIcon,
+  bike_storage: BikeIcon,
+  parking: ParkingIcon,
+  pet_friendly: PawIcon,
+  non_smoking: SmokeFreeIcon,
+  lgbt_friendly: SparkIcon,
+  student_household: CapIcon,
+  couples_ok: HeartIcon,
+  english_speaking: ChatIcon,
+}
 
 /*
 const PRESETS: Array<{ label: string; detail: string; keys: string[] }> = [
@@ -321,7 +348,7 @@ export default function OnboardingPreferences() {
                 <h2 className="text-[15px] font-semibold text-ink">{group.title}</h2>
                 <p className="mt-1 text-[13px] leading-6 text-ink-muted">{group.intro}</p>
               </div>
-              <div className="grid gap-3 sm:grid-cols-2">
+              <div className="grid gap-3 sm:grid-cols-2 xl:grid-cols-3 2xl:grid-cols-4">
                 {group.items.map((item) => {
                   const weight = selected.get(item.key)
                   const isSelected = weight !== undefined
@@ -359,7 +386,7 @@ function PreferenceCard({
   onWeightChange: (next: number) => void
 }) {
   const sliderId = `weight-${item.key}`
-  const badge = preferenceBadge(item.label)
+  const Icon = ICONS[item.key] ?? SparkIcon
 
   const handleKeyDown = (event: KeyboardEvent<HTMLDivElement>) => {
     if (event.key !== 'Enter' && event.key !== ' ') return
@@ -381,50 +408,42 @@ function PreferenceCard({
           : 'border-hairline bg-surface-raised hover:border-[#cdbca9] hover:bg-surface',
       )}
     >
-      <div className="flex items-start justify-between gap-4">
-        <div className="flex items-start gap-3">
+      <div className="flex min-w-0 items-start justify-between gap-4">
+        <div className="min-w-0 flex-1">
           <span
             className={clsx(
-              'flex h-10 w-10 shrink-0 items-center justify-center rounded-full border text-[11px] font-semibold uppercase tracking-[0.16em]',
+              'flex h-11 w-11 items-center justify-center rounded-full border',
               selected
                 ? 'border-accent bg-surface text-accent'
                 : 'border-hairline bg-surface text-ink-muted',
             )}
             aria-hidden
           >
-            {badge}
+            <Icon className="h-5 w-5" />
           </span>
-          <div>
-            <div className="flex flex-wrap items-center gap-2">
-              <h3 className="text-[15px] font-medium text-ink">{item.label}</h3>
-              <span
-                className={clsx(
-                  'rounded-full px-2 py-1 text-[10px] uppercase tracking-[0.16em]',
-                  selected ? 'bg-surface text-accent' : 'bg-canvas text-ink-muted',
-                )}
-              >
-                {selected ? weightLabel(weight) : 'Optional'}
-              </span>
-            </div>
-            <p className="mt-2 text-[13px] leading-6 text-ink-muted">{item.detail}</p>
+          <div className="mt-4 min-w-0">
+            <h3 className="text-[15px] font-medium leading-6 text-ink">{item.label}</h3>
+            <p className="mt-1 text-[12px] uppercase tracking-[0.16em] text-ink-muted">
+              {selected ? weightLabel(weight) : 'Tap to include'}
+            </p>
           </div>
         </div>
-        <Button
-          variant="secondary"
-          size="sm"
-          onClick={(event) => {
-            event.stopPropagation()
-            onToggle()
-          }}
-          className={clsx(selected ? 'border-accent text-accent hover:border-accent' : undefined)}
+        <span
+          className={clsx(
+            'mt-1 shrink-0 rounded-full border px-2 py-1 text-[10px] uppercase tracking-[0.16em]',
+            selected
+              ? 'border-accent bg-surface text-accent'
+              : 'border-hairline bg-canvas text-ink-muted',
+          )}
         >
-          {selected ? 'Selected' : 'Add'}
-        </Button>
+          {selected ? 'On' : 'Off'}
+        </span>
       </div>
       {selected ? (
         <div
           className="mt-4 rounded border border-hairline bg-surface px-3 py-3"
           onClick={(event) => event.stopPropagation()}
+          onMouseDown={(event) => event.stopPropagation()}
         >
           <div className="flex items-center justify-between gap-3">
             <label htmlFor={sliderId} className="data-label">
@@ -443,22 +462,11 @@ function PreferenceCard({
       ) : (
         <div className="mt-4 flex items-center justify-between border-t border-hairline pt-3">
           <span className="data-label">Ranking impact</span>
-          <span className="text-[13px] text-ink-muted">Only used if you add it</span>
+          <span className="text-[13px] text-ink-muted">Inactive</span>
         </div>
       )}
     </div>
   )
-}
-
-function preferenceBadge(label: string): string {
-  const initials = label
-    .split(/[\s-]+/)
-    .filter(Boolean)
-    .slice(0, 2)
-    .map((part) => part[0]?.toUpperCase() ?? '')
-    .join('')
-
-  return initials || 'P'
 }
 
 function weightShortLabel(weight: number): string {
@@ -466,6 +474,260 @@ function weightShortLabel(weight: number): string {
   if (weight >= 4) return 'High'
   if (weight <= 2) return 'Light'
   return 'Mid'
+}
+
+function iconProps(props: SVGProps<SVGSVGElement>) {
+  return {
+    viewBox: '0 0 24 24',
+    fill: 'none',
+    stroke: 'currentColor',
+    strokeWidth: 1.7,
+    strokeLinecap: 'round' as const,
+    strokeLinejoin: 'round' as const,
+    ...props,
+  }
+}
+
+function StoreIcon(props: SVGProps<SVGSVGElement>) {
+  return (
+    <svg {...iconProps(props)}>
+      <path d="M4 10h16" />
+      <path d="M6 10V7.5L8 5h8l2 2.5V10" />
+      <path d="M6 10v8h12v-8" />
+      <path d="M9 18v-4h6v4" />
+    </svg>
+  )
+}
+
+function DumbbellIcon(props: SVGProps<SVGSVGElement>) {
+  return (
+    <svg {...iconProps(props)}>
+      <path d="M7 10v4" />
+      <path d="M17 10v4" />
+      <path d="M5 9v6" />
+      <path d="M19 9v6" />
+      <path d="M7 12h10" />
+    </svg>
+  )
+}
+
+function LeafIcon(props: SVGProps<SVGSVGElement>) {
+  return (
+    <svg {...iconProps(props)}>
+      <path d="M19 5c-6 0-10 4-10 10 0 2 1 4 3 4 6 0 10-4 10-10 0-2-1-4-3-4Z" />
+      <path d="M8 16c3-2 5-4 8-8" />
+    </svg>
+  )
+}
+
+function CupIcon(props: SVGProps<SVGSVGElement>) {
+  return (
+    <svg {...iconProps(props)}>
+      <path d="M6 9h9v3a4 4 0 0 1-4 4H9a3 3 0 0 1-3-3V9Z" />
+      <path d="M15 10h2a2 2 0 1 1 0 4h-1" />
+      <path d="M5 19h11" />
+    </svg>
+  )
+}
+
+function GlassIcon(props: SVGProps<SVGSVGElement>) {
+  return (
+    <svg {...iconProps(props)}>
+      <path d="M7 5h10l-4 5v5l2 4H9l2-4v-5L7 5Z" />
+    </svg>
+  )
+}
+
+function BookIcon(props: SVGProps<SVGSVGElement>) {
+  return (
+    <svg {...iconProps(props)}>
+      <path d="M6 6.5A2.5 2.5 0 0 1 8.5 4H18v15H8.5A2.5 2.5 0 0 0 6 21V6.5Z" />
+      <path d="M6 7h12" />
+    </svg>
+  )
+}
+
+function DeskIcon(props: SVGProps<SVGSVGElement>) {
+  return (
+    <svg {...iconProps(props)}>
+      <path d="M4 12h16" />
+      <path d="M6 12V8h12v4" />
+      <path d="M8 12v6" />
+      <path d="M16 12v6" />
+    </svg>
+  )
+}
+
+function MoonIcon(props: SVGProps<SVGSVGElement>) {
+  return (
+    <svg {...iconProps(props)}>
+      <path d="M15 4a7 7 0 1 0 5 12 8 8 0 1 1-5-12Z" />
+    </svg>
+  )
+}
+
+function QuietIcon(props: SVGProps<SVGSVGElement>) {
+  return (
+    <svg {...iconProps(props)}>
+      <path d="M7 9v6" />
+      <path d="M10 7v10" />
+      <path d="M14 10v4" />
+      <path d="M18 8c1.5 1.2 2 3.6 0 6" />
+      <path d="M5 19h14" />
+    </svg>
+  )
+}
+
+function SofaIcon(props: SVGProps<SVGSVGElement>) {
+  return (
+    <svg {...iconProps(props)}>
+      <path d="M5 12a2 2 0 0 1 2-2h10a2 2 0 0 1 2 2v4H5v-4Z" />
+      <path d="M7 10V8a2 2 0 0 1 2-2h2" />
+      <path d="M17 10V8a2 2 0 0 0-2-2h-2" />
+      <path d="M6 16v2" />
+      <path d="M18 16v2" />
+    </svg>
+  )
+}
+
+function BalconyIcon(props: SVGProps<SVGSVGElement>) {
+  return (
+    <svg {...iconProps(props)}>
+      <path d="M6 5h12v6H6z" />
+      <path d="M4 13h16" />
+      <path d="M7 13v6" />
+      <path d="M17 13v6" />
+    </svg>
+  )
+}
+
+function WasherIcon(props: SVGProps<SVGSVGElement>) {
+  return (
+    <svg {...iconProps(props)}>
+      <rect x="5" y="4" width="14" height="16" rx="2" />
+      <circle cx="12" cy="13" r="3.5" />
+      <path d="M8 7h.01" />
+      <path d="M11 7h5" />
+    </svg>
+  )
+}
+
+function PlateIcon(props: SVGProps<SVGSVGElement>) {
+  return (
+    <svg {...iconProps(props)}>
+      <circle cx="12" cy="12" r="5" />
+      <circle cx="12" cy="12" r="2" />
+      <path d="M5 5l14 14" />
+    </svg>
+  )
+}
+
+function FlowerIcon(props: SVGProps<SVGSVGElement>) {
+  return (
+    <svg {...iconProps(props)}>
+      <circle cx="12" cy="12" r="2" />
+      <path d="M12 7c1.2-2 4-2 4 0s-2 3-4 3" />
+      <path d="M17 12c2-1.2 4 1.4 2.5 3.2S16 15.5 15 14" />
+      <path d="M12 17c-1.2 2-4 2-4 0s2-3 4-3" />
+      <path d="M7 12c-2 1.2-4-1.4-2.5-3.2S8 8.5 9 10" />
+    </svg>
+  )
+}
+
+function LiftIcon(props: SVGProps<SVGSVGElement>) {
+  return (
+    <svg {...iconProps(props)}>
+      <rect x="7" y="4" width="10" height="16" rx="2" />
+      <path d="M10 8l2-2 2 2" />
+      <path d="M14 16l-2 2-2-2" />
+    </svg>
+  )
+}
+
+function BikeIcon(props: SVGProps<SVGSVGElement>) {
+  return (
+    <svg {...iconProps(props)}>
+      <circle cx="7.5" cy="16.5" r="2.5" />
+      <circle cx="16.5" cy="16.5" r="2.5" />
+      <path d="M9 10h4l3 6" />
+      <path d="M12 10l-2 6" />
+      <path d="M8 10h2" />
+    </svg>
+  )
+}
+
+function ParkingIcon(props: SVGProps<SVGSVGElement>) {
+  return (
+    <svg {...iconProps(props)}>
+      <rect x="6" y="4" width="12" height="16" rx="2" />
+      <path d="M10 16V8h3a2.5 2.5 0 0 1 0 5h-3" />
+    </svg>
+  )
+}
+
+function PawIcon(props: SVGProps<SVGSVGElement>) {
+  return (
+    <svg {...iconProps(props)}>
+      <circle cx="8" cy="9" r="1.5" />
+      <circle cx="12" cy="7.5" r="1.5" />
+      <circle cx="16" cy="9" r="1.5" />
+      <path d="M8 16c0-2.2 2-4 4-4s4 1.8 4 4c0 1.5-1.2 2-4 2s-4-.5-4-2Z" />
+    </svg>
+  )
+}
+
+function SmokeFreeIcon(props: SVGProps<SVGSVGElement>) {
+  return (
+    <svg {...iconProps(props)}>
+      <path d="M5 14h8" />
+      <path d="M17 13v2" />
+      <path d="M19 13v2" />
+      <path d="M7 8c1 0 2 .8 2 2" />
+      <path d="M4 6l16 12" />
+    </svg>
+  )
+}
+
+function SparkIcon(props: SVGProps<SVGSVGElement>) {
+  return (
+    <svg {...iconProps(props)}>
+      <path d="M12 4v4" />
+      <path d="M12 16v4" />
+      <path d="M4 12h4" />
+      <path d="M16 12h4" />
+      <path d="M7 7l2 2" />
+      <path d="M15 15l2 2" />
+      <path d="M17 7l-2 2" />
+      <path d="M9 15l-2 2" />
+    </svg>
+  )
+}
+
+function CapIcon(props: SVGProps<SVGSVGElement>) {
+  return (
+    <svg {...iconProps(props)}>
+      <path d="M4 10l8-4 8 4-8 4-8-4Z" />
+      <path d="M8 12.5v3c0 1 1.8 2 4 2s4-1 4-2v-3" />
+    </svg>
+  )
+}
+
+function HeartIcon(props: SVGProps<SVGSVGElement>) {
+  return (
+    <svg {...iconProps(props)}>
+      <path d="M12 19s-6-3.8-6-8.2A3.8 3.8 0 0 1 12 8a3.8 3.8 0 0 1 6 2.8C18 15.2 12 19 12 19Z" />
+    </svg>
+  )
+}
+
+function ChatIcon(props: SVGProps<SVGSVGElement>) {
+  return (
+    <svg {...iconProps(props)}>
+      <path d="M5 7h14v9H9l-4 3V7Z" />
+      <path d="M8 11h8" />
+      <path d="M8 14h5" />
+    </svg>
+  )
 }
 
 function clampWeight(value: number): number {
