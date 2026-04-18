@@ -2,7 +2,7 @@ import clsx from 'clsx'
 import { forwardRef } from 'react'
 
 const fieldClassName =
-  'w-full rounded border border-hairline bg-surface-raised text-ink shadow-[inset_0_1px_0_rgba(255,255,255,0.7)] placeholder:text-ink-muted transition-colors focus:border-accent focus:outline-none focus:ring-2 focus:ring-accent/30 focus:ring-offset-0'
+  'w-full rounded border border-hairline bg-surface text-ink placeholder:text-ink-muted transition-colors focus:border-accent focus:outline-none focus:ring-2 focus:ring-accent/30 focus:ring-offset-0'
 
 export type InputProps = React.ComponentPropsWithoutRef<'input'>
 

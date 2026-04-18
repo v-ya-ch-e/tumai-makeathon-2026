@@ -18,11 +18,12 @@ export default function Profile() {
   const { username, user, isReady, refreshUser } = useSession()
   const [ageInput, setAgeInput] = useState('')
   const [gender, setGender] = useState<Gender | ''>('')
+  const [notificationEmailInput, setNotificationEmailInput] = useState('')
   const [profile, setProfile] = useState<SearchProfile | null>(null)
   const [busy, setBusy] = useState(false)
   const [hydrated, setHydrated] = useState(false)
   const [footer, setFooter] = useState<ReactNode>(null)
-  const [errors, setErrors] = useState<{ age?: string; gender?: string }>({})
+  const [errors, setErrors] = useState<{ age?: string; gender?: string; notificationEmail?: string }>({})
 
   useEffect(() => {
     if (!isReady) return
@@ -34,13 +35,9 @@ export default function Profile() {
     void (async () => {
       try {
         const nextProfile = await getSearchProfile(username)
-        if (!cancelled) {
-          setProfile(nextProfile)
-        }
+        if (!cancelled) setProfile(nextProfile)
       } finally {
-        if (!cancelled) {
-          setHydrated(true)
-        }
+        if (!cancelled) setHydrated(true)
       }
     })()
     return () => {
@@ -52,27 +49,36 @@ export default function Profile() {
     if (!user) return
     setAgeInput(String(user.age))
     setGender(user.gender)
+    setNotificationEmailInput(user.notificationEmail ?? '')
   }, [user])
 
   const handleSave = async () => {
     if (!username || !user) return
     setFooter(null)
-    const nextErrors: { age?: string; gender?: string } = {}
+
+    const nextErrors: { age?: string; gender?: string; notificationEmail?: string } = {}
     const age = Number(ageInput)
     if (!Number.isInteger(age) || age < 16 || age > 99) {
       nextErrors.age = 'Age must be a whole number between 16 and 99.'
     }
     if (!gender) {
-      nextErrors.gender = 'Select a gender.'
+      nextErrors.gender = 'Select the current profile value.'
     }
+    const notificationEmail = notificationEmailInput.trim()
+    if (notificationEmail && !/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(notificationEmail)) {
+      nextErrors.notificationEmail = 'Enter a valid email address or leave it blank.'
+    }
+
     setErrors(nextErrors)
-    if (Object.keys(nextErrors).length > 0) {
-      return
-    }
+    if (Object.keys(nextErrors).length > 0) return
 
     setBusy(true)
     try {
-      await updateUser(username, { age, gender: gender as Gender })
+      await updateUser(username, {
+        age,
+        gender: gender as Gender,
+        notificationEmail: notificationEmail || null,
+      })
       await refreshUser()
       setFooter(<p className="text-[15px] text-good">Profile updated.</p>)
     } catch (error) {
@@ -95,115 +101,128 @@ export default function Profile() {
   }
 
   return (
-    <div className="relative min-h-screen overflow-hidden bg-canvas">
-      <div className="relative mx-auto max-w-7xl px-5 py-5 sm:px-8 lg:px-10">
-        <section className="overflow-hidden rounded-[34px] border border-hairline/80 bg-surface/95 shadow-[0_30px_80px_rgba(15,23,42,0.08)]">
-          <div className="grid gap-6 border-b border-hairline/80 px-6 py-6 lg:grid-cols-[minmax(0,1.2fr)_auto] lg:px-8 xl:px-10">
-            <div>
-              <p className="font-mono text-[12px] uppercase tracking-[0.28em] text-accent">Account</p>
-              <h1 className="mt-3 text-[30px] font-semibold tracking-[-0.035em] text-ink sm:text-[38px]">
-                Keep your hunt profile current
-              </h1>
-              <p className="mt-3 max-w-2xl text-[15px] leading-7 text-ink-muted">
-                Update your core profile here, then jump back into the search brief whenever your budget, commute, or preferences change.
+    <div className="min-h-screen bg-canvas">
+      <div className="app-shell space-y-8">
+        <div className="flex flex-wrap items-center justify-between gap-4 border-b border-hairline pb-4">
+          <div>
+            <p className="section-kicker text-accent">WG Hunter</p>
+            <p className="mt-1 text-[14px] text-ink-muted">Dashboard and profile</p>
+          </div>
+          <AppTabs
+            current="/profile"
+            tabs={[
+              { label: 'Dashboard', href: '/dashboard' },
+              { label: 'Profile', href: '/profile' },
+            ]}
+          />
+        </div>
+
+        <header className="page-frame overflow-hidden">
+          <div className="px-6 py-8 lg:px-8">
+            <p className="section-kicker text-accent">Profile</p>
+              <h1 className="page-title mt-4">Maintain the saved account</h1>
+              <p className="body-copy mt-4 max-w-3xl">
+                This page only covers the account fields stored with the local demo profile. Search constraints still live in the onboarding steps.
               </p>
-            </div>
-            <div className="flex items-start justify-start lg:justify-end">
-              <AppTabs
-                current="/profile"
-                tabs={[
-                  { label: 'Dashboard', href: '/dashboard' },
-                  { label: 'Profile', href: '/profile' },
-                ]}
+          </div>
+        </header>
+
+        <section className="grid gap-8 lg:grid-cols-[minmax(0,1fr)_320px]">
+          <div className="overflow-hidden rounded-card border border-hairline bg-surface">
+            <FieldRow label="Username" hint="Fixed because it keys the stored hunt data for this browser session.">
+              <div className="rounded border border-hairline bg-surface-raised px-3 py-3 text-[15px] text-ink">
+                {user.username}
+              </div>
+            </FieldRow>
+
+            <FieldRow label="Age" hint={errors.age ?? 'Used in the saved account profile.'} error={Boolean(errors.age)}>
+              <Input
+                type="number"
+                min={16}
+                max={99}
+                step={1}
+                value={ageInput}
+                onChange={(event) => {
+                  setAgeInput(event.target.value)
+                  if (errors.age) setErrors((prev) => ({ ...prev, age: undefined }))
+                }}
               />
+            </FieldRow>
+
+            <FieldRow
+              label="Notification email"
+              hint={errors.notificationEmail ?? 'Optional. Used later once alerting exists.'}
+              error={Boolean(errors.notificationEmail)}
+            >
+              <Input
+                type="email"
+                value={notificationEmailInput}
+                onChange={(event) => {
+                  setNotificationEmailInput(event.target.value)
+                  if (errors.notificationEmail) setErrors((prev) => ({ ...prev, notificationEmail: undefined }))
+                }}
+                aria-invalid={Boolean(errors.notificationEmail)}
+                placeholder="you@example.com"
+              />
+            </FieldRow>
+
+            <FieldRow label="Gender" hint={errors.gender ?? 'Matches the current backend model.'} error={Boolean(errors.gender)}>
+              <Select
+                id="profile-gender"
+                value={gender}
+                onChange={(event) => {
+                  setGender(event.target.value as Gender | '')
+                  if (errors.gender) setErrors((prev) => ({ ...prev, gender: undefined }))
+                }}
+                aria-invalid={Boolean(errors.gender)}
+              >
+                <option value="" disabled>
+                  Select…
+                </option>
+                {GENDER_OPTIONS.map((option) => (
+                  <option key={option.value} value={option.value}>
+                    {option.label}
+                  </option>
+                ))}
+              </Select>
+            </FieldRow>
+
+            <div className="flex flex-wrap items-center justify-between gap-3 border-t border-hairline px-5 py-5 md:px-6">
+              <p className="text-[13px] text-ink-muted">Created {new Date(user.createdAt).toLocaleDateString()}</p>
+              <Button variant="primary" onClick={() => void handleSave()} disabled={busy}>
+                {busy ? 'Saving…' : 'Save profile'}
+              </Button>
             </div>
+            {footer ? <div className="px-5 pb-5 md:px-6">{footer}</div> : null}
           </div>
 
-          <div className="grid gap-6 px-6 py-6 lg:grid-cols-[minmax(0,1.1fr)_320px] lg:px-8 xl:px-10">
-            <Card className="rounded-[28px] border-hairline/80 bg-surface-raised/85 p-6">
-              <p className="text-[18px] font-semibold tracking-[-0.02em] text-ink">Basic details</p>
-              <div className="mt-6 grid gap-5 md:grid-cols-2">
-                <FieldCard label="Username" hint="Usernames stay fixed because they key your stored hunt data.">
-                  <div className="rounded-[18px] border border-hairline/80 bg-surface px-4 py-3 text-[15px] text-ink">
-                    {user.username}
-                  </div>
-                </FieldCard>
-
-                <FieldCard label="Age" hint="Used in your saved account profile." error={errors.age}>
-                  <Input
-                    type="number"
-                    min={16}
-                    max={99}
-                    step={1}
-                    value={ageInput}
-                    onChange={(event) => {
-                      setAgeInput(event.target.value)
-                      if (errors.age) setErrors((prev) => ({ ...prev, age: undefined }))
-                    }}
-                  />
-                </FieldCard>
-
-                <FieldCard label="Gender" hint="Matches the current backend profile model." error={errors.gender} className="md:col-span-2">
-                  <Select
-                    id="profile-gender"
-                    value={gender}
-                    onChange={(event) => {
-                      setGender(event.target.value as Gender | '')
-                      if (errors.gender) setErrors((prev) => ({ ...prev, gender: undefined }))
-                    }}
-                    aria-invalid={Boolean(errors.gender)}
-                  >
-                    <option value="" disabled>
-                      Select…
-                    </option>
-                    {GENDER_OPTIONS.map((option) => (
-                      <option key={option.value} value={option.value}>
-                        {option.label}
-                      </option>
-                    ))}
-                  </Select>
-                </FieldCard>
+          <div className="space-y-6">
+            <Card className="panel p-6">
+              <p className="section-kicker">Jump back</p>
+              <div className="mt-5 space-y-4">
+                <JumpRow
+                  title="Requirements"
+                  detail={profile ? 'Budget, commute anchors, and search cadence.' : 'Finish the profile first to unlock the search brief.'}
+                  disabled={!profile}
+                  onClick={() => navigate('/onboarding/requirements')}
+                />
+                <JumpRow
+                  title="Preferences"
+                  detail={profile ? 'Weighted ranking signals.' : 'Requirements come first so preference weights stay grounded.'}
+                  disabled={!profile}
+                  onClick={() => navigate('/onboarding/preferences')}
+                />
               </div>
-
-              <div className="mt-6 flex flex-wrap items-center justify-between gap-3 border-t border-hairline/80 pt-5">
-                <p className="text-[13px] text-ink-muted">Created {new Date(user.createdAt).toLocaleDateString()}</p>
-                <Button variant="primary" onClick={() => void handleSave()} disabled={busy}>
-                  {busy ? 'Saving…' : 'Save profile'}
-                </Button>
-              </div>
-              {footer ? <div className="mt-4">{footer}</div> : null}
             </Card>
 
-            <div className="space-y-6">
-              <Card className="rounded-[28px] bg-surface-raised p-6">
-                <p className="font-mono text-[12px] uppercase tracking-[0.24em] text-accent">Adjust setup</p>
-                <div className="mt-5 space-y-3">
-                  <JumpRow
-                    title="Requirements"
-                    detail={profile ? 'Budget, commute anchors, and search cadence.' : 'Finish your brief to unlock this step.'}
-                    actionLabel="Edit"
-                    disabled={!profile}
-                    onClick={() => navigate('/onboarding/requirements')}
-                  />
-                  <JumpRow
-                    title="Preferences"
-                    detail={profile ? 'Weighted nice-to-haves for ranking.' : 'Add requirements first to keep the flow grounded.'}
-                    actionLabel="Edit"
-                    disabled={!profile}
-                    onClick={() => navigate('/onboarding/preferences')}
-                  />
-                </div>
-              </Card>
-
-              <Card className="rounded-[28px] p-6">
-                <p className="text-[18px] font-semibold tracking-[-0.02em] text-ink">Current brief</p>
-                <ul className="mt-4 space-y-3 text-[14px] leading-6 text-ink-muted">
-                  <li>{profile ? `Budget cap: ${profile.priceMaxEur !== null ? `${profile.priceMaxEur}€` : 'Flexible'}` : 'No search brief saved yet.'}</li>
-                  <li>{profile ? `${profile.mainLocations.length} commute anchors saved.` : 'Commute anchors will appear once you add them.'}</li>
-                  <li>{profile ? `${profile.preferences.length} weighted preferences configured.` : 'Preferences become available after requirements.'}</li>
-                </ul>
-              </Card>
-            </div>
+            <Card className="panel-muted p-6">
+              <p className="section-kicker">Current brief</p>
+              <div className="mt-5 space-y-3">
+                <BriefRow label="Budget" value={profile ? (profile.priceMaxEur !== null ? `${profile.priceMaxEur} EUR` : 'Flexible') : 'Not saved'} />
+                <BriefRow label="Anchors" value={profile ? `${profile.mainLocations.length} places` : 'Not saved'} />
+                <BriefRow label="Preferences" value={profile ? `${profile.preferences.length} weighted` : 'Not saved'} />
+              </div>
+            </Card>
           </div>
         </section>
       </div>
@@ -211,52 +230,57 @@ export default function Profile() {
   )
 }
 
-function FieldCard({
+function FieldRow({
   label,
   hint,
-  error,
-  className,
+  error = false,
   children,
 }: {
   label: string
   hint: string
-  error?: string
-  className?: string
+  error?: boolean
   children: ReactNode
 }) {
   return (
-    <div className={className}>
-      <div className="rounded-[24px] border border-hairline/80 bg-surface p-5">
-        <p className="text-[14px] font-semibold text-ink">{label}</p>
-        <p className="mt-1 text-[13px] leading-6 text-ink-muted">{error ?? hint}</p>
-        <div className="mt-4">{children}</div>
+    <section className="grid gap-3 border-t border-hairline px-5 py-5 first:border-t-0 md:grid-cols-[190px_minmax(0,1fr)] md:gap-6 md:px-6">
+      <div>
+        <h2 className="text-[15px] font-semibold text-ink">{label}</h2>
+        <p className={`mt-1 text-[13px] leading-6 ${error ? 'text-bad' : 'text-ink-muted'}`}>{hint}</p>
       </div>
-    </div>
+      <div>{children}</div>
+    </section>
   )
 }
 
 function JumpRow({
   title,
   detail,
-  actionLabel,
   disabled,
   onClick,
 }: {
   title: string
   detail: string
-  actionLabel: string
   disabled: boolean
   onClick: () => void
 }) {
   return (
-    <div className="flex items-center justify-between gap-3 rounded-2xl border border-hairline/80 bg-surface-raised/85 px-4 py-3">
+    <div className="flex items-start justify-between gap-4 border-t border-hairline pt-4 first:border-t-0 first:pt-0">
       <div>
-        <p className="text-[15px] font-semibold text-ink">{title}</p>
+        <p className="text-[15px] font-medium text-ink">{title}</p>
         <p className="mt-1 text-[13px] leading-6 text-ink-muted">{detail}</p>
       </div>
       <Button variant="secondary" size="sm" onClick={onClick} disabled={disabled}>
-        {actionLabel}
+        Edit
       </Button>
+    </div>
+  )
+}
+
+function BriefRow({ label, value }: { label: string; value: string }) {
+  return (
+    <div className="flex items-start justify-between gap-4 border-t border-hairline pt-3 first:border-t-0 first:pt-0">
+      <span className="data-label">{label}</span>
+      <span className="text-right text-[14px] text-ink">{value}</span>
     </div>
   )
 }

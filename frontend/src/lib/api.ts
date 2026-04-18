@@ -140,11 +140,12 @@ export async function createUser(body: {
   username: string
   age: number
   gender: Gender
+  notificationEmail: string | null
 }): Promise<User> {
   const data = await requestJson('/api/users', {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify(body),
+    body: JSON.stringify(toSnake(body)),
   })
   return data as User
 }
@@ -163,12 +164,12 @@ export async function getUser(username: string): Promise<User | null> {
 
 export async function updateUser(
   username: string,
-  body: { age: number; gender: Gender },
+  body: { age: number; gender: Gender; notificationEmail: string | null },
 ): Promise<User> {
   const data = await requestJson(`/api/users/${encodeURIComponent(username)}`, {
     method: 'PUT',
     headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify(body),
+    body: JSON.stringify(toSnake(body)),
   })
   return data as User
 }
