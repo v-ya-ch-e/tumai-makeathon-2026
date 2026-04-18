@@ -70,6 +70,7 @@ const GROUPS: PreferenceGroup[] = [
 
 const DEFAULT_WEIGHT = 3
 
+/*
 const PRESETS: Array<{ label: string; detail: string; keys: string[] }> = [
   {
     label: 'Practical setup',
@@ -87,6 +88,7 @@ const PRESETS: Array<{ label: string; detail: string; keys: string[] }> = [
     keys: ['quiet_area', 'park', 'green_space', 'non_smoking'],
   },
 ]
+*/
 
 export default function OnboardingPreferences() {
   const navigate = useNavigate()
@@ -160,6 +162,7 @@ export default function OnboardingPreferences() {
     })
   }
 
+  /*
   const applyPreset = (keys: string[]) => {
     setSelected((prev) => {
       const next = new Map(prev)
@@ -169,6 +172,7 @@ export default function OnboardingPreferences() {
       return next
     })
   }
+  */
 
   const handleNext = async () => {
     setFooter(null)
@@ -176,7 +180,7 @@ export default function OnboardingPreferences() {
 
     const preferences: PreferenceWeight[] = Array.from(selected.entries()).map(([key, weight]) => ({
       key,
-      weight,
+      weight: Math.round(clampWeight(weight)),
     }))
     const body: UpsertSearchProfileBody = {
       priceMinEur: profile.priceMinEur,
@@ -259,7 +263,7 @@ export default function OnboardingPreferences() {
       }
     >
       <div className="overflow-hidden rounded-card border border-hairline bg-surface">
-        <section className="border-b border-hairline px-5 py-5 md:px-6">
+        {/* <section className="border-b border-hairline px-5 py-5 md:px-6">
           <div className="grid gap-4 md:grid-cols-[200px_minmax(0,1fr)] md:gap-6">
             <div>
               <h2 className="text-[15px] font-semibold text-ink">Quick starting points</h2>
@@ -284,7 +288,7 @@ export default function OnboardingPreferences() {
               ))}
             </div>
           </div>
-        </section>
+        </section> */}
 
         {GROUPS.map((group) => (
           <section key={group.id} className="border-t border-hairline px-5 py-5 md:px-6">
@@ -370,10 +374,9 @@ function PreferenceRow({
 
 function clampWeight(value: number): number {
   if (!Number.isFinite(value)) return DEFAULT_WEIGHT
-  const rounded = Math.round(value)
-  if (rounded < 1) return 1
-  if (rounded > 5) return 5
-  return rounded
+  if (value < 1) return 1
+  if (value > 5) return 5
+  return value
 }
 
 function weightLabel(weight: number): string {

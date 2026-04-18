@@ -14,6 +14,8 @@ const LEGEND: Array<{ position: number; label: string }> = [
   { position: 5, label: 'must-have' },
 ]
 
+const ACTIVE_LEGEND_DISTANCE = 0.6
+
 export function WeightSlider({
   value,
   onChange,
@@ -28,7 +30,7 @@ export function WeightSlider({
         type="range"
         min={1}
         max={5}
-        step={1}
+        step={0.1}
         value={value}
         aria-label={ariaLabel}
         onChange={(e) => onChange(Number(e.target.value))}
@@ -39,7 +41,7 @@ export function WeightSlider({
         {LEGEND.map((l) => (
           <span
             key={l.position}
-            className={clsx(value === l.position ? 'text-ink' : undefined)}
+            className={clsx(Math.abs(value - l.position) <= ACTIVE_LEGEND_DISTANCE ? 'text-ink' : undefined)}
           >
             {l.label}
           </span>

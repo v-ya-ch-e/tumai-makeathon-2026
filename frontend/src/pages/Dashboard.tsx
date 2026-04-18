@@ -196,7 +196,7 @@ export default function Dashboard() {
     }
   }
 
-  const onStartAsNewUser = () => {
+  const onLogout = () => {
     setOpenListing(null)
     setUsername(null)
     navigate('/onboarding/profile', { replace: true })
@@ -228,14 +228,19 @@ export default function Dashboard() {
             <p className="section-kicker text-accent">WG Hunter</p>
             <p className="mt-1 text-[14px] text-ink-muted">Dashboard and profile</p>
           </div>
-          <AppTabs
-            current="/dashboard"
-            tabs={[
-              { label: 'Dashboard', href: '/dashboard' },
-              { label: 'Timeline', href: '/timeline' },
-              { label: 'Profile', href: '/profile' },
-            ]}
-          />
+          <div className="flex flex-wrap items-center justify-end gap-3">
+            <AppTabs
+              current="/dashboard"
+              tabs={[
+                { label: 'Dashboard', href: '/dashboard' },
+                { label: 'Timeline', href: '/timeline' },
+                { label: 'Profile', href: '/profile' },
+              ]}
+            />
+            <Button variant="secondary" size="sm" onClick={onLogout}>
+              Log out
+            </Button>
+          </div>
         </div>
 
         <header className="page-frame overflow-hidden">
@@ -295,7 +300,7 @@ export default function Dashboard() {
                   label="Reset"
                   value="Clear the current local profile and start as a new user."
                   action={
-                    <Button variant="secondary" size="sm" onClick={onStartAsNewUser}>
+                    <Button variant="secondary" size="sm" onClick={onLogout}>
                       New user
                     </Button>
                   }
@@ -416,6 +421,7 @@ export default function Dashboard() {
             </section>
           </section>
         )}
+
       </div>
 
       {username ? (
