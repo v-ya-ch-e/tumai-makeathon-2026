@@ -55,7 +55,7 @@ export default function Profile() {
     if (!user) return
     setAgeInput(String(user.age))
     setGender(user.gender)
-    setNotificationEmailInput(user.notificationEmail ?? '')
+    setNotificationEmailInput(user.email ?? '')
   }, [user])
 
   const handleSave = async () => {
@@ -83,7 +83,7 @@ export default function Profile() {
       await updateUser(username, {
         age,
         gender: gender as Gender,
-        notificationEmail: notificationEmail || null,
+        email: notificationEmail || null,
       })
       await refreshUser()
       setFooter(<p className="text-[15px] text-good">Changes saved.</p>)

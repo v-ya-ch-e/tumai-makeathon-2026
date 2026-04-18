@@ -85,7 +85,7 @@ export default function OnboardingProfile() {
         username,
         age,
         gender: gender as Gender,
-        notificationEmail: notificationEmail || null,
+        email: notificationEmail || null,
       })
       setUsername(username)
       navigate('/onboarding/requirements', { replace: false })

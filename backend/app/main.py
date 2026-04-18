@@ -19,14 +19,19 @@ FRONTEND_DIST = REPO_ROOT / "frontend" / "dist"
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
+    import asyncio
     from .wg_agent import db as wg_db
 
     wg_db.init_db()
     logger.info("WG database: %s", wg_db.describe_database())
     from .wg_agent import periodic as wg_periodic
 
+    wg_periodic.set_runtime_loop(asyncio.get_running_loop())
     await wg_periodic.resume_user_agents()
-    yield
+    try:
+        yield
+    finally:
+        wg_periodic.set_runtime_loop(None)
 
 
 app = FastAPI(title="TUM.ai Campus Co-Pilot · WG Hunter", lifespan=lifespan)

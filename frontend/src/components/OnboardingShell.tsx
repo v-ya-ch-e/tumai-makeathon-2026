@@ -15,6 +15,7 @@ export type OnboardingShellProps = {
   busy?: boolean
   footer?: ReactNode
   showProgress?: boolean
+  hideIntro?: boolean
   aside?: ReactNode
   progressSteps?: [ProgressStepLink, ProgressStepLink, ProgressStepLink, ProgressStepLink]
 }
@@ -32,6 +33,7 @@ export function OnboardingShell({
   busy = false,
   footer,
   showProgress = true,
+  hideIntro = false,
   aside,
   progressSteps,
 }: OnboardingShellProps) {
@@ -52,19 +54,21 @@ export function OnboardingShell({
 
         <div className={aside ? 'grid gap-8 lg:grid-cols-[minmax(0,1fr)_320px]' : 'grid gap-6'}>
           <section className="page-frame overflow-hidden">
-            <div className="border-b border-hairline px-6 py-8 sm:px-8 lg:px-10">
-              {eyebrow ? (
-                <p className="section-kicker mb-3 text-accent">
-                  {eyebrow}
-                </p>
-              ) : null}
-              <h1 className="page-title max-w-2xl">
-                {title}
-              </h1>
-              {description ? (
-                <p className="body-copy mt-4 max-w-2xl">{description}</p>
-              ) : null}
-            </div>
+            {hideIntro ? null : (
+              <div className="border-b border-hairline px-6 py-8 sm:px-8 lg:px-10">
+                {eyebrow ? (
+                  <p className="section-kicker mb-3 text-accent">
+                    {eyebrow}
+                  </p>
+                ) : null}
+                <h1 className="page-title max-w-2xl">
+                  {title}
+                </h1>
+                {description ? (
+                  <p className="body-copy mt-4 max-w-2xl">{description}</p>
+                ) : null}
+              </div>
+            )}
 
             <div className="px-6 py-8 sm:px-8 lg:px-10">
               {children}

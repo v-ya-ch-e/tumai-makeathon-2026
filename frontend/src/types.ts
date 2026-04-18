@@ -14,6 +14,8 @@ export type User = {
   createdAt: string
 }
 
+export type HuntStatus = 'pending' | 'running' | 'done' | 'failed'
+
 export type PlaceLocation = {
   label: string
   placeId: string
@@ -57,6 +59,16 @@ export type Action = {
   summary: string
   detail: string | null
   listingId: string | null
+}
+
+export type Hunt = {
+  id: string
+  status: HuntStatus
+  startedAt: string
+  finishedAt: string | null
+  listings: Listing[]
+  actions: Action[]
+  error: string | null
 }
 
 export type Component = {
