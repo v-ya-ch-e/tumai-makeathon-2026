@@ -136,7 +136,32 @@ From [`.env.example`](./.env.example). Vite reads the same file via [`envDir: '.
 
 ## Documentation
 
-All developer docs live under **[`docs/`](./docs/README.md)**. Start there:
+All developer docs live under **[`docs/`](./docs/README.md)**. Layout:
+
+```text
+.
+├── README.md (this file) ── quick-start, env table, deploy summary
+├── CLAUDE.md ──────────────── agent orientation + full doc tree
+├── AGENTS.md ──────────────── pointer to CLAUDE.md + docs/README.md
+├── DEPLOYMENT.md ──────────── AWS EC2 + Docker walkthrough
+├── CI-CONFIGURATION.md ───── GitHub Actions → EC2 pipeline
+├── docs/
+│   ├── README.md ──────────── doc index + read-in-order + three-layer rule
+│   ├── SETUP.md ───────────── clone-to-running in ~30 min
+│   ├── ARCHITECTURE.md ───── runtime shape + request flow
+│   ├── DATA_MODEL.md ─────── tables, DTOs, ER diagram, three-layer rule
+│   ├── BACKEND.md ──────────  file-by-file tour of backend/app/wg_agent/
+│   ├── FRONTEND.md ────────── file-by-file tour of frontend/src/
+│   ├── AGENT_LOOP.md ─────── one HuntEngine.run_find_only pass end-to-end
+│   ├── DESIGN.md ──────────── palette, typography, UI primitives
+│   ├── WG_GESUCHT.md ─────── DOM selectors and rate-limit notes
+│   ├── DECISIONS.md ──────── ADR log (ADR-001 … ADR-017)
+│   ├── ROADMAP.md ─────────── queued / later / done-recently
+│   └── _generated/openapi.json   committed OpenAPI spec
+└── context/ ──────────────── hackathon background (challenge brief, TUM systems, code samples)
+```
+
+Suggested read order for new contributors:
 
 1. [`docs/SETUP.md`](./docs/SETUP.md) — clone to running in 30 min.
 2. [`docs/ARCHITECTURE.md`](./docs/ARCHITECTURE.md) — runtime shape + request flow.
@@ -146,6 +171,6 @@ All developer docs live under **[`docs/`](./docs/README.md)**. Start there:
 6. [`docs/ROADMAP.md`](./docs/ROADMAP.md) — what's next and what's deliberately out of scope.
 7. [`docs/_generated/openapi.json`](./docs/_generated/openapi.json) — OpenAPI spec (regenerated after API changes).
 
-Project context (challenge brief, TUM systems inventory, AWS notes) lives under [`context/`](./context).
+Project context (challenge brief, TUM systems inventory, code samples) lives under [`context/`](./context).
 
 Coding guidelines for humans and LLM agents are in [`CLAUDE.md`](./CLAUDE.md) and [`AGENTS.md`](./AGENTS.md). Both point at `docs/README.md` first.
