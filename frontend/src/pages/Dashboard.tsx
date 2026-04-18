@@ -2,22 +2,21 @@ import clsx from 'clsx'
 import { useCallback, useEffect, useRef, useState, type ReactNode } from 'react'
 import { useLocation, useNavigate } from 'react-router-dom'
 import { AppTabs } from '../components/AppTabs'
-import { ConnectWGDialog } from '../components/ConnectWGDialog'
 import { ListingDrawer } from '../components/ListingDrawer'
 import { ListingList } from '../components/ListingList'
 import { ListingMap } from '../components/ListingMap'
 import { Button, Card, StatusPill, type StatusPillTone } from '../components/ui'
+import { formatGermanDate } from '../lib/date'
 import {
   ApiError,
   createHunt,
-  getCredentialsStatus,
   getHunt,
   getSearchProfile,
   stopHunt,
   streamHunt,
 } from '../lib/api'
 import { useSession } from '../lib/session'
-import type { Action, CredentialsStatus, Hunt, Listing, SearchProfile } from '../types'
+import type { Action, Hunt, Listing, SearchProfile } from '../types'
 
 const LS_HUNT_ID = 'wg-hunter.hunt-id'
 
@@ -46,20 +45,10 @@ function huntToUiStatus(hunt: Hunt | null): UiStatus {
 }
 
 function formatDate(value: string | null): string {
-  if (!value) return 'Flexible'
-  try {
-    return new Date(value).toLocaleDateString([], {
-      month: 'short',
-      day: 'numeric',
-      year: 'numeric',
-    })
-  } catch {
-    return value
-  }
+  return formatGermanDate(value)
 }
 
 function formatSchedule(profile: SearchProfile): string {
-  if (profile.schedule === 'one_shot') return 'One pass'
   return `Every ${profile.rescanIntervalMinutes} min`
 }
 
@@ -71,6 +60,10 @@ function formatMode(profile: SearchProfile): string {
 
 function formatBudget(profile: SearchProfile): string {
   return profile.priceMaxEur !== null ? `Up to ${profile.priceMaxEur} EUR` : 'Flexible'
+}
+
+function huntIdForUsername(username: string): string {
+  return `user:${encodeURIComponent(username)}`
 }
 
 function topScore(listings: Listing[]): string {
@@ -91,11 +84,9 @@ export default function Dashboard() {
 
   const [profile, setProfile] = useState<SearchProfile | null>(null)
   const [hunt, setHunt] = useState<Hunt | null>(null)
-  const [actions, setActions] = useState<Action[]>([])
+  const [, setActions] = useState<Action[]>([])
   const [listings, setListings] = useState<Listing[]>([])
   const [uiStatus, setUiStatus] = useState<UiStatus>('idle')
-  const [credStatus, setCredStatus] = useState<CredentialsStatus | null>(null)
-  const [dialogOpen, setDialogOpen] = useState(false)
   const [errorMessage, setErrorMessage] = useState<string | null>(null)
   const [openListing, setOpenListing] = useState<Listing | null>(null)
   const [viewMode, setViewMode] = useState<'list' | 'map'>('list')
@@ -103,14 +94,6 @@ export default function Dashboard() {
   const autoStartTriggeredRef = useRef(false)
   const refreshTimerRef = useRef<number | null>(null)
   const refreshInFlightRef = useRef(false)
-
-  const refreshCredStatus = useCallback(async (name: string) => {
-    try {
-      setCredStatus(await getCredentialsStatus(name))
-    } catch {
-      setCredStatus({ connected: false, savedAt: null })
-    }
-  }, [])
 
   const actionKey = (action: Action): string => `${action.at}|${action.kind}|${action.summary}`
 
@@ -155,15 +138,19 @@ export default function Dashboard() {
         return
       }
       setProfile(searchProfile)
-      await refreshCredStatus(username)
       const storedId = localStorage.getItem(LS_HUNT_ID)
-      const nextHunt = await refreshHunt(storedId)
+      const expectedHuntId = huntIdForUsername(username)
+      const huntId = storedId === expectedHuntId ? storedId : expectedHuntId
+      if (storedId !== huntId) {
+        localStorage.setItem(LS_HUNT_ID, huntId)
+      }
+      const nextHunt = await refreshHunt(huntId)
       if (!cancelled) applyHunt(nextHunt)
     })()
     return () => {
       cancelled = true
     }
-  }, [isReady, username, navigate, refreshCredStatus, refreshHunt, applyHunt])
+  }, [isReady, username, navigate, refreshHunt, applyHunt])
 
   useEffect(() => {
     const huntId = hunt?.id
@@ -284,11 +271,6 @@ export default function Dashboard() {
     }
   }
 
-  const onCredentialsSaved = async () => {
-    setDialogOpen(false)
-    if (username) await refreshCredStatus(username)
-  }
-
   useEffect(() => {
     if (!profile || !username) return
     if (!location.state || typeof location.state !== 'object' || !('autoStart' in location.state)) return
@@ -307,7 +289,6 @@ export default function Dashboard() {
     )
   }
 
-  const connected = credStatus?.connected ?? false
   const isActive = uiStatus === 'running' || uiStatus === 'starting'
   const isStopping = uiStatus === 'stopping'
   const isStarting = uiStatus === 'starting'
@@ -361,16 +342,6 @@ export default function Dashboard() {
             <div className="px-6 py-6 lg:px-8">
               <div className="space-y-4">
                 <ControlRow
-                  label="WG-Gesucht"
-                  value={connected ? 'Connected' : 'Optional'}
-                  action={
-                    <Button variant="secondary" size="sm" onClick={() => setDialogOpen(true)}>
-                      {connected ? 'Manage' : 'Connect'}
-                    </Button>
-                  }
-                />
-
-                <ControlRow
                   label="Search"
                   value={hunt ? `Run ${hunt.id}` : 'Ready to start'}
                   action={
@@ -401,10 +372,9 @@ export default function Dashboard() {
             </div>
           </div>
 
-          <div className="grid border-t border-hairline sm:grid-cols-4">
+          <div className="grid border-t border-hairline sm:grid-cols-3">
             <StatStrip label="Listings" value={String(listings.length)} note={summaryCount(listings)} />
             <StatStrip label="Best fit" value={topScore(listings)} note="Top match right now" />
-            <StatStrip label="Updates" value={String(actions.length)} note="Recent changes" />
             <StatStrip
               label="Move-in"
               value={formatDate(profile.moveInFrom)}
@@ -424,9 +394,6 @@ export default function Dashboard() {
               <div className="mt-6 flex flex-wrap gap-3">
                 <Button variant="primary" onClick={() => void onStart()}>
                   Start search
-                </Button>
-                <Button variant="secondary" onClick={() => setDialogOpen(true)}>
-                  {connected ? 'Manage WG login' : 'Connect WG-Gesucht'}
                 </Button>
               </div>
 
@@ -524,16 +491,6 @@ export default function Dashboard() {
         )}
 
       </div>
-
-      {username ? (
-        <ConnectWGDialog
-          open={dialogOpen}
-          username={username}
-          onClose={() => setDialogOpen(false)}
-          onSaved={() => void onCredentialsSaved()}
-        />
-      ) : null}
-
       <ListingDrawer open={openListing !== null} listing={openListing} onClose={() => setOpenListing(null)} />
     </div>
   )

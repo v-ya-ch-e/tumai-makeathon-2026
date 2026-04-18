@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import re
 from datetime import date, datetime
 from typing import Literal, Optional
 
@@ -17,6 +18,9 @@ from .models import (
     SearchProfile,
     UserProfile,
 )
+
+FIXED_RESCAN_INTERVAL_MINUTES = 30
+FIXED_SEARCH_SCHEDULE: Literal["periodic"] = "periodic"
 
 
 class UserDTO(BaseModel):
@@ -157,6 +161,74 @@ class ListingDetailDTO(BaseModel):
     nearby_preference_places: list[NearbyPlaceDTO] = Field(default_factory=list)
 
 
+_COMPONENT_LABELS = {
+    "price": "price",
+    "size": "size",
+    "wg_size": "WG size",
+    "availability": "availability",
+    "commute": "commute",
+    "preferences": "preferences",
+    "vibe": "vibe",
+}
+
+
+def _component_label(key: str) -> str:
+    return _COMPONENT_LABELS.get(key, key.replace("_", " "))
+
+
+def normalize_score_text(text: Optional[str]) -> Optional[str]:
+    if text is None:
+        return None
+    out = text
+    out = re.sub(
+        r"€(\d+) at or under budget cap €(\d+)",
+        r"€\1 within budget (€\2 max)",
+        out,
+    )
+    out = re.sub(
+        r"€(\d+) above budget cap €(\d+) with accelerated penalty",
+        r"€\1 above budget (€\2 max) with accelerated penalty",
+        out,
+    )
+    out = re.sub(
+        r"(\d+)-person WG inside target (\d+)\.\.(\d+)",
+        r"\1-person WG within preferred range (\2-\3 people)",
+        out,
+    )
+    out = re.sub(
+        r"(\d+)-person WG one off from target (\d+)\.\.(\d+)",
+        r"\1-person WG just outside preferred range (\2-\3 people)",
+        out,
+    )
+    out = re.sub(
+        r"(\d+)-person WG outside target (\d+)\.\.(\d+)",
+        r"\1-person WG outside preferred range (\2-\3 people)",
+        out,
+    )
+    out = re.sub(
+        r"available (\d{4}-\d{2}-\d{2}) inside move-in window",
+        r"Available from \1, within your move-in window",
+        out,
+    )
+    out = re.sub(
+        r"available (\d{4}-\d{2}-\d{2}) \((\d+) days off window\)",
+        r"Available from \1 (\2 days outside your move-in window)",
+        out,
+    )
+    out = re.sub(
+        r": (\d+) min \(([^)]+)\) vs budget (\d+) min",
+        r": \1 min by \2 (target: \3 min)",
+        out,
+    )
+    out = out.replace("no vibe signal", "not enough vibe information")
+    out = re.sub(
+        r"\b(strong|weak) ([a-z_]+):",
+        lambda m: f"{m.group(1)} {_component_label(m.group(2))} fit:",
+        out,
+    )
+    return out
+
+
 def user_to_dto(u: UserProfile) -> UserDTO:
     return UserDTO(
         username=u.username,
@@ -178,8 +250,8 @@ def search_profile_to_dto(sp: SearchProfile) -> SearchProfileDTO:
         move_in_from=sp.move_in_from,
         move_in_until=sp.move_in_until,
         preferences=list(sp.preferences),
-        rescan_interval_minutes=sp.rescan_interval_minutes,
-        schedule=sp.schedule,
+        rescan_interval_minutes=FIXED_RESCAN_INTERVAL_MINUTES,
+        schedule=FIXED_SEARCH_SCHEDULE,
         updated_at=sp.updated_at,
     )
 
@@ -199,8 +271,8 @@ def upsert_body_to_search_profile(b: UpsertSearchProfileBody) -> SearchProfile:
         move_in_from=b.move_in_from,
         move_in_until=b.move_in_until,
         preferences=[PreferenceWeight.model_validate(p) for p in b.preferences],
-        rescan_interval_minutes=b.rescan_interval_minutes,
-        schedule=b.schedule,
+        rescan_interval_minutes=FIXED_RESCAN_INTERVAL_MINUTES,
+        schedule=FIXED_SEARCH_SCHEDULE,
         updated_at=datetime.utcnow(),
         min_rent_eur=b.price_min_eur,
     )
@@ -221,7 +293,7 @@ def component_to_dto(c: ComponentScore) -> ComponentDTO:
         key=c.key,
         score=c.score,
         weight=c.weight,
-        evidence=list(c.evidence),
+        evidence=[normalize_score_text(item) or "" for item in c.evidence],
         hard_cap=c.hard_cap,
         missing_data=c.missing_data,
     )
@@ -259,11 +331,9 @@ def listing_to_dto(l: Listing, *, username: Optional[str] = None) -> ListingDTO:
         best_commute_label=l.best_commute_label,
         best_commute_mode=l.best_commute_mode,
         score=l.score,
-        score_reason=l.score_reason,
-        match_reasons=list(l.match_reasons),
-        mismatch_reasons=list(l.mismatch_reasons),
+        score_reason=normalize_score_text(l.score_reason),
+        match_reasons=[normalize_score_text(item) or "" for item in l.match_reasons],
+        mismatch_reasons=[normalize_score_text(item) or "" for item in l.mismatch_reasons],
         components=[component_to_dto(c) for c in l.components],
         veto_reason=l.veto_reason,
     )
-
-

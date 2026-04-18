@@ -226,9 +226,9 @@ def price_fit(listing: Listing, profile: SearchProfile) -> ComponentScore:
         )
     score = _descending_cutoff_curve(p, hi)
     if p <= hi:
-        evidence = [f"€{p} at or under budget cap €{hi}"]
+        evidence = [f"€{p} within budget (€{hi} max)"]
     else:
-        evidence = [f"€{p} above budget cap €{hi} with accelerated penalty"]
+        evidence = [f"€{p} above budget (€{hi} max) with accelerated penalty"]
     return ComponentScore(
         key="price", score=score, weight=weight, evidence=evidence
     )
@@ -285,13 +285,13 @@ def wg_size_fit(listing: Listing, profile: SearchProfile) -> ComponentScore:
     hi = profile.max_wg_size
     if lo <= n <= hi:
         score = 1.0
-        evidence = [f"{n}-person WG inside target {lo}..{hi}"]
+        evidence = [f"{n}-person WG within preferred range ({lo}-{hi} people)"]
     elif n == lo - 1 or n == hi + 1:
         score = 0.5
-        evidence = [f"{n}-person WG one off from target {lo}..{hi}"]
+        evidence = [f"{n}-person WG just outside preferred range ({lo}-{hi} people)"]
     else:
         score = 0.0
-        evidence = [f"{n}-person WG outside target {lo}..{hi}"]
+        evidence = [f"{n}-person WG outside preferred range ({lo}-{hi} people)"]
     return ComponentScore(
         key="wg_size", score=score, weight=weight, evidence=evidence
     )
@@ -326,7 +326,7 @@ def availability_fit(
             key="availability",
             score=1.0,
             weight=weight,
-            evidence=[f"available {af} inside move-in window"],
+            evidence=[f"Available from {af}, within your move-in window"],
         )
     # Outside window: ramp down over the next 14 days either way.
     days_off = 0
@@ -335,7 +335,7 @@ def availability_fit(
     elif mu is not None and af > mu:
         days_off = (af - mu).days
     score = max(0.0, 1.0 - days_off / 14.0)
-    evidence = [f"available {af} ({days_off} days off window)"]
+    evidence = [f"Available from {af} ({days_off} days outside your move-in window)"]
     return ComponentScore(
         key="availability", score=score, weight=weight, evidence=evidence
     )
@@ -382,8 +382,8 @@ def commute_fit(
         sub_score = _commute_curve(minutes, budget)
         per_location_scores.append(sub_score)
         evidence.append(
-            f"{loc.label}: {minutes} min ({(fastest_mode or '').lower()}) "
-            f"vs budget {budget} min"
+            f"{loc.label}: {minutes} min by {(fastest_mode or '').lower()} "
+            f"(target: {budget} min)"
         )
         if minutes > budget * 1.5:
             hard_cap = 0.3 if hard_cap is None else min(hard_cap, 0.3)
@@ -691,6 +691,19 @@ def _reasons_from_components(
     return match[:6], mismatch[:6]
 
 
+def _component_label(key: str) -> str:
+    labels = {
+        "price": "price",
+        "size": "size",
+        "wg_size": "WG size",
+        "availability": "availability",
+        "commute": "commute",
+        "preferences": "preferences",
+        "vibe": "vibe",
+    }
+    return labels.get(key, key.replace("_", " "))
+
+
 def _summary_from_components(
     final: float, components: list[ComponentScore], capped: bool
 ) -> str:
@@ -702,9 +715,9 @@ def _summary_from_components(
     top_negative = min(live, key=lambda c: c.score)
     bits: list[str] = []
     if top_positive.evidence and top_positive.score >= 0.7:
-        bits.append(f"strong {top_positive.key}: {top_positive.evidence[0]}")
+        bits.append(f"strong {_component_label(top_positive.key)} fit: {top_positive.evidence[0]}")
     if top_negative.evidence and top_negative.score <= 0.4 and top_negative.key != top_positive.key:
-        bits.append(f"weak {top_negative.key}: {top_negative.evidence[0]}")
+        bits.append(f"weak {_component_label(top_negative.key)} fit: {top_negative.evidence[0]}")
     if capped:
         bits.append("capped by must-have rule")
     detail = "; ".join(bits) if bits else "mixed fit across components"

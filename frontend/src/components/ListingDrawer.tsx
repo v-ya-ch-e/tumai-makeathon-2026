@@ -1,6 +1,7 @@
 import clsx from 'clsx'
 import { useEffect, useState, type ReactNode } from 'react'
 import { getListingDetail } from '../lib/api'
+import { formatGermanDateRange } from '../lib/date'
 import { useSession } from '../lib/session'
 import type { Component, Listing, ListingDetail } from '../types'
 import { Button, Drawer, StatusPill, type StatusPillTone } from './ui'
@@ -185,7 +186,7 @@ export function ListingDrawer({ open, listing, onClose }: ListingDrawerProps) {
               <Stat label="District" value={activeListing.district ?? '—'} />
               <Stat
                 label="Available"
-                value={`${activeListing.availableFrom ?? '—'}${activeListing.availableTo ? ` → ${activeListing.availableTo}` : ''}`}
+                value={formatGermanDateRange(activeListing.availableFrom, activeListing.availableTo)}
               />
             </dl>
           </Section>

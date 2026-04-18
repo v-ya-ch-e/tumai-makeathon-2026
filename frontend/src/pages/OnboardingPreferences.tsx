@@ -231,8 +231,8 @@ export default function OnboardingPreferences() {
       moveInFrom: profile.moveInFrom,
       moveInUntil: profile.moveInUntil,
       preferences,
-      rescanIntervalMinutes: profile.rescanIntervalMinutes,
-      schedule: profile.schedule,
+      rescanIntervalMinutes: 30,
+      schedule: 'periodic',
     }
 
     setBusy(true)

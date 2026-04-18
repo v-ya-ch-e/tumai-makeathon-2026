@@ -1,6 +1,5 @@
 import type {
   Action,
-  CredentialsStatus,
   Gender,
   Hunt,
   Listing,
@@ -204,52 +203,6 @@ export async function getSearchProfile(username: string): Promise<SearchProfile 
     throw new ApiError(res.status, body, errorMessage(body))
   }
   return toCamel(body) as SearchProfile
-}
-
-export async function getCredentialsStatus(username: string): Promise<CredentialsStatus> {
-  const res = await fetch(
-    `/api/users/${encodeURIComponent(username)}/credentials`,
-    fetchDefaults,
-  )
-  const body = await readBody(res)
-  if (!res.ok) {
-    throw new ApiError(res.status, body, errorMessage(body))
-  }
-  return toCamel(body) as CredentialsStatus
-}
-
-export async function putCredentials(
-  username: string,
-  body: { email: string; password: string } | { storageState: object },
-): Promise<void> {
-  const jsonBody =
-    'storageState' in body
-      ? { storage_state: body.storageState }
-      : { email: body.email, password: body.password }
-  const res = await fetch(
-    `/api/users/${encodeURIComponent(username)}/credentials`,
-    {
-      ...fetchDefaults,
-      method: 'PUT',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify(jsonBody),
-    },
-  )
-  const resBody = await readBody(res)
-  if (!res.ok) {
-    throw new ApiError(res.status, resBody, errorMessage(resBody))
-  }
-}
-
-export async function deleteCredentials(username: string): Promise<void> {
-  const res = await fetch(
-    `/api/users/${encodeURIComponent(username)}/credentials`,
-    { ...fetchDefaults, method: 'DELETE' },
-  )
-  const resBody = await readBody(res)
-  if (!res.ok) {
-    throw new ApiError(res.status, resBody, errorMessage(resBody))
-  }
 }
 
 export async function getUserListings(username: string): Promise<Listing[]> {

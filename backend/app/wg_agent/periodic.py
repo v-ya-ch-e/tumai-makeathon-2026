@@ -22,6 +22,7 @@ from .db_models import ListingRow, UserRow
 from .models import ActionKind, AgentAction, NearbyPlace, SearchProfile
 
 logger = logging.getLogger(__name__)
+FIXED_USER_AGENT_INTERVAL_MINUTES = 30
 
 
 def _notify_threshold() -> float:
@@ -485,7 +486,7 @@ def spawn_user_agent(username: str, *, interval_minutes: int = 30) -> None:
     matcher = PeriodicUserMatcher(
         username=username,
         event_queue=queue,
-        interval_minutes=interval_minutes,
+        interval_minutes=FIXED_USER_AGENT_INTERVAL_MINUTES,
     )
     task = _create_task(matcher.start())
     _ACTIVE_AGENTS[username] = task
@@ -512,7 +513,6 @@ async def resume_user_agents() -> None:
     with Session(db_module.engine) as session:
         usernames = repo.list_usernames_with_search_profile(session)
     for username in usernames:
-        with Session(db_module.engine) as session:
-            sp = repo.get_search_profile(session, username=username)
-        rescan = sp.rescan_interval_minutes if sp is not None else 30
-        spawn_user_agent(username, interval_minutes=rescan)
+        spawn_user_agent(
+            username, interval_minutes=FIXED_USER_AGENT_INTERVAL_MINUTES
+        )
