@@ -31,6 +31,7 @@ frontend/src/components/ui/Drawer.tsx      Right-slide portal drawer + scrim
 frontend/src/components/ui/Input.tsx       `Input`, `Textarea`, `Select` primitives
 frontend/src/components/ui/ProgressSteps.tsx  Typographic onboarding progress
 frontend/src/components/ui/StatusPill.tsx  Dot + label status badge
+frontend/src/components/ui/WeightSlider.tsx  1–5 importance slider (nice / important / must-have)
 frontend/src/components/ui/index.ts        Re-export barrel
 frontend/src/components/OnboardingShell.tsx  Wizard chrome (progress + nav)
 frontend/src/components/ConnectWGDialog.tsx  Modal to save wg credentials (optional)
@@ -85,8 +86,8 @@ frontend/src/pages/Health.tsx                Simple connectivity check page
 ## Pages
 
 - **`OnboardingProfile`** — Dual-mode page gated by a *Create account* / *Sign in* tab control. *Create* collects username/age/gender and `POST /api/users`, then navigates to `/onboarding/requirements`. *Sign in* accepts an existing username, verifies it with `getUser` (404 → inline error), then calls `setUsername` and navigates to `/` so `HomeRedirect` routes based on hydrated session. Progress steps only render on the create tab.
-- **`OnboardingRequirements`** — Binds sliders, chips, mode select, move-in dates, schedule fields to `UpsertSearchProfileBody`, persists with `putSearchProfile`. Main locations are collected via [`PlaceAutocomplete`](../frontend/src/components/PlaceAutocomplete.tsx) as structured `PlaceLocation[]` (`label`, `placeId`, `lat`, `lng`).
-- **`OnboardingPreferences`** — Grid of inline-SVG tiles toggling `preferences` string tags; saves merged profile before routing to `/dashboard`.
+- **`OnboardingRequirements`** — Binds sliders, chips, mode select, move-in dates, schedule fields to `UpsertSearchProfileBody`, persists with `putSearchProfile`. Main locations are collected via [`PlaceAutocomplete`](../frontend/src/components/PlaceAutocomplete.tsx) as structured `PlaceLocation[]` (`label`, `placeId`, `lat`, `lng`, optional `maxCommuteMinutes`). Each picked location renders a row with a 5–240 minute ideal-commute input; blank means no budget.
+- **`OnboardingPreferences`** — Grouped grid of inline-SVG tiles toggling `PreferenceWeight[]` entries; selected tiles expand to show an inline [`WeightSlider`](../frontend/src/components/ui/WeightSlider.tsx) bound to the 1–5 importance value (default 3). Saves merged profile before routing to `/dashboard`.
 - **`Dashboard`** — Loads search profile + optional credentials status, persists last hunt id in `localStorage` (`wg-hunter.hunt-id`), starts hunts (`createHunt`), attaches `streamHunt`, hydrates listings from periodic `getHunt` polling / SSE merges, hosts `ListingDrawer` + `ConnectWGDialog`, maps backend hunt status to UI pill tones.
 - **`HealthPage`** — Minimal read-only check (useful when verifying proxy + API reachability during dev).
 

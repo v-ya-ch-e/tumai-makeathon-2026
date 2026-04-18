@@ -181,3 +181,18 @@ ADR index for WG Hunter. Each entry lists context, decision, consequences, and t
 **Consequences:** Smallest possible diff — scoring stays in one place (the LLM), and the prompt additions are bounded (a few lines per location). No new sliders, weights, or per-location caps in the onboarding UI. Trading off: the LLM's commute reasoning isn't audited by a deterministic check, so edge cases (e.g. a 70-minute transit commute praised because the listing is cheap) depend on prompt discipline rather than hard guardrails; if this turns noisy, a follow-up can add a deterministic commute term that blends with the LLM score. Free-tier economics are comfortable: a typical user with 2 main locations × 2 modes = 4 elements per listing, well inside the Routes API's element quota. The API call is the last network hop before scoring, so listings without coordinates (or users with no `main_locations`) fall straight through to the pre-plan behaviour without an extra branch in the SSE path.
 
 **Introduced in:** this commit
+
+---
+
+## ADR-013: Weighted preferences + per-location commute budgets, LLM composition
+
+- **Date:** 2026-04-18  
+- **Status:** Accepted  
+
+**Context:** ADR-012 wired the Routes API into scoring with a single rule ("over 40 min = negative, under 20 min = positive") and left preferences as flat string tags. In practice, two users with the same `["gym", "park"]` preference list have very different priorities: one may treat the gym as non-negotiable, the other as a mild bonus. Likewise, the "fine" commute for someone cycling to TUM differs from what's "fine" for someone visiting their partner in Sendling twice a week. Both needs pointed to the same answer: let the user express importance, and give each main location its own budget.
+
+**Decision:** Encode preferences as `PreferenceWeight { key, weight: 1..5 }` and extend `PlaceLocation` with an optional `max_commute_minutes` (5..240). Persist both inside the existing `SearchProfileRow` JSON columns (no schema change; [`0005_weighted_prefs.py`](../backend/alembic/versions/0005_weighted_prefs.py) resets pre-demo rows, mirroring the [`0002` reset](../backend/alembic/versions/0002_places_main_locations.py)). In the UI, collect weights via a reusable [`WeightSlider`](../frontend/src/components/ui/WeightSlider.tsx) that expands under each selected preference tile in `OnboardingPreferences`, and collect budgets as a per-location minutes field inside the `PlaceAutocomplete` row stack in `OnboardingRequirements`. Keep composition LLM-only (per ADR-012): extend `_requirements_summary` with a `Preferences (1=nice, 5=must-have)` line and extend `_commute_block` to render `(max N min)` beside each location; update `SCORE_USER_TEMPLATE` to cap score at 0.4 when a weight-5 preference is clearly missing and to treat fastest-mode times above a location's budget as strong negatives.
+
+**Consequences:** The three-layer pipeline changes in one coherent way — `models.py` + `dto.py` + `db_models.py` + `repo.py` all reshape the same two JSON payloads — so the grep-level footprint for "how weights flow" is small. `repo.get_search_profile` parses both new `{key, weight}` dicts and legacy bare strings (weight-3 fallback), so dev DBs that already hold pre-0005 rows don't break during migration. We add no deterministic cap on the LLM score; behaviour still depends on prompt discipline. If hackathon testing shows the LLM disregarding weight-5 items or budgets, a follow-up can add a deterministic veto on top of the current score (a natural extension of ADR-012's "follow-up if noisy" escape hatch).
+
+**Introduced in:** this commit

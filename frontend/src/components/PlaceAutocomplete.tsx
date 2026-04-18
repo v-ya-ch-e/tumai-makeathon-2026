@@ -127,6 +127,7 @@ export function PlaceAutocomplete({
           placeId: pred.placeId,
           lat: loc.lat(),
           lng: loc.lng(),
+          maxCommuteMinutes: null,
         }
         if (!value.some((v) => v.placeId === next.placeId)) {
           onChange([...value, next])
@@ -147,6 +148,28 @@ export function PlaceAutocomplete({
   const removeAt = useCallback(
     (idx: number) => {
       onChange(value.filter((_, i) => i !== idx))
+    },
+    [value, onChange],
+  )
+
+  const updateCommuteAt = useCallback(
+    (idx: number, raw: string) => {
+      const trimmed = raw.trim()
+      if (trimmed === '') {
+        onChange(
+          value.map((v, i) =>
+            i === idx ? { ...v, maxCommuteMinutes: null } : v,
+          ),
+        )
+        return
+      }
+      const parsed = Number(trimmed)
+      if (!Number.isFinite(parsed)) return
+      onChange(
+        value.map((v, i) =>
+          i === idx ? { ...v, maxCommuteMinutes: Math.round(parsed) } : v,
+        ),
+      )
     },
     [value, onChange],
   )
@@ -174,20 +197,45 @@ export function PlaceAutocomplete({
   return (
     <div ref={containerRef} className="relative">
       {value.length > 0 && (
-        <ul className="mb-2 flex flex-wrap gap-2">
-          {value.map((loc, idx) => (
-            <li key={loc.placeId}>
-              <button
-                type="button"
-                onClick={() => removeAt(idx)}
-                className="inline-flex h-8 items-center gap-1.5 rounded-full border border-accent bg-accent-muted px-3 text-[13px] text-ink transition-colors duration-150 ease-out hover:border-bad hover:text-bad"
-                aria-label={`Remove ${loc.label}`}
+        <ul className="mb-3 space-y-2">
+          {value.map((loc, idx) => {
+            const commuteId = `${id ?? 'place-autocomplete'}-commute-${loc.placeId}`
+            return (
+              <li
+                key={loc.placeId}
+                className="flex items-center gap-3 rounded border border-hairline bg-surface-raised px-3 py-2"
               >
-                <span className="truncate max-w-[240px]">{loc.label}</span>
-                <span aria-hidden="true">×</span>
-              </button>
-            </li>
-          ))}
+                <span className="flex-1 truncate text-[14px] text-ink" title={loc.label}>
+                  {loc.label}
+                </span>
+                <div className="flex items-center gap-1.5">
+                  <label htmlFor={commuteId} className="text-[12px] text-ink-muted">
+                    Ideal commute
+                  </label>
+                  <input
+                    id={commuteId}
+                    type="number"
+                    inputMode="numeric"
+                    min={5}
+                    max={240}
+                    placeholder="—"
+                    value={loc.maxCommuteMinutes ?? ''}
+                    onChange={(e) => updateCommuteAt(idx, e.target.value)}
+                    className="h-8 w-16 rounded border border-hairline bg-surface px-2 text-right text-[13px] text-ink focus:border-accent focus:outline-none focus:ring-1 focus:ring-accent"
+                  />
+                  <span className="text-[12px] text-ink-muted">min</span>
+                </div>
+                <button
+                  type="button"
+                  onClick={() => removeAt(idx)}
+                  aria-label={`Remove ${loc.label}`}
+                  className="flex h-6 w-6 items-center justify-center rounded-full text-ink-muted transition-colors duration-150 ease-out hover:bg-accent-muted hover:text-bad"
+                >
+                  <span aria-hidden="true">×</span>
+                </button>
+              </li>
+            )
+          })}
         </ul>
       )}
       <Input

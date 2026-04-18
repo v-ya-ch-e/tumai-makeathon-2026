@@ -29,6 +29,7 @@ from .models import (
     HuntStatus,
     Listing,
     PlaceLocation,
+    PreferenceWeight,
     SearchProfile,
     UserProfile,
     WGCredentials,
@@ -64,6 +65,18 @@ def get_user(session: Session, *, username: str) -> Optional[UserProfile]:
     )
 
 
+def _parse_preference(raw: object) -> Optional[PreferenceWeight]:
+    """Accept both new `{key, weight}` dicts and legacy bare strings."""
+    if isinstance(raw, str):
+        return PreferenceWeight(key=raw)
+    if isinstance(raw, dict):
+        try:
+            return PreferenceWeight.model_validate(raw)
+        except Exception:  # noqa: BLE001
+            return None
+    return None
+
+
 def upsert_search_profile(
     session: Session, *, username: str, sp: SearchProfile
 ) -> SearchProfile:
@@ -79,7 +92,7 @@ def upsert_search_profile(
     row.mode = sp.mode
     row.move_in_from = sp.move_in_from
     row.move_in_until = sp.move_in_until
-    row.preferences = list(sp.preferences)
+    row.preferences = [p.model_dump() for p in sp.preferences]
     row.rescan_interval_minutes = sp.rescan_interval_minutes
     row.schedule = sp.schedule
     row.updated_at = sp.updated_at
@@ -93,6 +106,8 @@ def get_search_profile(session: Session, *, username: str) -> Optional[SearchPro
     if row is None:
         return None
     main = [PlaceLocation.model_validate(d) for d in (row.main_locations or [])]
+    prefs_raw = row.preferences or []
+    prefs = [p for p in (_parse_preference(x) for x in prefs_raw) if p is not None]
     # transitional: browser.py still reads these
     city = main[0].label if main else "München"
     max_rent_eur = row.price_max_eur if row.price_max_eur is not None else 2000
@@ -107,7 +122,7 @@ def get_search_profile(session: Session, *, username: str) -> Optional[SearchPro
         has_car=row.has_car,
         has_bike=row.has_bike,
         mode=row.mode,  # type: ignore[arg-type]
-        preferences=list(row.preferences or []),
+        preferences=prefs,
         rescan_interval_minutes=row.rescan_interval_minutes,
         schedule=row.schedule,  # type: ignore[arg-type]
         updated_at=row.updated_at,

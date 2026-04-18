@@ -48,14 +48,28 @@ class PlaceLocation(BaseModel):
 
     Produced by the frontend's Places Autocomplete widget and stored as
     JSON in `SearchProfileRow.main_locations`. The lat/lng pair is what
-    future commute-based scoring will consume; `label` is what we show
-    to the user and the LLM.
+    commute-based scoring consumes; `label` is what we show to the user
+    and the LLM. `max_commute_minutes` is an optional per-location
+    budget the scorer treats as a soft upper bound.
     """
 
     label: str
     place_id: str
     lat: float
     lng: float
+    max_commute_minutes: Optional[int] = Field(default=None, ge=5, le=240)
+
+
+class PreferenceWeight(BaseModel):
+    """One preference tag plus how important it is to the user.
+
+    `key` matches the UI tile id (e.g. 'gym', 'furnished'). `weight`
+    runs 1..5 where 5 is a hard filter and 1 is a mild bonus. Stored
+    inside `SearchProfileRow.preferences` as `{key, weight}` objects.
+    """
+
+    key: str
+    weight: int = Field(default=3, ge=1, le=5)
 
 
 class SearchProfile(BaseModel):
@@ -69,7 +83,7 @@ class SearchProfile(BaseModel):
     has_car: bool = False
     has_bike: bool = False
     mode: Literal["wg", "flat", "both"] = "wg"
-    preferences: list[str] = Field(default_factory=list)
+    preferences: list[PreferenceWeight] = Field(default_factory=list)
     rescan_interval_minutes: int = Field(default=30, ge=5, le=1440)
     schedule: Literal["one_shot", "periodic"] = "one_shot"
     updated_at: datetime = Field(default_factory=datetime.utcnow)

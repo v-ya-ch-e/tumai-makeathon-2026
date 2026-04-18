@@ -101,6 +101,21 @@ export default function OnboardingRequirements() {
       setFooter(<p className="text-[15px] text-bad">Add at least one city, university, or neighbourhood.</p>)
       return
     }
+    const bad = state.mainLocations.find(
+      (l) =>
+        l.maxCommuteMinutes !== null &&
+        (!Number.isInteger(l.maxCommuteMinutes) ||
+          l.maxCommuteMinutes < 5 ||
+          l.maxCommuteMinutes > 240),
+    )
+    if (bad) {
+      setFooter(
+        <p className="text-[15px] text-bad">
+          Ideal commute for “{bad.label}” must be between 5 and 240 minutes, or left blank.
+        </p>,
+      )
+      return
+    }
 
     const body: UpsertSearchProfileBody = {
       priceMinEur: priceMin,
@@ -195,6 +210,8 @@ export default function OnboardingRequirements() {
           />
           <p className="text-[13px] text-ink-muted">
             Pick cities, universities, or addresses. These drive how we score listings by location.
+            Add an ideal commute time (5–240 min) to each so listings farther than your budget get
+            penalised; leave blank for no preference.
           </p>
         </div>
 

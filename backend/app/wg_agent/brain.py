@@ -49,7 +49,11 @@ def _commute_block(
     main_locations: list,
 ) -> str:
     """Format travel_times into the 'Commute times' block. Empty-string on
-    empty input so the caller can drop the line entirely."""
+    empty input so the caller can drop the line entirely.
+
+    When a location carries `max_commute_minutes`, the budget is rendered
+    inline as `(max N min)` so the LLM can compare it to the fastest mode.
+    """
     if not travel_times or not main_locations:
         return ""
     lines: list[str] = []
@@ -66,7 +70,12 @@ def _commute_block(
             f"{_MODE_LABELS.get(mode, mode.lower())} {round(secs / 60)} min"
             for mode, secs in per_mode
         )
-        lines.append(f"- {loc.label} (place_id {loc.place_id}): {rendered}")
+        budget = getattr(loc, "max_commute_minutes", None)
+        header = f"- {loc.label} (place_id {loc.place_id}"
+        if isinstance(budget, int):
+            header += f", max {budget} min"
+        header += ")"
+        lines.append(f"{header}: {rendered}")
     if not lines:
         return ""
     return "\n".join(["Commute times (one-way):", *lines])
@@ -100,23 +109,37 @@ def _listing_summary(
     return "\n".join(p for p in parts if p)
 
 
+def _preferences_block(req: SearchProfile) -> str:
+    """Render weighted preferences as a single line for the prompt.
+
+    Returns empty string when the user has not picked any preferences so
+    the caller can omit the line entirely.
+    """
+    if not req.preferences:
+        return ""
+    items = ", ".join(f"{p.key} ({p.weight})" for p in req.preferences)
+    return f"Preferences (1=nice, 5=must-have): {items}"
+
+
 def _requirements_summary(req: SearchProfile) -> str:
-    return "\n".join(
-        [
-            f"City: {req.city}",
-            f"Rent: {req.min_rent_eur}–{req.max_rent_eur} €",
-            f"Size: {req.min_size_m2}–{req.max_size_m2} m²",
-            f"WG size: {req.min_wg_size}–{req.max_wg_size}",
-            f"Rent type: {req.rent_type.name}",
-            f"Move in from: {req.move_in_from or 'ASAP'}",
-            f"Move in until: {req.move_in_until or 'flexible'}",
-            f"Preferred districts: {', '.join(req.preferred_districts) or '—'}",
-            f"Avoid districts: {', '.join(req.avoid_districts) or '—'}",
-            f"Languages: {', '.join(req.languages)}",
-            f"Furnished preference: {req.furnished if req.furnished is not None else 'no preference'}",
-            f"Notes: {req.notes or '—'}",
-        ]
-    )
+    parts = [
+        f"City: {req.city}",
+        f"Rent: {req.min_rent_eur}–{req.max_rent_eur} €",
+        f"Size: {req.min_size_m2}–{req.max_size_m2} m²",
+        f"WG size: {req.min_wg_size}–{req.max_wg_size}",
+        f"Rent type: {req.rent_type.name}",
+        f"Move in from: {req.move_in_from or 'ASAP'}",
+        f"Move in until: {req.move_in_until or 'flexible'}",
+        f"Preferred districts: {', '.join(req.preferred_districts) or '—'}",
+        f"Avoid districts: {', '.join(req.avoid_districts) or '—'}",
+        f"Languages: {', '.join(req.languages)}",
+        f"Furnished preference: {req.furnished if req.furnished is not None else 'no preference'}",
+        f"Notes: {req.notes or '—'}",
+    ]
+    pref_line = _preferences_block(req)
+    if pref_line:
+        parts.append(pref_line)
+    return "\n".join(parts)
 
 
 def _profile_summary(p: ContactInfo) -> str:
@@ -154,7 +177,16 @@ LISTING:
 
 If the "Commute times" section is present, treat commutes over 40 minutes as
 strong negatives and under 20 minutes as positives. Do not invent commute
-times that aren't listed.
+times that aren't listed. When a location shows "(max N min)", treat any
+fastest-mode time above that budget as a strong negative; comfortably under
+it is a positive.
+
+If a "Preferences" line is present, each item is tagged with a 1..5 weight:
+  * weight 5 = must-have: if the listing clearly lacks it, cap the score at 0.4.
+  * weight 4 = important: missing it is a notable negative.
+  * weight 3 = neutral / nice-to-have.
+  * weight 1-2 = mild bonus when present, minor if missing.
+Do not invent features the listing does not mention.
 
 Return JSON with these keys:
   score (0..1, higher = better match),

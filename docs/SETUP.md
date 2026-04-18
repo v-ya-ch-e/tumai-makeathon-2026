@@ -70,13 +70,13 @@ Restart `uvicorn`. Alembic recreates an empty schema on the next `upgrade head`.
 
 ## Your first contribution
 
-Add a new optional preference tile to the wizard. The backend stores `SearchProfile.preferences` as `list[str]` ([`SearchProfileRow.preferences`](../backend/app/wg_agent/db_models.py)); any new string key is accepted without a migration.
+Add a new optional preference tile to the wizard. The backend stores `SearchProfile.preferences` as `list[PreferenceWeight]` ([`SearchProfileRow.preferences`](../backend/app/wg_agent/db_models.py)); any new snake_case `key` is accepted without a migration because the row stays a JSON column.
 
 1. Open [`frontend/src/pages/OnboardingPreferences.tsx`](../frontend/src/pages/OnboardingPreferences.tsx).
-2. Append one object to the `TILES` array: a unique `key` (snake_case string), a short `label`, and an SVG `path` inside the existing `Icon` wrapper (copy an existing tile’s structure).
+2. Append one tile object to the relevant section in the `GROUPS` array: a unique snake_case `key`, a short `label`, and an SVG `path` inside the existing `Icon` wrapper (copy an existing tile's structure).
 3. Save, run `npm run dev` (or `npm run build` if you test against production-like static files).
-4. Walk through onboarding again; select the new tile so it is included in `preferences` on `PUT /api/users/{username}/search-profile`.
-5. Start a hunt from the dashboard. The LLM may reference the new tag in `score_reason` / match lists when it is relevant to a listing.
+4. Walk through onboarding again; select the new tile and adjust its importance on the 1–5 slider. The `{key, weight}` pair is persisted via `PUT /api/users/{username}/search-profile`.
+5. Start a hunt from the dashboard. The LLM sees the tile's key and weight in the `Preferences` line of the scoring prompt and may reference it in `score_reason` / match lists.
 
 No Python changes are required for this path.
 

@@ -7,7 +7,15 @@ from typing import Literal, Optional
 
 from pydantic import BaseModel, EmailStr, Field, model_validator
 
-from .models import AgentAction, Hunt, Listing, PlaceLocation, SearchProfile, UserProfile
+from .models import (
+    AgentAction,
+    Hunt,
+    Listing,
+    PlaceLocation,
+    PreferenceWeight,
+    SearchProfile,
+    UserProfile,
+)
 
 
 class UserDTO(BaseModel):
@@ -32,7 +40,7 @@ class SearchProfileDTO(BaseModel):
     mode: Literal["wg", "flat", "both"]
     move_in_from: Optional[date] = None
     move_in_until: Optional[date] = None
-    preferences: list[str]
+    preferences: list[PreferenceWeight]
     rescan_interval_minutes: int
     schedule: Literal["one_shot", "periodic"]
     updated_at: datetime
@@ -47,7 +55,7 @@ class UpsertSearchProfileBody(BaseModel):
     mode: Literal["wg", "flat", "both"] = "wg"
     move_in_from: Optional[date] = None
     move_in_until: Optional[date] = None
-    preferences: list[str] = Field(default_factory=list)
+    preferences: list[PreferenceWeight] = Field(default_factory=list)
     rescan_interval_minutes: int = Field(30, ge=5, le=1440)
     schedule: Literal["one_shot", "periodic"] = "one_shot"
 
@@ -166,7 +174,7 @@ def upsert_body_to_search_profile(b: UpsertSearchProfileBody) -> SearchProfile:
         mode=b.mode,
         move_in_from=b.move_in_from,
         move_in_until=b.move_in_until,
-        preferences=list(b.preferences),
+        preferences=[PreferenceWeight.model_validate(p) for p in b.preferences],
         rescan_interval_minutes=b.rescan_interval_minutes,
         schedule=b.schedule,
         updated_at=datetime.utcnow(),

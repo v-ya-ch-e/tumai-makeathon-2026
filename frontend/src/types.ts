@@ -16,6 +16,12 @@ export type PlaceLocation = {
   placeId: string
   lat: number
   lng: number
+  maxCommuteMinutes: number | null
+}
+
+export type PreferenceWeight = {
+  key: string
+  weight: number
 }
 
 export type SearchProfile = {
@@ -27,7 +33,7 @@ export type SearchProfile = {
   mode: Mode
   moveInFrom: string | null
   moveInUntil: string | null
-  preferences: string[]
+  preferences: PreferenceWeight[]
   rescanIntervalMinutes: number
   schedule: Schedule
   updatedAt: string

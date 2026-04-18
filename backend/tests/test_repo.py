@@ -24,6 +24,7 @@ from app.wg_agent.models import (  # noqa: E402
     HuntStatus,
     Listing,
     PlaceLocation,
+    PreferenceWeight,
     SearchProfile,
     UserProfile,
     WGCredentials,
@@ -43,7 +44,11 @@ def test_repo_round_trip() -> None:
         assert repo.get_user(session, username="lea") == u
 
         sendling = PlaceLocation(
-            label="Sendling, München", place_id="ChIJsendling", lat=48.116, lng=11.548
+            label="Sendling, München",
+            place_id="ChIJsendling",
+            lat=48.116,
+            lng=11.548,
+            max_commute_minutes=25,
         )
         laim = PlaceLocation(
             label="Laim, München", place_id="ChIJlaim", lat=48.143, lng=11.503
@@ -57,7 +62,10 @@ def test_repo_round_trip() -> None:
             has_car=True,
             has_bike=False,
             mode="flat",
-            preferences=["park", "gym"],
+            preferences=[
+                PreferenceWeight(key="park", weight=5),
+                PreferenceWeight(key="gym", weight=2),
+            ],
             rescan_interval_minutes=60,
             schedule="periodic",
             updated_at=datetime(2024, 1, 2, 3, 4, 5),
@@ -68,11 +76,16 @@ def test_repo_round_trip() -> None:
         assert out.main_locations == [sendling, laim]
         assert out.main_locations[0].place_id == "ChIJsendling"
         assert out.main_locations[0].lat == 48.116
+        assert out.main_locations[0].max_commute_minutes == 25
         assert out.main_locations[1].lng == 11.503
+        assert out.main_locations[1].max_commute_minutes is None
         assert out.has_car is True
         assert out.has_bike is False
         assert out.mode == "flat"
-        assert out.preferences == ["park", "gym"]
+        assert out.preferences == [
+            PreferenceWeight(key="park", weight=5),
+            PreferenceWeight(key="gym", weight=2),
+        ]
         assert out.rescan_interval_minutes == 60
         assert out.schedule == "periodic"
 
@@ -155,3 +168,31 @@ def test_repo_round_trip() -> None:
 
         repo.delete_credentials(session, username="lea")
         assert repo.credentials_status(session, username="lea") == (False, None)
+
+
+def test_repo_tolerates_legacy_preference_strings() -> None:
+    """Legacy rows (pre-0005 dev DBs) could store bare strings in preferences.
+    `repo.get_search_profile` must parse those as weight-3 PreferenceWeights
+    instead of raising, so dev databases don't need manual migration."""
+    engine = create_engine(
+        "sqlite://",
+        connect_args={"check_same_thread": False},
+    )
+    SQLModel.metadata.create_all(engine)
+
+    with Session(engine) as session:
+        repo.create_user(
+            session,
+            profile=UserProfile(username="legacy", age=25, gender=Gender.diverse),
+        )
+        row = db_models.SearchProfileRow(username="legacy")
+        row.preferences = ["park", {"key": "gym", "weight": 4}, 123, {"bad": True}]
+        session.add(row)
+        session.commit()
+
+        out = repo.get_search_profile(session, username="legacy")
+        assert out is not None
+        assert out.preferences == [
+            PreferenceWeight(key="park", weight=3),
+            PreferenceWeight(key="gym", weight=4),
+        ]

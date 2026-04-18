@@ -40,13 +40,13 @@ One-to-one requirements/preferences schedule slice persisted for the wizard. Map
 | `username` | `str` | PK + FK → `userrow.username`. |
 | `price_min_eur` | `int` | Lower rent bound. |
 | `price_max_eur` | `Optional[int]` | Upper bound; `None` triggers defaults in repo when building `SearchProfile`. |
-| `main_locations` | `JSON` / `list[PlaceLocation]` | User-picked places from Google Places Autocomplete. Each element is `{label, place_id, lat, lng}`; the first entry's `label` seeds `SearchProfile.city` for the wg-gesucht search URL builder. `lat`/`lng` are reserved for future commute-based scoring. |
+| `main_locations` | `JSON` / `list[PlaceLocation]` | User-picked places from Google Places Autocomplete. Each element is `{label, place_id, lat, lng, max_commute_minutes}`; the first entry's `label` seeds `SearchProfile.city` for the wg-gesucht search URL builder. `lat`/`lng` feed commute-based scoring. `max_commute_minutes` (5–240, nullable) is a per-location soft upper bound the LLM compares against the fastest mode. |
 | `has_car` | `bool` | Commute / POI hint. |
 | `has_bike` | `bool` | Same. |
 | `mode` | `str` | `"wg"`, `"flat"`, or `"both"`. |
 | `move_in_from` | `Optional[date]` | |
 | `move_in_until` | `Optional[date]` | |
-| `preferences` | `JSON` / `list[str]` | Arbitrary string tags from the UI (e.g. `gym`, `park`). |
+| `preferences` | `JSON` / `list[PreferenceWeight]` | Weighted preference tags from the UI. Each element is `{key, weight}` where `key` is a snake_case tag (e.g. `gym`, `furnished`) and `weight` is 1–5 (5 = must-have). `repo.get_search_profile` tolerates legacy bare-string elements by promoting them to `weight=3`. |
 | `rescan_interval_minutes` | `int` | Used when spawning hunts and periodic loops. |
 | `schedule` | `str` | `"one_shot"` or `"periodic"`. |
 | `updated_at` | `datetime` | Bumped on upsert. |
@@ -239,13 +239,15 @@ Values below are illustrative; timestamps are ISO-8601 strings as JSON would sho
       "label": "Technische Universität München, Arcisstraße 21",
       "place_id": "ChIJ2V-Mo_l1nkcRfZixfUq4DAE",
       "lat": 48.1497,
-      "lng": 11.5679
+      "lng": 11.5679,
+      "max_commute_minutes": 25
     },
     {
       "label": "Sendling, München",
       "place_id": "ChIJsendlingPlaceId",
       "lat": 48.1168,
-      "lng": 11.5483
+      "lng": 11.5483,
+      "max_commute_minutes": null
     }
   ],
   "has_car": true,
@@ -253,7 +255,10 @@ Values below are illustrative; timestamps are ISO-8601 strings as JSON would sho
   "mode": "flat",
   "move_in_from": null,
   "move_in_until": null,
-  "preferences": ["park", "gym"],
+  "preferences": [
+    { "key": "park", "weight": 5 },
+    { "key": "gym", "weight": 2 }
+  ],
   "rescan_interval_minutes": 60,
   "schedule": "periodic",
   "updated_at": "2024-01-02T03:04:05"
