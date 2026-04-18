@@ -113,6 +113,7 @@ export default function Profile() {
                 current="/profile"
                 tabs={[
                   { label: 'Dashboard', href: '/dashboard' },
+                  { label: 'Timeline', href: '/timeline' },
                   { label: 'Profile', href: '/profile' },
                 ]}
               />

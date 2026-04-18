@@ -1,6 +1,6 @@
 import { useEffect, useMemo, useState } from 'react'
 import { Navigate } from 'react-router-dom'
-import { AppNav } from '../components/AppNav'
+import { AppTabs } from '../components/AppTabs'
 import { Card, Chip, StatusPill, type StatusPillTone } from '../components/ui'
 import { ApiError, getTimelineItems } from '../lib/api'
 import { useSession } from '../lib/session'
@@ -29,7 +29,7 @@ function daysUntil(isoDate: string): number {
 }
 
 function formatTimelineDate(isoDate: string): string {
-  return new Intl.DateTimeFormat('en-GB', {
+  return new Intl.DateTimeFormat([], {
     day: 'numeric',
     month: 'short',
     year: 'numeric',
@@ -87,9 +87,9 @@ export default function TimelinePage() {
         if (!cancelled) {
           setAllItems(items)
         }
-      } catch (err) {
+      } catch (error) {
         if (!cancelled) {
-          setErrorMessage(err instanceof ApiError ? err.message : String(err))
+          setErrorMessage(error instanceof ApiError ? error.message : String(error))
         }
       }
     })()
@@ -109,9 +109,9 @@ export default function TimelinePage() {
           setVisibleItems(items)
           setErrorMessage(null)
         }
-      } catch (err) {
+      } catch (error) {
         if (!cancelled) {
-          setErrorMessage(err instanceof ApiError ? err.message : String(err))
+          setErrorMessage(error instanceof ApiError ? error.message : String(error))
           setVisibleItems([])
         }
       } finally {
@@ -151,118 +151,132 @@ export default function TimelinePage() {
   }
 
   return (
-    <div className="min-h-screen bg-canvas">
-      <header className="border-b border-hairline bg-surface">
-        <div className="mx-auto max-w-6xl px-12 py-6">
-          <div className="space-y-1">
-            <h1 className="font-sans text-[22px] font-semibold tracking-tight text-ink">
-              Student timeline
-            </h1>
-            <p className="text-[14px] text-ink-muted">
-              One place for deadlines, registrations, and campus events.
-            </p>
-          </div>
-          <div className="mt-4">
-            <AppNav />
-          </div>
-          {errorMessage ? (
-            <div className="pt-4 text-[13px] text-bad">{errorMessage}</div>
-          ) : null}
-        </div>
-      </header>
-
-      <main className="mx-auto max-w-6xl space-y-8 px-12 py-12">
-        <section className="grid gap-4 md:grid-cols-3">
-          <Card className="space-y-2">
-            <p className="text-[13px] uppercase tracking-[0.16em] text-ink-muted">Urgent now</p>
-            <p className="font-sans text-[32px] font-semibold tracking-tight text-ink">
-              {summary.urgentNow}
-            </p>
-            <p className="text-[14px] text-ink-muted">Items that need attention immediately.</p>
-          </Card>
-          <Card className="space-y-2">
-            <p className="text-[13px] uppercase tracking-[0.16em] text-ink-muted">This week</p>
-            <p className="font-sans text-[32px] font-semibold tracking-tight text-ink">
-              {summary.thisWeek}
-            </p>
-            <p className="text-[14px] text-ink-muted">Everything landing in the next seven days.</p>
-          </Card>
-          <Card className="space-y-2">
-            <p className="text-[13px] uppercase tracking-[0.16em] text-ink-muted">Sports openings</p>
-            <p className="font-sans text-[32px] font-semibold tracking-tight text-ink">
-              {summary.sportsOpenings}
-            </p>
-            <p className="text-[14px] text-ink-muted">ZHS items worth checking this week.</p>
-          </Card>
-        </section>
-
-        <section className="space-y-4">
-          <div className="flex flex-wrap gap-2">
-            {FILTERS.map((filter) => (
-              <Chip
-                key={filter.value}
-                selected={activeFilter === filter.value}
-                onToggle={() => setActiveFilter(filter.value)}
-              >
-                {filter.label}
-              </Chip>
-            ))}
+    <div className="relative min-h-screen overflow-hidden bg-canvas">
+      <div className="relative mx-auto max-w-7xl px-5 py-5 sm:px-8 lg:px-10">
+        <section className="overflow-hidden rounded-[34px] border border-hairline/80 bg-surface/95 shadow-[0_30px_80px_rgba(15,23,42,0.08)]">
+          <div className="grid gap-6 border-b border-hairline/80 px-6 py-6 lg:grid-cols-[minmax(0,1.2fr)_auto] lg:px-8 xl:px-10">
+            <div>
+              <p className="font-mono text-[12px] uppercase tracking-[0.28em] text-accent">Timeline hub</p>
+              <h1 className="mt-3 text-[30px] font-semibold tracking-[-0.035em] text-ink sm:text-[38px]">
+                Student timeline
+              </h1>
+              <p className="mt-3 max-w-2xl text-[15px] leading-7 text-ink-muted">
+                Track deadlines, registrations, course sessions, and campus events in one place.
+              </p>
+            </div>
+            <div className="flex items-start justify-start lg:justify-end">
+              <AppTabs
+                current="/timeline"
+                tabs={[
+                  { label: 'Dashboard', href: '/dashboard' },
+                  { label: 'Timeline', href: '/timeline' },
+                  { label: 'Profile', href: '/profile' },
+                ]}
+              />
+            </div>
           </div>
 
-          {loading ? (
-            <Card>
-              <p className="text-[15px] text-ink-muted">Loading timeline…</p>
-            </Card>
-          ) : visibleItems.length === 0 ? (
-            <Card>
-              <p className="text-[15px] text-ink-muted">No timeline items for this filter.</p>
-            </Card>
-          ) : (
-            <div className="space-y-4">
-              {visibleItems.map((item) => (
-                <Card key={`${item.source}-${item.title}-${item.date}`} className="space-y-4">
-                  <div className="flex flex-col gap-3 sm:flex-row sm:items-start sm:justify-between">
-                    <div className="space-y-2">
-                      <div className="flex flex-wrap items-center gap-2">
-                        <StatusPill tone={urgencyTone(item.urgency)}>
-                          {urgencyLabel(item.urgency)}
-                        </StatusPill>
-                        <span className="inline-flex h-7 items-center rounded-full border border-hairline px-3 text-[13px] text-ink-muted">
-                          {categoryLabel(item.category)}
-                        </span>
-                      </div>
-                      <h2 className="font-sans text-[20px] font-semibold tracking-tight text-ink">
-                        {item.title}
-                      </h2>
-                    </div>
-                    <div className="space-y-1 text-left sm:text-right">
-                      <p className="text-[13px] uppercase tracking-[0.16em] text-ink-muted">
-                        Date/time
-                      </p>
-                      <p className="text-[15px] font-medium text-ink">{formatTimelineDate(item.date)}</p>
-                    </div>
-                  </div>
+          <div className="grid gap-4 px-6 py-6 sm:grid-cols-2 xl:grid-cols-3 xl:px-10">
+            <SummaryCard
+              label="Urgent now"
+              value={String(summary.urgentNow)}
+              note="Items that need attention immediately."
+            />
+            <SummaryCard
+              label="This week"
+              value={String(summary.thisWeek)}
+              note="Everything landing in the next seven days."
+            />
+            <SummaryCard
+              label="Sports openings"
+              value={String(summary.sportsOpenings)}
+              note="ZHS items worth checking this week."
+            />
+          </div>
 
-                  <div className="grid gap-4 border-t border-hairline pt-4 sm:grid-cols-2 lg:grid-cols-3">
-                    <div>
-                      <p className="text-[13px] uppercase tracking-[0.16em] text-ink-muted">Source</p>
-                      <p className="mt-1 text-[15px] text-ink">{item.source}</p>
-                    </div>
-                    <div>
-                      <p className="text-[13px] uppercase tracking-[0.16em] text-ink-muted">Category</p>
-                      <p className="mt-1 text-[15px] text-ink">{categoryLabel(item.category)}</p>
-                    </div>
-                    <div>
-                      <p className="text-[13px] uppercase tracking-[0.16em] text-ink-muted">Action</p>
-                      <p className="mt-1 text-[15px] text-ink">{actionText(item)}</p>
-                    </div>
-                  </div>
-                </Card>
+          <div className="border-t border-hairline/80 px-6 py-6 lg:px-8 xl:px-10">
+            <div className="flex flex-wrap gap-2">
+              {FILTERS.map((filter) => (
+                <Chip
+                  key={filter.value}
+                  selected={activeFilter === filter.value}
+                  onToggle={() => setActiveFilter(filter.value)}
+                >
+                  {filter.label}
+                </Chip>
               ))}
             </div>
-          )}
+
+            {errorMessage ? (
+              <p className="mt-4 rounded-2xl border border-bad/30 bg-bad/5 px-4 py-3 text-[13px] text-bad">
+                {errorMessage}
+              </p>
+            ) : null}
+
+            <div className="mt-6 space-y-4">
+              {loading ? (
+                <Card className="rounded-[28px] p-6">
+                  <p className="text-[15px] text-ink-muted">Loading timeline…</p>
+                </Card>
+              ) : visibleItems.length === 0 ? (
+                <Card className="rounded-[28px] p-6">
+                  <p className="text-[15px] text-ink-muted">No timeline items for this filter.</p>
+                </Card>
+              ) : (
+                visibleItems.map((item) => (
+                  <Card
+                    key={`${item.source}-${item.title}-${item.date}`}
+                    className="rounded-[28px] border-hairline/80 bg-surface-raised/85 p-6"
+                  >
+                    <div className="flex flex-col gap-4 lg:flex-row lg:items-start lg:justify-between">
+                      <div className="space-y-3">
+                        <div className="flex flex-wrap items-center gap-2">
+                          <StatusPill tone={urgencyTone(item.urgency)}>
+                            {urgencyLabel(item.urgency)}
+                          </StatusPill>
+                          <Chip selected onToggle={() => undefined} className="pointer-events-none">
+                            {categoryLabel(item.category)}
+                          </Chip>
+                        </div>
+                        <h2 className="text-[24px] font-semibold tracking-[-0.03em] text-ink">
+                          {item.title}
+                        </h2>
+                        <p className="max-w-2xl text-[15px] leading-7 text-ink-muted">
+                          {actionText(item)}
+                        </p>
+                      </div>
+                      <div className="min-w-[180px] rounded-[22px] border border-hairline/80 bg-surface px-4 py-4">
+                        <p className="text-[12px] uppercase tracking-[0.16em] text-ink-muted">Date / time</p>
+                        <p className="mt-2 text-[16px] font-semibold text-ink">{formatTimelineDate(item.date)}</p>
+                        <p className="mt-3 text-[12px] uppercase tracking-[0.16em] text-ink-muted">Source</p>
+                        <p className="mt-2 text-[15px] text-ink">{item.source}</p>
+                      </div>
+                    </div>
+                  </Card>
+                ))
+              )}
+            </div>
+          </div>
         </section>
-      </main>
+      </div>
+    </div>
+  )
+}
+
+function SummaryCard({
+  label,
+  value,
+  note,
+}: {
+  label: string
+  value: string
+  note: string
+}) {
+  return (
+    <div className="rounded-[24px] border border-hairline/80 bg-surface-raised/90 px-5 py-5 shadow-[0_16px_32px_rgba(39,33,29,0.04)]">
+      <p className="text-[12px] uppercase tracking-[0.16em] text-ink-muted">{label}</p>
+      <p className="mt-3 text-[28px] font-semibold tracking-[-0.03em] text-ink">{value}</p>
+      <p className="mt-1 text-[13px] text-ink-muted">{note}</p>
     </div>
   )
 }

@@ -3,7 +3,7 @@ from contextlib import asynccontextmanager
 from pathlib import Path
 
 from fastapi import FastAPI, HTTPException
-from fastapi.responses import FileResponse, HTMLResponse, Response
+from fastapi.responses import FileResponse
 from fastapi.staticfiles import StaticFiles
 
 from .deadline_agent.api import router as deadline_router
@@ -58,21 +58,13 @@ if (FRONTEND_DIST / "assets").is_dir():
 
 
 @app.get("/{full_path:path}", include_in_schema=False)
-def spa_fallback(full_path: str) -> Response:
+def spa_fallback(full_path: str) -> FileResponse:
     if full_path.startswith(("api/", "assets/")):
         raise HTTPException(status_code=404, detail="Not Found")
     index_file = FRONTEND_DIST / "index.html"
     if not index_file.is_file():
-        return HTMLResponse(
-            content=(
-                "<h1>Frontend build missing</h1>"
-                "<p>The backend is running, but <code>frontend/dist/index.html</code> "
-                "was not found.</p>"
-                "<p>Build the frontend with <code>npm run build</code> in "
-                "<code>frontend/</code> if you want the SPA served here.</p>"
-                "<p>Backend APIs are still available under <code>/api/*</code> "
-                "and docs remain available at <code>/docs</code>.</p>"
-            ),
-            status_code=200,
+        raise HTTPException(
+            status_code=503,
+            detail="frontend/dist/index.html not found — run `npm run build` in frontend/",
         )
     return FileResponse(str(index_file))

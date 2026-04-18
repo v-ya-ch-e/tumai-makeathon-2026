@@ -1,11 +1,7 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { useLocation, useNavigate } from 'react-router-dom'
 import { ActionLog } from '../components/ActionLog'
-<<<<<<< Updated upstream
 import { AppTabs } from '../components/AppTabs'
-=======
-import { AppNav } from '../components/AppNav'
->>>>>>> Stashed changes
 import { ConnectWGDialog } from '../components/ConnectWGDialog'
 import { ListingDrawer } from '../components/ListingDrawer'
 import { ListingList } from '../components/ListingList'
@@ -35,13 +31,8 @@ function statusPillTone(status: UiStatus): StatusPillTone {
 
 function statusLabel(status: UiStatus): string {
   if (status === 'running') return 'Running'
-<<<<<<< Updated upstream
   if (status === 'starting') return 'Starting'
   if (status === 'stopping') return 'Stopping'
-=======
-  if (status === 'starting') return 'StartingвЂ¦'
-  if (status === 'stopping') return 'StoppingвЂ¦'
->>>>>>> Stashed changes
   if (status === 'error') return 'Error'
   return 'Idle'
 }
@@ -305,7 +296,7 @@ export default function Dashboard() {
   if (!isReady || profile === null) {
     return (
       <div className="flex min-h-screen items-center justify-center bg-canvas font-sans text-[15px] text-ink-muted">
-        LoadingвЂ¦
+        Loading…
       </div>
     )
   }
@@ -322,7 +313,6 @@ export default function Dashboard() {
   ]
 
   return (
-<<<<<<< Updated upstream
     <div className="relative min-h-screen overflow-hidden bg-canvas">
       <div className="relative mx-auto max-w-7xl px-5 py-5 sm:px-8 lg:px-10">
         <section className="overflow-hidden rounded-[34px] border border-hairline/80 bg-surface/95 shadow-[0_30px_80px_rgba(15,23,42,0.08)]">
@@ -371,6 +361,7 @@ export default function Dashboard() {
                   current="/dashboard"
                   tabs={[
                     { label: 'Dashboard', href: '/dashboard' },
+                    { label: 'Timeline', href: '/timeline' },
                     { label: 'Profile', href: '/profile' },
                   ]}
                 />
@@ -431,63 +422,6 @@ export default function Dashboard() {
                 </p>
               ) : null}
             </Card>
-=======
-    <div className="min-h-screen bg-canvas">
-      <header className="border-b border-hairline bg-surface">
-        <div className="mx-auto max-w-6xl px-12 py-6">
-          <div className="flex items-center justify-between gap-6">
-            <div className="flex items-center gap-4">
-              <h1 className="font-sans text-[22px] font-semibold tracking-tight text-ink">
-                {username}'s hunt
-              </h1>
-              <StatusPill tone={statusPillTone(uiStatus)}>{statusLabel(uiStatus)}</StatusPill>
-            </div>
-            <div className="flex items-center gap-3">
-              <Button variant="secondary" size="sm" onClick={() => setDialogOpen(true)}>
-                {connected ? 'wg-gesucht connected' : 'Connect wg-gesucht'}
-              </Button>
-              {isActive ? (
-                <Button variant="destructive" onClick={() => void onStop()} disabled={isStopping}>
-                  {isStopping ? 'StoppingвЂ¦' : 'Stop agent'}
-                </Button>
-              ) : (
-                <Button variant="primary" onClick={() => void onStart()} disabled={isStarting}>
-                  {isStarting ? 'StartingвЂ¦' : 'Start agent'}
-                </Button>
-              )}
-            </div>
-          </div>
-          <div className="mt-4">
-            <AppNav />
-          </div>
-        </div>
-        {errorMessage ? (
-          <div className="mx-auto max-w-6xl px-12 pb-4 text-[13px] text-bad">{errorMessage}</div>
-        ) : null}
-      </header>
-
-      <main className="mx-auto max-w-6xl px-12 py-12">
-        {hunt === null ? (
-          <p className="text-[15px] text-ink-muted">
-            Press Start agent to begin scanning wg-gesucht for listings that match your search profile.
-          </p>
-        ) : (
-          <div className="grid gap-8 lg:grid-cols-[minmax(0,1fr)_minmax(0,1.4fr)]">
-            <section className="space-y-4">
-              <header className="flex items-baseline justify-between border-b border-hairline pb-2">
-                <h2 className="text-[15px] font-semibold text-ink">Agent log</h2>
-                <p className="font-mono text-[12px] text-ink-muted">Hunt {hunt.id}</p>
-              </header>
-              <ActionLog actions={actions} />
-            </section>
-            <section className="space-y-4">
-              <header className="flex items-baseline justify-between border-b border-hairline pb-2">
-                <h2 className="text-[15px] font-semibold text-ink">Listings</h2>
-                <p className="font-mono text-[12px] text-ink-muted">{listings.length} total</p>
-              </header>
-              <ListingList listings={listings} onOpen={(l) => setOpenListing(l)} />
-            </section>
->>>>>>> Stashed changes
           </div>
 
           <div className="grid gap-4 px-6 py-6 sm:grid-cols-2 xl:grid-cols-4 xl:px-10">
