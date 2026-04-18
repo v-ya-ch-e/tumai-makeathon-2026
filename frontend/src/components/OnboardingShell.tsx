@@ -37,11 +37,6 @@ export function OnboardingShell({
 
   return (
     <div className="relative min-h-screen overflow-hidden bg-canvas">
-      <div className="pointer-events-none absolute inset-0">
-        <div className="absolute left-[-8rem] top-16 h-56 w-56 rounded-full border border-accent/10" />
-        <div className="absolute right-10 top-24 h-32 w-32 rounded-full border border-good/15" />
-        <div className="absolute bottom-10 left-1/3 h-24 w-24 rounded-full border border-accent/10" />
-      </div>
       <div className="relative mx-auto max-w-7xl px-5 py-5 sm:px-8 lg:px-10">
         {showProgress ? (
           <div className="mb-8 flex items-center justify-between gap-4 rounded-[24px] border border-hairline/80 bg-surface/90 px-5 py-4 shadow-[0_18px_38px_rgba(39,33,29,0.05)]">

@@ -121,6 +121,7 @@ class ListingDTO(BaseModel):
     available_to: Optional[date] = None
     description: Optional[str] = None
     cover_photo_url: Optional[str] = None
+    best_commute_minutes: Optional[int] = None
     score: Optional[float] = None
     score_reason: Optional[str] = None
     match_reasons: list[str] = Field(default_factory=list)
@@ -233,6 +234,7 @@ def listing_to_dto(l: Listing, hunt_id: str) -> ListingDTO:
         available_to=l.available_to,
         description=l.description,
         cover_photo_url=l.cover_photo_url,
+        best_commute_minutes=l.best_commute_minutes,
         score=l.score,
         score_reason=l.score_reason,
         match_reasons=list(l.match_reasons),

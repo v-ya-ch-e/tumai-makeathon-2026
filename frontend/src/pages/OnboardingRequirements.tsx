@@ -9,7 +9,6 @@ import { useSession } from '../lib/session'
 import type { Mode, PlaceLocation, Schedule, UpsertSearchProfileBody } from '../types'
 
 type LocalState = {
-  priceMin: string
   priceMax: string
   mainLocations: PlaceLocation[]
   hasCar: boolean
@@ -26,15 +25,15 @@ type ValidationErrors = {
   locations?: string
   commute?: string
   rescanInterval?: string
+  moveInWindow?: string
 }
 
 const DEFAULT_STATE: LocalState = {
-  priceMin: '400',
   priceMax: '900',
   mainLocations: [],
   hasCar: false,
   hasBike: true,
-  mode: 'wg',
+  mode: 'both',
   moveInFrom: '',
   moveInUntil: '',
   schedule: 'periodic',
@@ -42,9 +41,9 @@ const DEFAULT_STATE: LocalState = {
 }
 
 const BUDGET_PRESETS = [
-  { label: 'Lean', min: '350', max: '700' },
-  { label: 'Balanced', min: '500', max: '950' },
-  { label: 'Flexible', min: '700', max: '1400' },
+  { label: 'Lean', max: '700' },
+  { label: 'Balanced', max: '950' },
+  { label: 'Flexible', max: '1400' },
 ]
 
 export default function OnboardingRequirements() {
@@ -71,7 +70,6 @@ export default function OnboardingRequirements() {
           return
         }
         setState({
-          priceMin: String(sp.priceMinEur),
           priceMax: sp.priceMaxEur !== null ? String(sp.priceMaxEur) : '',
           mainLocations: sp.mainLocations,
           hasCar: sp.hasCar,
@@ -92,20 +90,16 @@ export default function OnboardingRequirements() {
   }, [isReady, username, navigate])
 
   const priceSummary = useMemo(() => {
-    const min = state.priceMin || '0'
     const max = state.priceMax || 'flexible'
-    return `${min}€ – ${max === 'flexible' ? max : `${max}€`}`
-  }, [state.priceMin, state.priceMax])
+    return max === 'flexible' ? 'Flexible budget cap' : `Up to ${max}€`
+  }, [state.priceMax])
 
   const validate = (): ValidationErrors => {
     const nextErrors: ValidationErrors = {}
-    const priceMin = Number(state.priceMin)
     const priceMax = state.priceMax === '' ? null : Number(state.priceMax)
 
-    if (!Number.isFinite(priceMin) || priceMin < 0) {
-      nextErrors.price = 'Minimum price must be a non-negative number.'
-    } else if (priceMax !== null && (!Number.isFinite(priceMax) || priceMax < priceMin)) {
-      nextErrors.price = 'Maximum price must be at least as large as the minimum.'
+    if (priceMax !== null && (!Number.isFinite(priceMax) || priceMax < 0)) {
+      nextErrors.price = 'Maximum price must be a non-negative number.'
     }
 
     const rescan = Number(state.rescanIntervalMinutes)
@@ -128,6 +122,10 @@ export default function OnboardingRequirements() {
       nextErrors.commute = `Ideal commute for “${bad.label}” must stay between 5 and 240 minutes, or be left blank.`
     }
 
+    if (state.moveInFrom && state.moveInUntil && state.moveInUntil < state.moveInFrom) {
+      nextErrors.moveInWindow = 'Latest move-in date must be on or after the earliest date.'
+    }
+
     return nextErrors
   }
 
@@ -142,7 +140,7 @@ export default function OnboardingRequirements() {
     }
 
     const body: UpsertSearchProfileBody = {
-      priceMinEur: Number(state.priceMin),
+      priceMinEur: 0,
       priceMaxEur: state.priceMax === '' ? null : Number(state.priceMax),
       mainLocations: state.mainLocations,
       hasCar: state.hasCar,
@@ -217,7 +215,7 @@ export default function OnboardingRequirements() {
                 key={preset.label}
                 type="button"
                 onClick={() => {
-                  setState((prev) => ({ ...prev, priceMin: preset.min, priceMax: preset.max }))
+                  setState((prev) => ({ ...prev, priceMax: preset.max }))
                   setErrors((prev) => ({ ...prev, price: undefined }))
                 }}
                 className="rounded-full border border-hairline bg-surface px-3 py-1.5 text-[13px] text-ink transition-colors hover:bg-surface-raised"
@@ -226,42 +224,23 @@ export default function OnboardingRequirements() {
               </button>
             ))}
           </div>
-          <div className="mt-4 grid gap-4 sm:grid-cols-2">
-            <div className="space-y-2">
-              <label htmlFor="req-price-min" className="block text-[13px] text-ink-muted">
-                Minimum monthly rent
-              </label>
-              <Input
-                id="req-price-min"
-                type="number"
-                inputMode="numeric"
-                min={0}
-                max={5000}
-                value={state.priceMin}
-                onChange={(e) => {
-                  setState({ ...state, priceMin: e.target.value })
-                  if (errors.price) setErrors((prev) => ({ ...prev, price: undefined }))
-                }}
-              />
-            </div>
-            <div className="space-y-2">
-              <label htmlFor="req-price-max" className="block text-[13px] text-ink-muted">
-                Maximum monthly rent
-              </label>
-              <Input
-                id="req-price-max"
-                type="number"
-                inputMode="numeric"
-                min={0}
-                max={5000}
-                value={state.priceMax}
-                onChange={(e) => {
-                  setState({ ...state, priceMax: e.target.value })
-                  if (errors.price) setErrors((prev) => ({ ...prev, price: undefined }))
-                }}
-                placeholder="Leave blank if flexible"
-              />
-            </div>
+          <div className="mt-4 max-w-sm space-y-2">
+            <label htmlFor="req-price-max" className="block text-[13px] text-ink-muted">
+              Highest monthly rent you would still accept
+            </label>
+            <Input
+              id="req-price-max"
+              type="number"
+              inputMode="numeric"
+              min={0}
+              max={5000}
+              value={state.priceMax}
+              onChange={(e) => {
+                setState({ ...state, priceMax: e.target.value })
+                if (errors.price) setErrors((prev) => ({ ...prev, price: undefined }))
+              }}
+              placeholder="Leave blank if flexible"
+            />
           </div>
         </SectionCard>
 
@@ -279,23 +258,26 @@ export default function OnboardingRequirements() {
             }}
           />
           <p className="mt-3 text-[13px] leading-6 text-ink-muted">
-            Add an ideal commute time to each location. Listings that overshoot your limit get penalized automatically.
+            Set the longest commute you would still tolerate for each place. Five minutes is amazing; this number is your upper comfort limit.
           </p>
         </SectionCard>
 
         <div className="grid gap-6 lg:grid-cols-2">
-          <SectionCard title="Mobility" hint="Turn on every transport mode you realistically use." compact>
+          <SectionCard title="Mobility" hint="Tell the agent which modes you can actually use for day-to-day commuting." compact>
             <div className="flex flex-wrap gap-2">
               <Chip selected={state.hasBike} onToggle={() => setState({ ...state, hasBike: !state.hasBike })}>
-                Bike
+                I can bike
               </Chip>
               <Chip selected={state.hasCar} onToggle={() => setState({ ...state, hasCar: !state.hasCar })}>
-                Car
+                I can drive
               </Chip>
             </div>
+            <p className="mt-3 text-[13px] leading-6 text-ink-muted">
+              Transit is always considered. Turn these on only if you would genuinely use them when commuting.
+            </p>
           </SectionCard>
 
-          <SectionCard title="Listing type" hint="Keep the search focused on the kind of place you would actually take." compact>
+          <SectionCard title="Listing type" hint="Either is the best default unless you already know you only want one format." compact>
             <div className="flex flex-wrap gap-2">
               <Chip selected={state.mode === 'wg'} onToggle={() => setState({ ...state, mode: 'wg' })}>
                 WG room
@@ -310,7 +292,12 @@ export default function OnboardingRequirements() {
           </SectionCard>
         </div>
 
-        <SectionCard title="Move-in window" hint="Optional, but helpful if your timing is non-negotiable." compact>
+        <SectionCard
+          title="Move-in window"
+          hint={errors.moveInWindow ?? 'Optional, but helpful if your timing is non-negotiable.'}
+          tone={errors.moveInWindow ? 'bad' : 'default'}
+          compact
+        >
           <div className="grid gap-4 sm:grid-cols-2">
             <div className="space-y-2">
               <label htmlFor="req-move-from" className="block text-[13px] text-ink-muted">
@@ -320,7 +307,13 @@ export default function OnboardingRequirements() {
                 id="req-move-from"
                 type="date"
                 value={state.moveInFrom}
-                onChange={(e) => setState({ ...state, moveInFrom: e.target.value })}
+                max={state.moveInUntil || undefined}
+                onChange={(e) => {
+                  setState({ ...state, moveInFrom: e.target.value })
+                  if (errors.moveInWindow) {
+                    setErrors((prev) => ({ ...prev, moveInWindow: undefined }))
+                  }
+                }}
               />
             </div>
             <div className="space-y-2">
@@ -331,7 +324,13 @@ export default function OnboardingRequirements() {
                 id="req-move-until"
                 type="date"
                 value={state.moveInUntil}
-                onChange={(e) => setState({ ...state, moveInUntil: e.target.value })}
+                min={state.moveInFrom || undefined}
+                onChange={(e) => {
+                  setState({ ...state, moveInUntil: e.target.value })
+                  if (errors.moveInWindow) {
+                    setErrors((prev) => ({ ...prev, moveInWindow: undefined }))
+                  }
+                }}
               />
             </div>
           </div>

@@ -20,12 +20,25 @@ function scoreLabel(score: number | null): string {
   return score.toFixed(2)
 }
 
-function metaLine(l: Listing): string {
+function priceLabel(l: Listing): string {
+  return l.priceEur !== null ? `${l.priceEur} €` : 'Price pending'
+}
+
+function sizeLabel(l: Listing): string {
+  if (l.sizeM2 !== null) return `${l.sizeM2} m²`
+  if (l.wgSize !== null) return `${l.wgSize}er WG`
+  return 'Size pending'
+}
+
+function distanceLabel(l: Listing): string {
+  if (l.bestCommuteMinutes !== null) return `${l.bestCommuteMinutes} min`
+  return 'No route yet'
+}
+
+function subline(l: Listing): string {
   const parts: string[] = []
-  if (l.priceEur !== null) parts.push(`${l.priceEur} €`)
-  if (l.sizeM2 !== null) parts.push(`${l.sizeM2} m²`)
-  if (l.wgSize !== null) parts.push(`${l.wgSize}er WG`)
   if (l.district) parts.push(l.district)
+  if (l.availableFrom) parts.push(`From ${l.availableFrom}`)
   return parts.join(' · ')
 }
 
@@ -45,7 +58,7 @@ export function ListingList({ listings, onOpen, emptyLabel }: ListingListProps) 
   const sorted = [...listings].sort((a, b) => (b.score ?? -1) - (a.score ?? -1))
 
   return (
-    <ul className="grid gap-5 md:grid-cols-2 xl:grid-cols-1 2xl:grid-cols-2">
+    <ul className="grid gap-5 md:grid-cols-2 xl:grid-cols-2">
       {sorted.map((l, index) => (
         <li key={l.id}>
           <button
@@ -75,9 +88,6 @@ export function ListingList({ listings, onOpen, emptyLabel }: ListingListProps) 
                   <span className="text-[34px]">🏠</span>
                 </div>
               )}
-              <div className="absolute left-4 top-4 flex h-10 min-w-10 items-center justify-center rounded-full bg-white/92 px-3 font-mono text-[12px] uppercase tracking-[0.16em] text-accent shadow-[0_10px_24px_rgba(15,23,42,0.08)]">
-                {String(index + 1).padStart(2, '0')}
-              </div>
               <StatusPill
                 tone={scoreTone(l.score)}
                 className="absolute right-4 top-4 border-white/80 bg-white/92 shadow-[0_10px_24px_rgba(15,23,42,0.08)]"
@@ -92,24 +102,18 @@ export function ListingList({ listings, onOpen, emptyLabel }: ListingListProps) 
                     {l.title ?? `Listing ${l.id}`}
                   </h3>
                   <p className="mt-1 truncate text-[13px] text-ink-muted">
-                    {metaLine(l) || 'Pricing and size still loading'}
+                    {subline(l) || 'Location and availability still loading'}
                   </p>
                 </div>
               </div>
 
-              {l.scoreReason ? (
-                <p className="line-clamp-2 text-[14px] leading-6 text-ink">{l.scoreReason}</p>
-              ) : null}
+              <div className="grid grid-cols-3 gap-2 rounded-[20px] bg-surface-raised p-3">
+                <FactPill label="Price" value={priceLabel(l)} />
+                <FactPill label="Size" value={sizeLabel(l)} />
+                <FactPill label="Distance" value={distanceLabel(l)} />
+              </div>
 
               <div className="flex flex-wrap gap-2">
-                {l.matchReasons.slice(0, 2).map((reason) => (
-                  <span
-                    key={reason}
-                    className="rounded-full border border-good/20 bg-good/10 px-3 py-1 text-[11px] uppercase tracking-[0.12em] text-good"
-                  >
-                    {reason}
-                  </span>
-                ))}
                 {l.vetoReason ? (
                   <span className="rounded-full border border-bad/20 bg-bad/10 px-3 py-1 text-[11px] uppercase tracking-[0.12em] text-bad">
                     Rejected
@@ -120,11 +124,24 @@ export function ListingList({ listings, onOpen, emptyLabel }: ListingListProps) 
                     Needs review
                   </span>
                 ) : null}
+                {!l.vetoReason && l.matchReasons.length > 0 ? (
+                  <span className="rounded-full border border-good/20 bg-good/10 px-3 py-1 text-[11px] uppercase tracking-[0.12em] text-good">
+                    Strong match
+                  </span>
+                ) : null}
               </div>
 
-              {l.mismatchReasons.length > 0 ? (
+              {l.vetoReason ? (
+                <p className="line-clamp-2 text-[13px] text-ink-muted">
+                  {l.vetoReason}
+                </p>
+              ) : l.mismatchReasons.length > 0 ? (
                 <p className="line-clamp-1 text-[13px] text-ink-muted">
-                  Watchouts: {l.mismatchReasons.slice(0, 2).join(' · ')}
+                  Watchout: {l.mismatchReasons[0]}
+                </p>
+              ) : l.matchReasons.length > 0 ? (
+                <p className="line-clamp-1 text-[13px] text-ink-muted">
+                  Highlight: {l.matchReasons[0]}
                 </p>
               ) : null}
 
@@ -139,5 +156,14 @@ export function ListingList({ listings, onOpen, emptyLabel }: ListingListProps) 
         </li>
       ))}
     </ul>
+  )
+}
+
+function FactPill({ label, value }: { label: string; value: string }) {
+  return (
+    <div className="rounded-[16px] border border-hairline/70 bg-white px-3 py-2">
+      <p className="text-[10px] uppercase tracking-[0.14em] text-ink-muted">{label}</p>
+      <p className="mt-1 text-[14px] font-semibold text-ink">{value}</p>
+    </div>
   )
 }

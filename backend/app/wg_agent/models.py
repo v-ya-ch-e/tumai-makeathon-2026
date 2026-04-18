@@ -200,6 +200,7 @@ class Listing(BaseModel):
     online_viewing: bool = False
     photo_urls: list[str] = Field(default_factory=list)
     cover_photo_url: Optional[str] = None
+    best_commute_minutes: Optional[int] = None
 
     # Populated by the evaluator after scoring.
     score: Optional[float] = Field(default=None, ge=0, le=1)

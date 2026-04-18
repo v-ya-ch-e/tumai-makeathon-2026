@@ -104,6 +104,7 @@ def _get_listing_detail(
         available_to=row.available_to,
         description=row.description,
         cover_photo_url=photos[0] if photos else None,
+        best_commute_minutes=_best_commute_minutes(score_row),
         score=score_val,
         score_reason=reason,
         match_reasons=match_reasons,
@@ -172,6 +173,21 @@ def _travel_minutes_by_label(
         if label:
             out[label] = minutes
     return out or None
+
+
+def _best_commute_minutes(score_row: Optional[ListingScoreRow]) -> Optional[int]:
+    if score_row is None or not score_row.travel_minutes:
+        return None
+    best: Optional[int] = None
+    for entry in score_row.travel_minutes.values():
+        if not isinstance(entry, dict):
+            continue
+        minutes = entry.get("minutes")
+        if not isinstance(minutes, int):
+            continue
+        if best is None or minutes < best:
+            best = minutes
+    return best
 
 
 @router.post("/users", status_code=201, response_model=UserDTO)

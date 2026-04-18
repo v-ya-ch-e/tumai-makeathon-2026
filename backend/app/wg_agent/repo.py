@@ -401,6 +401,7 @@ def _listing_from_row(
         available_to=row.available_to,
         description=row.description,
         cover_photo_url=cover_photo_url,
+        best_commute_minutes=_best_commute_minutes(score_row),
         score=score,
         score_reason=reason,
         match_reasons=match_reasons,
@@ -440,3 +441,18 @@ def _cover_photo_url(
         .order_by(PhotoRow.ordinal)
     ).first()
     return photo_row.url if photo_row is not None else None
+
+
+def _best_commute_minutes(score_row: Optional[ListingScoreRow]) -> Optional[int]:
+    if score_row is None or not score_row.travel_minutes:
+        return None
+    best: Optional[int] = None
+    for entry in score_row.travel_minutes.values():
+        if not isinstance(entry, dict):
+            continue
+        minutes = entry.get("minutes")
+        if not isinstance(minutes, int):
+            continue
+        if best is None or minutes < best:
+            best = minutes
+    return best

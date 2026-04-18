@@ -382,19 +382,24 @@ export default function OnboardingPreferences() {
                 return (
                   <div
                     key={tile.key}
+                    role="button"
+                    tabIndex={0}
+                    onClick={() => toggle(tile.key)}
+                    onKeyDown={(event) => {
+                      if (event.key === 'Enter' || event.key === ' ') {
+                        event.preventDefault()
+                        toggle(tile.key)
+                      }
+                    }}
+                    aria-pressed={isSelected}
                     className={clsx(
-                      'group rounded-[26px] border p-5 transition-all duration-200 ease-out',
+                      'group cursor-pointer rounded-[26px] border p-5 transition-all duration-200 ease-out focus:outline-none focus:ring-2 focus:ring-accent/40',
                       isSelected
                         ? 'border-accent/60 bg-[linear-gradient(180deg,rgba(200,165,134,0.3),rgba(250,246,238,0.95))] shadow-[0_18px_50px_rgba(138,90,59,0.12)]'
                         : 'border-hairline/80 bg-surface-raised/75 hover:-translate-y-0.5 hover:border-accent/30 hover:shadow-[0_16px_40px_rgba(43,38,35,0.08)]',
                     )}
                   >
-                    <button
-                      type="button"
-                      onClick={() => toggle(tile.key)}
-                      aria-pressed={isSelected}
-                      className="flex w-full items-start gap-4 text-left"
-                    >
+                    <div className="flex w-full items-start gap-4 text-left">
                       <span
                         className={clsx(
                           'mt-0.5 rounded-2xl border p-3 transition-colors',
@@ -408,12 +413,16 @@ export default function OnboardingPreferences() {
                       <span className="min-w-0 flex-1">
                         <span className="block text-[15px] font-semibold text-ink">{tile.label}</span>
                         <span className="mt-1 block text-[13px] text-ink-muted">
-                          {isSelected ? weightLabel(weight ?? DEFAULT_WEIGHT) : 'Tap to add this preference'}
+                          {isSelected ? weightLabel(weight ?? DEFAULT_WEIGHT) : 'Click anywhere on the card to add'}
                         </span>
                       </span>
-                    </button>
+                    </div>
                     {isSelected ? (
-                      <div className="mt-5 border-t border-hairline/80 pt-4">
+                      <div
+                        className="mt-5 border-t border-hairline/80 pt-4"
+                        onClick={(event) => event.stopPropagation()}
+                        onKeyDown={(event) => event.stopPropagation()}
+                      >
                         <label htmlFor={sliderId} className="mb-2 block text-[11px] uppercase tracking-[0.2em] text-ink-muted">
                           Importance
                         </label>

@@ -67,6 +67,10 @@ function formatMode(profile: SearchProfile): string {
   return 'WG room'
 }
 
+function formatBudget(profile: SearchProfile): string {
+  return profile.priceMaxEur !== null ? `Up to ${profile.priceMaxEur}€` : 'Flexible budget cap'
+}
+
 function topScore(listings: Listing[]): string {
   const scored = listings.map((listing) => listing.score).filter((score): score is number => score !== null)
   if (scored.length === 0) return '—'
@@ -266,7 +270,7 @@ export default function Dashboard() {
   const briefChips = useMemo(() => {
     if (!profile) return []
     return [
-      `${profile.priceMinEur}€-${profile.priceMaxEur ?? 'flex'}€`,
+      formatBudget(profile),
       formatMode(profile),
       formatSchedule(profile),
       profile.hasBike ? 'Bike' : null,
@@ -309,11 +313,6 @@ export default function Dashboard() {
 
   return (
     <div className="relative min-h-screen overflow-hidden bg-canvas">
-      <div className="pointer-events-none absolute inset-0">
-        <div className="absolute left-[-7rem] top-24 h-64 w-64 rounded-full border border-accent/10" />
-        <div className="absolute right-0 top-0 h-80 w-80 rounded-full border border-good/10" />
-      </div>
-
       <div className="relative mx-auto max-w-7xl px-5 py-5 sm:px-8 lg:px-10">
         <section className="overflow-hidden rounded-[34px] border border-hairline/80 bg-surface/95 shadow-[0_30px_80px_rgba(15,23,42,0.08)]">
           <div className="grid gap-6 border-b border-hairline/80 px-6 py-6 lg:grid-cols-[minmax(0,1.3fr)_360px] lg:px-8 xl:px-10">
@@ -431,7 +430,7 @@ export default function Dashboard() {
             <Card className="rounded-[28px] bg-surface-raised p-6">
               <p className="font-mono text-[12px] uppercase tracking-[0.24em] text-accent">Search brief</p>
               <div className="mt-5 space-y-4">
-                <BriefRow label="Budget" value={`${profile.priceMinEur}€-${profile.priceMaxEur ?? 'flex'}€`} />
+                <BriefRow label="Budget" value={formatBudget(profile)} />
                 <BriefRow
                   label="Places"
                   value={

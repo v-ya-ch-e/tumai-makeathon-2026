@@ -210,7 +210,7 @@ export function PlaceAutocomplete({
                 </span>
                 <div className="flex items-center gap-1.5">
                   <label htmlFor={commuteId} className="text-[12px] text-ink-muted">
-                    Ideal commute
+                    Max tolerated
                   </label>
                   <input
                     id={commuteId}
