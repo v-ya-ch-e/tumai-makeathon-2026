@@ -1,11 +1,15 @@
 # Backend
 
-FastAPI entrypoint plus the `wg_agent` package: JSON/SSE API, SQLite persistence, anonymous wg-gesucht scraping, and the v1 find-and-score loop.
+The backend container hosts the FastAPI app + `wg_agent` package: JSON/SSE API, MySQL persistence, the matcher-only find-and-score loop. A separate scraper container (`app/scraper/`) owns the shared `ListingRow` pool.
 
 ## File map
 
 ```text
-backend/app/main.py              FastAPI app, lifespan (DB + Alembic + hunt resume), SPA mount, legacy /items routes
+backend/app/main.py              FastAPI app, lifespan (DB bootstrap + hunt resume), SPA mount, legacy /items routes
+backend/app/scraper/
+  __init__.py                    Package docstring; scraper is the sole writer of ListingRow + PhotoRow
+  agent.py                       `ScraperAgent` async loop: search → skip-if-fresh → deep-scrape → upsert_global_listing
+  main.py                        `python -m app.scraper.main` entrypoint: db.init_db + run_forever
 backend/app/wg_agent/
   __init__.py                    Package docstring; points contributors to WG recon notes
   api.py                         `/api` router: users, search profile, credentials, hunts, SSE stream, listing detail
@@ -13,7 +17,7 @@ backend/app/wg_agent/
   browser.py                     URL builders, HTML parsers, httpx anonymous path, Playwright `WGBrowser` + factory
   commute.py                     Google Distance Matrix client (`travel_times`, `modes_for`); called from the hunter before scoring
   crypto.py                      Fernet key resolution + encrypt/decrypt for credential blobs
-  db.py                          SQLModel engine, WAL pragma, `init_db`, `get_session` dependency
+  db.py                          SQLModel engine on MySQL (DSN assembled from DB_HOST/PORT/USER/PASSWORD/NAME, pool_pre_ping + pool_recycle), `init_db`, `get_session` dependency
   db_models.py                   `*Row` SQLModel table classes (see [DATA_MODEL.md](./DATA_MODEL.md))
   dto.py                         Pydantic DTOs + `*_to_dto` / `upsert_body_to_search_profile` converters
   evaluator.py                   Scorecard: `hard_filter` + deterministic components (price/size/wg_size/availability/commute/preferences) + `vibe_fit` + `compose`
@@ -22,25 +26,21 @@ backend/app/wg_agent/
   models.py                      Domain Pydantic models + enums + `CITY_CATALOGUE`
   orchestrator.py                Legacy `HuntOrchestrator` (Playwright messaging loop) for tests / future work
   places.py                      Google Places API client for nearby amenity distances on user preferences
-  periodic.py                    `HuntEngine`, `PeriodicHunter`, hunter task registry, `resume_running_hunts`
+  periodic.py                    `HuntEngine` matcher, `PeriodicHunter`, hunter task registry, `resume_running_hunts`
   repo.py                        Domain ↔ `*Row` conversions; narrow CRUD surface for hunts, listings, actions, users
 ```
 
 ## `main.py`
 
-`FastAPI` is constructed with `lifespan=lifespan`. On startup the async context runs, in order: `wg_db.init_db()` (ensures Fernet key material and touches the engine), logs `DATABASE_URL`, loads Alembic `Config` from `backend/alembic.ini` with `script_location` pointing at `backend/alembic`, runs `command.upgrade(cfg, "head")`, then `await wg_periodic.resume_running_hunts()`. The API router from [`api.py`](../backend/app/wg_agent/api.py) is included under `/api`. Two sibling health probes are defined at the app level: `/health` and `/api/health` (both return `{"status": "ok"}`). When `frontend/dist/assets` exists, `/assets` is mounted; the catch-all `GET /{full_path:path}` returns `index.html` for non-`api/` and non-`assets/` paths (503 if the bundle is missing).
+`FastAPI` is constructed with `lifespan=lifespan`. On startup the async context runs, in order: `wg_db.init_db()` (ensures Fernet key material and calls `SQLModel.metadata.create_all(engine)` to create any missing tables on MySQL), logs a password-free database identifier via `wg_db.describe_database()`, then `await wg_periodic.resume_running_hunts()`. The API router from [`api.py`](../backend/app/wg_agent/api.py) is included under `/api`. Two sibling health probes are defined at the app level: `/health` and `/api/health` (both return `{"status": "ok"}`). When `frontend/dist/assets` exists, `/assets` is mounted; the catch-all `GET /{full_path:path}` returns `index.html` for non-`api/` and non-`assets/` paths (503 if the bundle is missing).
 
-```24:37:backend/app/main.py
+```19:28:backend/app/main.py
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     from .wg_agent import db as wg_db
 
     wg_db.init_db()
-    logger.info("WG database URL: %s", wg_db.DATABASE_URL)
-    alembic_ini = BACKEND_DIR / "alembic.ini"
-    cfg = Config(str(alembic_ini))
-    cfg.set_main_option("script_location", str(BACKEND_DIR / "alembic"))
-    command.upgrade(cfg, "head")
+    logger.info("WG database: %s", wg_db.describe_database())
     from .wg_agent import periodic as wg_periodic
 
     await wg_periodic.resume_running_hunts()
@@ -72,10 +72,12 @@ Conversion helpers: `user_to_dto`, `search_profile_to_dto`, `upsert_body_to_sear
 
 ## `db.py`
 
-- Builds `DATABASE_URL` from `WG_DB_URL` or default `sqlite:///~/.wg_hunter/app.db` (path expanded under the user home).
-- SQLite engine uses `check_same_thread=False`; a connect listener runs `PRAGMA journal_mode=WAL` for SQLite dialects only.
-- `init_db()` calls `crypto.ensure_key()` then opens/closes a connection (lightweight “touch” after Alembic owns schema).
+- Requires five env vars: `DB_HOST`, `DB_PORT`, `DB_USER`, `DB_PASSWORD`, `DB_NAME`. `_resolve_database_url()` assembles the MySQL DSN (`mysql+pymysql://user:password@host:port/name?charset=utf8mb4`) at import time, URL-encoding user + password. Any missing / empty var → a single `RuntimeError` listing every missing name so contributors see all fixups at once.
+- `create_engine(..., pool_pre_ping=True, pool_recycle=1800)` — standard MySQL hygiene for long-lived RDS connections.
+- `describe_database()` returns a password-free `user@host:port/name` string; entrypoints use it for startup logs instead of printing the raw DSN.
+- `init_db()` calls `crypto.ensure_key()` and then `SQLModel.metadata.create_all(engine)`, which creates any missing tables on first boot and silently no-ops once the schema is already up to date. No Alembic — destructive schema changes require a `DROP DATABASE; CREATE DATABASE` (see [SETUP.md](./SETUP.md#reset-the-database)).
 - `get_session()` is a FastAPI dependency yielding a `Session` context manager.
+- Tests bypass this module's engine: [`backend/tests/conftest.py`](../backend/tests/conftest.py) sets inert `DB_*` placeholders before imports (so `db.py` can construct a phantom engine without crashing), and individual tests build their own in-memory SQLite engine + monkey-patch `db_module.engine`.
 
 ## `db_models.py`
 
@@ -87,7 +89,7 @@ Key order: `WG_SECRET_KEY` (must be a valid Fernet key string) else read `~/.wg_
 
 ## `repo.py`
 
-Narrow surface (domain in/out unless noted):
+Narrow surface (domain in/out unless noted). Write ownership is split: the scraper calls `upsert_global_listing` + `save_photos`; hunts call `save_score` + `append_action` + `update_hunt_status`.
 
 | Function | Purpose |
 | --- | --- |
@@ -100,15 +102,18 @@ Narrow surface (domain in/out unless noted):
 | `delete_credentials` | Remove credential row |
 | `credentials_status` | `(connected, saved_at)` tuple |
 | `create_hunt` | Insert `HuntRow` (`pending`), return assembled `Hunt` |
-| `get_hunt` | Join hunt row, search profile, listings, actions → domain `Hunt` |
+| `get_hunt` | Join hunt row, search profile, listings (via score-row join), actions → domain `Hunt` |
 | `update_hunt_status` | Mutate `HuntRow.status` / optional `stopped_at` |
 | `append_action` | Insert `AgentActionRow` |
-| `upsert_listing` | Merge `ListingRow`, preserve `first_seen_at` |
-| `save_score` | Upsert `ListingScoreRow` |
-| `save_photos` | Replace `PhotoRow` rows for a listing |
+| `upsert_global_listing` | Merge `ListingRow` (scraper only); bumps `scraped_at` + `scrape_status` + optional `scrape_error` |
+| `save_score` | Upsert `ListingScoreRow` with optional `scored_against_scraped_at` |
+| `save_photos` | Replace `PhotoRow` rows for a listing (scraper only) |
 | `list_hunts_by_status` | All hunts matching a `HuntStatus` |
-| `list_listings_for_hunt` | Listings + latest score → `Listing` domain list |
+| `list_listings_for_hunt` | `ListingScoreRow JOIN ListingRow` → matched `Listing` domain list for the hunt |
+| `list_scorable_listings` | Global listings with the given `scrape_status` that this hunt has not yet scored (matcher input) |
+| `list_stale_listings` | Listings whose `scraped_at < older_than` (scraper refresh input) |
 | `list_actions_for_hunt` | Ordered `AgentAction` list |
+| `row_to_domain_listing` | Rehydrate a global `ListingRow` into a domain `Listing` without a score (matcher uses this before evaluation) |
 
 Internal helpers: `_listing_from_row`, `_default_requirements`.
 
@@ -134,9 +139,15 @@ Internal helpers: `_listing_from_row`, `_default_requirements`.
 
 ## `periodic.py`
 
-- **`HuntEngine.run_find_only`** — Loads `SearchProfile`, loads existing listing ids, `await browser.anonymous_search`, caps to `max_listings` (default 15), emits `search` / per-id `new_listing` actions, deep-scrapes with `anonymous_scrape_listing`, calls [`commute.travel_times`](../backend/app/wg_agent/commute.py) with the geocoded `(lat, lng)` against the user's `main_locations` in every profile-applicable mode (guarded: skipped when either coord is `None`), calls [`places.nearby_places`](../backend/app/wg_agent/places.py) for the user's place-like preferences around the same listing coordinates, passes both data sets into [`evaluator.evaluate`](../backend/app/wg_agent/evaluator.py) (hard filter → deterministic components → single `brain.vibe_score` LLM call → composition), collapses the commute matrix into the fastest `(mode, minutes)` per location for persistence and stores the nearby-place list alongside it (`repo.save_score(..., travel_minutes=..., nearby_places=..., components=..., veto_reason=...)`), and emits either `"Rejected {id}: <veto_reason>"` or `"Scored {id}: 0.82"` with a `price 0.9 · size 1.0 · …` breakdown in `detail`. Every persisted action also lands on the per-hunt asyncio queue for SSE (`_safe_put`).
-- **`PeriodicHunter`** — Async loop calling `run_find_only`; for `periodic` schedules sleeps `interval_minutes * 60` seconds, optionally overridden by `WG_RESCAN_INTERVAL_MINUTES` when `schedule == "periodic"` and the interval is positive, emits `rescan` between passes, ends with `_finalize_done` (`HuntStatus.done`) or `_finalize_failed` on unexpected exceptions. `asyncio.CancelledError` triggers `_finalize_done` then re-raises.
+- **`HuntEngine.run_find_only`** — Loads `SearchProfile`, fetches candidates via `repo.list_scorable_listings(hunt_id, status='full', limit=max_listings)` (the shared pool minus listings already scored for this hunt), emits one `search` action summarising "Matched N candidates from shared pool", then for each candidate: emits `new_listing`, calls [`commute.travel_times`](../backend/app/wg_agent/commute.py) against the user's `main_locations` in every profile-applicable mode (guarded: skipped when `listing.lat / lng` is `None`), calls [`places.nearby_places`](../backend/app/wg_agent/places.py) for the user's place-like preferences, passes both into [`evaluator.evaluate`](../backend/app/wg_agent/evaluator.py) (hard filter → deterministic components → single `brain.vibe_score` LLM call → composition), collapses the commute matrix into the fastest `(mode, minutes)` per location, and calls `repo.save_score(..., travel_minutes=..., nearby_places=..., components=..., veto_reason=..., scored_against_scraped_at=row.scraped_at)` for every listing (including vetoes). Emits either `"Rejected {id}: <veto_reason>"` or `"Scored {id}: 0.82"` with a `price 0.9 · size 1.0 · …` breakdown in `detail`. Every persisted action also lands on the per-hunt asyncio queue for SSE (`_safe_put`). The matcher **never** calls `browser.anonymous_search`, `anonymous_scrape_listing`, `upsert_global_listing`, or `save_photos` — those belong to the scraper container.
+- **`PeriodicHunter`** — Async loop calling `run_find_only`; for `periodic` schedules sleeps `interval_minutes * 60` seconds, optionally overridden by `WG_RESCAN_INTERVAL_MINUTES` when `schedule == "periodic"` and the interval is positive, emits `rescan` between passes, ends with `_finalize_done` (`HuntStatus.done`) or `_finalize_failed` on unexpected exceptions. `asyncio.CancelledError` triggers `_finalize_done` then re-raises. Rescans naturally pick up listings the scraper has added since the previous pass because `list_scorable_listings` reflects the live pool.
 - **Registry** — `_ACTIVE_HUNTERS` maps hunt id → `Task`, `_EVENT_QUEUES` maps hunt id → `Queue`. `spawn_hunter` creates/replaces the queue and task; `cancel_hunter` cancels the task; `event_queue_for` exposes the queue to SSE; `resume_running_hunts` respawns tasks for DB rows still `running`.
+
+## `app/scraper/agent.py`
+
+- **`ScraperAgent.run_once`** — Builds a permissive `SearchProfile` from env config (`SCRAPER_CITY`, `SCRAPER_MAX_RENT`, `SCRAPER_MAX_PAGES`), calls `browser.anonymous_search`, and for each returned stub: consults `ListingRow` via `session.get(ListingRow, stub.id)`. `_needs_scrape` returns `True` when the row is absent, when `scrape_status != "full"`, or when `scraped_at` is older than `SCRAPER_REFRESH_HOURS`. On `True`, calls `browser.anonymous_scrape_listing`; on exception, upserts with `scrape_status='failed'` + `scrape_error`. On success, `_status_for(listing)` flips to `'full'` only when both description and coords are present (otherwise `'stub'`), then calls `repo.upsert_global_listing` + `repo.save_photos`.
+- **`ScraperAgent.run_forever`** — Wraps `run_once` in a `while True` that sleeps `SCRAPER_INTERVAL_SECONDS` between passes, logging and retrying on unexpected exceptions.
+- **`app/scraper/main.py`** — Entrypoint for the scraper container (`python -m app.scraper.main`): calls `db.init_db()` (which bootstraps the schema via `SQLModel.metadata.create_all`), then `asyncio.run(ScraperAgent().run_forever())`.
 
 ## `browser.py`
 
@@ -187,7 +198,8 @@ Curve tuning (weights and thresholds) lives at the top of the module in `COMPONE
 | [`test_wg_parser.py`](../backend/tests/test_wg_parser.py) | Cached HTML fixtures under `tests/fixtures/`; asserts parser output shape and locks down the structured fields the scorer relies on (address split, available-from/to, languages, pets/smoking, description-doesn't-leak-page-chrome, map-pin lat/lng) | `cd backend && python tests/test_wg_parser.py` (or `pytest tests/test_wg_parser.py`) |
 | [`test_orchestrator.py`](../backend/tests/test_orchestrator.py) | Mock browser/brain end-to-end orchestrator run | `cd backend && python tests/test_orchestrator.py` (or `pytest tests/test_orchestrator.py`) |
 | [`test_repo.py`](../backend/tests/test_repo.py) | In-memory SQLite round-trip for `repo` + crypto | `cd backend && pytest tests/test_repo.py` |
-| [`test_periodic.py`](../backend/tests/test_periodic.py) | `HuntEngine` / `PeriodicHunter` with mocked I/O (includes the commute-reaches-evaluator and lat-missing guard cases) | `cd backend && pytest tests/test_periodic.py` |
+| [`test_periodic.py`](../backend/tests/test_periodic.py) | `HuntEngine` matcher / `PeriodicHunter` with pre-seeded global pool + mocked I/O (includes the commute-reaches-evaluator, lat-missing guard, and "matcher never calls browser.anonymous_search" regressions) | `cd backend && pytest tests/test_periodic.py` |
+| [`test_scraper.py`](../backend/tests/test_scraper.py) | `ScraperAgent` with mocked `browser.*`: status/scrape_error branches, refresh-TTL skip, stale-refresh | `cd backend && pytest tests/test_scraper.py` |
 | [`test_commute.py`](../backend/tests/test_commute.py) | Route Matrix client with monkey-patched `httpx.post` | `cd backend && pytest tests/test_commute.py` |
 | [`test_places.py`](../backend/tests/test_places.py) | Nearby-place client with mocked `httpx` (cache + fail-soft paths) | `cd backend && pytest tests/test_places.py` |
 | [`test_brain.py`](../backend/tests/test_brain.py) | `_listing_summary` commute-block formatting (no LLM) | `cd backend && pytest tests/test_brain.py` |
@@ -198,26 +210,12 @@ Curve tuning (weights and thresholds) lives at the top of the module in `COMPONE
 
 Run the whole suite with `cd backend && pytest` after activating the venv.
 
-## Alembic
+## Schema evolution
 
-Seven revisions in [`backend/alembic/versions/`](../backend/alembic/versions/), each additive:
+There is no Alembic in the tree. Both entrypoints call `db.init_db()` on startup, which in turn calls `SQLModel.metadata.create_all(engine)`. Behaviour:
 
-| Revision | Purpose |
-| --- | --- |
-| [`0001_initial.py`](../backend/alembic/versions/0001_initial.py) | Creates all v1 tables + indexes described in [DATA_MODEL.md](./DATA_MODEL.md) |
-| [`0002_places_main_locations.py`](../backend/alembic/versions/0002_places_main_locations.py) | Resets `searchprofilerow.main_locations` to `[]` so pre-Places rows don't feed bare strings into `PlaceLocation` parsing (ADR-010) |
-| [`0003_listing_coords.py`](../backend/alembic/versions/0003_listing_coords.py) | Adds `listingrow.lat` / `listingrow.lng` for server-side geocoding (ADR-011) |
-| [`0004_listing_commute.py`](../backend/alembic/versions/0004_listing_commute.py) | Adds `listingscorerow.travel_minutes` JSON for the drawer's commute section (ADR-012) |
-| [`0005_weighted_prefs.py`](../backend/alembic/versions/0005_weighted_prefs.py) | Resets `searchprofilerow.preferences` + `.main_locations` so pre-weighted-schema rows don't poison `PreferenceWeight` / per-location `max_commute_minutes` parsing (ADR-013) |
-| [`0006_scorecard_components.py`](../backend/alembic/versions/0006_scorecard_components.py) | Adds `listingscorerow.components` JSON + `veto_reason` String for the scorecard evaluator (ADR-015) |
-| [`0007_nearby_places.py`](../backend/alembic/versions/0007_nearby_places.py) | Adds `listingscorerow.nearby_places` JSON for persisted nearby preference distances (ADR-016) |
+- **First boot against an empty DB** — all tables + FKs + indexes declared in [`db_models.py`](../backend/app/wg_agent/db_models.py) get created.
+- **Subsequent boots** — no-op (SQLAlchemy checks `information_schema`, skips existing tables).
+- **Adding a column to an existing table** — **not done by `create_all`.** You must `DROP DATABASE wg_hunter; CREATE DATABASE wg_hunter;` and restart the backend to pick up the new schema. See [SETUP.md "Reset the database"](./SETUP.md#reset-the-database).
 
-[`env.py`](../backend/alembic/env.py) imports `app.wg_agent.db_models` so `SQLModel.metadata` matches the app. [`main.py`](../backend/app/main.py) runs `command.upgrade(cfg, "head")` during FastAPI lifespan startup (ADR-005), so you never call `alembic upgrade` by hand.
-
-After editing [`db_models.py`](../backend/app/wg_agent/db_models.py), generate a new revision from `backend/`:
-
-```bash
-alembic revision --autogenerate -m "describe change"
-```
-
-Review the diff (autogenerate is not infallible for SQLite — it can miss column renames and generate `DROP` + `ADD` pairs), tweak if needed, then commit the revision file alongside your model change.
+This trade-off matches the project's dev workflow: schema changes are frequent and incompatible with pre-existing rows, and the team shares one AWS RDS instance that we reset as a whole when schema moves. If the project outgrows that assumption, [the first commit that adds Alembic back in](https://github.com/sqlalchemy/alembic) is ten lines of `alembic init` plus one `--autogenerate` run.

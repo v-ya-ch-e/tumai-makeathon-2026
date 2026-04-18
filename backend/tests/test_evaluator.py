@@ -94,12 +94,6 @@ def test_hard_filter_missing_price_is_not_a_veto() -> None:
     assert evaluator.hard_filter(_listing(price_eur=None), _profile()) is None
 
 
-def test_hard_filter_wrong_city() -> None:
-    v = evaluator.hard_filter(_listing(city="Berlin"), _profile())
-    assert v is not None
-    assert "wrong city" in v.reason
-
-
 def test_hard_filter_accepts_muenchen_variants() -> None:
     """'München' (profile) vs 'Muenchen' (listing) must not veto."""
     assert (

@@ -1,52 +1,81 @@
-"""SQLModel engine, session factory, and SQLite WAL setup."""
+"""SQLModel engine + session factory (MySQL-only).
+
+Database connection is assembled from five required env vars:
+`DB_HOST`, `DB_PORT`, `DB_USER`, `DB_PASSWORD`, `DB_NAME`. All five are
+required — `db.py` refuses to import if any are missing, so a
+misconfigured environment fails loud instead of silently writing to a
+phantom DB.
+
+No Alembic. Schema changes are expected to be additive on an empty dev DB —
+`init_db` calls `SQLModel.metadata.create_all(engine)` on startup, which
+creates missing tables on first boot and silently no-ops on subsequent
+boots. Destructive changes require a `DROP DATABASE; CREATE DATABASE`
+(see docs/SETUP.md "Reset the database").
+"""
 
 from __future__ import annotations
 
 import os
 from collections.abc import Iterator
-from pathlib import Path
+from urllib.parse import quote_plus
 
-from sqlalchemy import event
-from sqlmodel import Session, create_engine
+from sqlmodel import Session, SQLModel, create_engine
 
 from . import crypto
+from . import db_models as _db_models  # noqa: F401  (registers tables on SQLModel.metadata)
 
-_DEFAULT_DB_PATH = Path.home() / ".wg_hunter" / "app.db"
 
-
-def _default_sqlite_url() -> str:
-    _DEFAULT_DB_PATH.parent.mkdir(parents=True, exist_ok=True)
-    return f"sqlite:///{_DEFAULT_DB_PATH.resolve()}"
+_REQUIRED_DB_VARS = ("DB_HOST", "DB_PORT", "DB_USER", "DB_PASSWORD", "DB_NAME")
 
 
 def _resolve_database_url() -> str:
-    raw = os.environ.get("WG_DB_URL")
-    if raw:
-        return raw
-    return _default_sqlite_url()
+    """Assemble the MySQL DSN from five required env vars.
+
+    Raises a single `RuntimeError` listing every missing / empty variable
+    so contributors see all fixups at once.
+    """
+    missing = [name for name in _REQUIRED_DB_VARS if not os.environ.get(name)]
+    if missing:
+        raise RuntimeError(
+            "Database credentials are incomplete. Missing env var(s): "
+            f"{', '.join(missing)}. "
+            "Copy .env.example to .env and fill in the team-shared AWS RDS "
+            "credentials (DB_HOST, DB_PORT, DB_USER, DB_PASSWORD, DB_NAME)."
+        )
+    host = os.environ["DB_HOST"]
+    port = os.environ["DB_PORT"]
+    user = quote_plus(os.environ["DB_USER"])
+    password = quote_plus(os.environ["DB_PASSWORD"])
+    name = os.environ["DB_NAME"]
+    return (
+        f"mysql+pymysql://{user}:{password}@{host}:{port}/{name}"
+        "?charset=utf8mb4"
+    )
 
 
 DATABASE_URL = _resolve_database_url()
 
-_connect_args = (
-    {"check_same_thread": False} if DATABASE_URL.startswith("sqlite") else {}
+engine = create_engine(
+    DATABASE_URL,
+    pool_pre_ping=True,
+    pool_recycle=1800,
+    echo=False,
 )
-engine = create_engine(DATABASE_URL, connect_args=_connect_args, echo=False)
 
 
-@event.listens_for(engine, "connect")
-def _sqlite_wal(dbapi_connection, connection_record) -> None:  # noqa: ARG001
-    if engine.dialect.name != "sqlite":
-        return
-    cursor = dbapi_connection.cursor()
-    cursor.execute("PRAGMA journal_mode=WAL")
-    cursor.close()
+def describe_database() -> str:
+    """Password-free identifier for logs (`user@host:port/name`)."""
+    user = os.environ.get("DB_USER", "?")
+    host = os.environ.get("DB_HOST", "?")
+    port = os.environ.get("DB_PORT", "?")
+    name = os.environ.get("DB_NAME", "?")
+    return f"{user}@{host}:{port}/{name}"
 
 
 def init_db() -> None:
+    """Ensure the Fernet key + schema exist. Safe to call repeatedly."""
     crypto.ensure_key()
-    with engine.connect() as conn:
-        conn.close()
+    SQLModel.metadata.create_all(engine)
 
 
 def get_session() -> Iterator[Session]:

@@ -1,6 +1,13 @@
 # Data model
 
-SQLite tables mirror [`db_models.py`](../backend/app/wg_agent/db_models.py). Domain aggregates used by the agent are [`Hunt` and nested types](../backend/app/wg_agent/models.py). All ORM ↔ domain conversion goes through [`repo.py`](../backend/app/wg_agent/repo.py) (plus a few direct `Session.get` calls in [`api.py`](../backend/app/wg_agent/api.py) for listing detail assembly).
+MySQL tables mirror [`db_models.py`](../backend/app/wg_agent/db_models.py). Domain aggregates used by the agent are [`Hunt` and nested types](../backend/app/wg_agent/models.py). All ORM ↔ domain conversion goes through [`repo.py`](../backend/app/wg_agent/repo.py) (plus a few direct `Session.get` calls in [`api.py`](../backend/app/wg_agent/api.py) for listing detail assembly).
+
+Post-[ADR-018](./DECISIONS.md#adr-018-separate-scraper-container--global-listingrow-mysql-only), the write ownership is split:
+
+- The **scraper** container (see [`backend/app/scraper/`](../backend/app/scraper/)) is the sole writer of `ListingRow` and `PhotoRow`. It keys listings by wg-gesucht's numeric id — one row per listing across all users.
+- The **backend** container writes only `ListingScoreRow` (per-hunt), `AgentActionRow` (per-hunt), and everything user / hunt / profile / credentials related.
+
+A `ListingScoreRow` row is the **hunt ↔ listing membership record**: the frontend's matched-listings view ([`list_listings_for_hunt`](../backend/app/wg_agent/repo.py)) joins `listingscorerow JOIN listingrow`, so a listing only appears in a hunt after the matcher has scored it (including `score=0.0` veto rows).
 
 ## Entities
 
@@ -72,59 +79,67 @@ One agent run or long-lived periodic job for a user.
 
 ### ListingRow
 
-Normalized wg-gesucht listing **for one hunt**. Composite PK `(id, hunt_id)` so listing ids are not global rows.
+**Global** normalized wg-gesucht listing. Single-column PK on `id`; the scraper container is the sole writer.
 
 | Field | Type | Notes |
 | ----- | ---- | ----- |
-| `id` | `str` | wg-gesucht listing id. |
-| `hunt_id` | `str` | FK → `huntrow.id`; part of PK. |
+| `id` | `str` | wg-gesucht listing id. Sole primary key. |
 | `url` | `str` | Canonical or long URL as string. |
 | `title` | `Optional[str]` | |
 | `price_eur` | `Optional[int]` | |
 | `size_m2` | `Optional[float]` | |
 | `wg_size` | `Optional[int]` | |
-| `district` | `Optional[str]` | |
+| `city` | `Optional[str]` | Parsed from the Adresse panel; fed into `brain.vibe_score`'s listing summary. |
+| `district` | `Optional[str]` | Munich Bezirk / district name; used in `evaluator.hard_filter`'s avoid-districts veto. |
+| `address` | `Optional[str]` | Street + number. Used as the geocoder fallback query when the map pin is missing. |
 | `lat` | `Optional[float]` | Populated during `anonymous_scrape_listing`: first from the listing's `map_config.markers` script block via `browser._parse_map_lat_lng` (no external call, landlord-precise), falling back to [`geocoder.geocode`](../backend/app/wg_agent/geocoder.py) for listings that don't ship a map pin. `None` when both paths are unavailable. |
 | `lng` | `Optional[float]` | Same origin as `lat`; paired with it for commute-aware scoring. |
 | `available_from` | `Optional[date]` | |
 | `available_to` | `Optional[date]` | |
 | `description` | `Optional[str]` | Filled after deep scrape. |
+| `furnished` | `Optional[bool]` | `True` / `False` / `None` (unknown). Feeds `evaluator.hard_filter` (weight-5 "must-have furnished" veto) and `evaluator.preference_fit`. |
+| `pets_allowed` | `Optional[bool]` | Same shape as `furnished`; feeds the same evaluator paths for weight-5 "must-have pets" vetoes. |
+| `smoking_ok` | `Optional[bool]` | Same shape; feeds the smoking-preference evaluator paths. |
+| `languages` | `Optional[list[str]]` | Languages spoken in the WG (e.g. `["Deutsch", "Englisch"]`). Fed into the `brain.vibe_score` prompt. JSON column. |
+| `scrape_status` | `str` | `"stub"` (partial, don't score yet), `"full"` (description + coords present), or `"failed"` (scrape exception). Indexed. The matcher only iterates `status="full"` rows. |
+| `scraped_at` | `Optional[datetime]` | UTC timestamp of the last `upsert_global_listing`. Indexed so the scraper can cheaply find stale rows via `list_stale_listings`. |
+| `scrape_error` | `Optional[str]` | Free-text breadcrumb when `scrape_status == "failed"`. |
 | `first_seen_at` | `datetime` | Preserved across upserts. |
 | `last_seen_at` | `datetime` | Bumped on each upsert. |
 
-- **SET**: [`repo.upsert_listing`](../backend/app/wg_agent/repo.py) after successful scrape + score in [`HuntEngine.run_find_only`](../backend/app/wg_agent/periodic.py).
-- **READ**: [`repo.list_listings_for_hunt`](../backend/app/wg_agent/repo.py) inside `repo.get_hunt`; direct row read in [`api._get_listing_detail`](../backend/app/wg_agent/api.py).
+- **SET**: [`repo.upsert_global_listing`](../backend/app/wg_agent/repo.py) from [`ScraperAgent._scrape_and_save`](../backend/app/scraper/agent.py). Hunts never write this table.
+- **READ**: [`repo.list_listings_for_hunt`](../backend/app/wg_agent/repo.py) (joined through `ListingScoreRow`), [`repo.list_scorable_listings`](../backend/app/wg_agent/repo.py) in the matcher, direct `session.get(ListingRow, listing_id)` in [`api._get_listing_detail`](../backend/app/wg_agent/api.py).
 
 ### PhotoRow
 
-Ordered image URLs for a listing drawer. Composite PK `(listing_id, hunt_id, ordinal)`.
+Ordered image URLs for a listing drawer. Composite PK `(listing_id, ordinal)`; photos live alongside the global listing.
 
 | Field | Type | Notes |
 | ----- | ---- | ----- |
-| `listing_id` | `str` | Part of PK; aligns with `listingrow.id`. |
-| `hunt_id` | `str` | Part of PK; aligns with `listingrow.hunt_id`. |
-| `ordinal` | `int` | Zero-based order. |
+| `listing_id` | `str` | Part of PK; FK → `listingrow.id`. |
+| `ordinal` | `int` | Part of PK; zero-based order. |
 | `url` | `str` | Absolute image URL. |
 
-- **SET**: [`repo.save_photos`](../backend/app/wg_agent/repo.py) (defined for future use; the v1 periodic loop does not call it).
-- **READ**: `select(PhotoRow)...` in [`api._get_listing_detail`](../backend/app/wg_agent/api.py).
+- **SET**: [`repo.save_photos`](../backend/app/wg_agent/repo.py) from the scraper right after `upsert_global_listing`.
+- **READ**: `select(PhotoRow)...` in [`api._get_listing_detail`](../backend/app/wg_agent/api.py), `_cover_photo_url` inside `repo._listing_from_row`.
 
 ### ListingScoreRow
 
-Latest LLM score payload per `(listing_id, hunt_id)`. Split from `ListingRow` so history can be added later without widening the listing table.
+Latest scorecard payload per `(listing_id, hunt_id)` — also the hunt ↔ listing membership record. Every listing the matcher has touched for a hunt has a row here, including vetoed listings (`score=0.0`, `veto_reason` set).
 
 | Field | Type | Notes |
 | ----- | ---- | ----- |
-| `listing_id` | `str` | PK part. |
-| `hunt_id` | `str` | PK part. |
+| `listing_id` | `str` | PK part; FK → `listingrow.id`. |
+| `hunt_id` | `str` | PK part; FK → `huntrow.id`. |
 | `score` | `float` | 0..1 in domain; stored as given. |
 | `reason` | `Optional[str]` | Human-readable explanation. |
 | `match_reasons` | `JSON` / `list` | |
 | `mismatch_reasons` | `JSON` / `list` | |
-| `travel_minutes` | `Optional[JSON]` | Fastest `{mode, minutes}` per `main_location.place_id` when commute data was available at score time. Shape: `{"<place_id>": {"mode": "BICYCLE", "minutes": 18}}`. Populated by `HuntEngine.run_find_only` from the full `commute.travel_times` matrix; read back by `_get_listing_detail` and re-keyed by label for the drawer. Added in Alembic [`0004_listing_commute.py`](../backend/alembic/versions/0004_listing_commute.py). |
-| `nearby_places` | `Optional[JSON]` | Persisted nearby-place facts for place-like preferences. Shape: `[{key, label, searched, distance_m, place_name, category}]`. Populated by `HuntEngine.run_find_only` from [`places.nearby_places`](../backend/app/wg_agent/places.py); read back by `_get_listing_detail` for the drawer's nearby-preferences section. Added in Alembic [`0007_nearby_places.py`](../backend/alembic/versions/0007_nearby_places.py). |
-| `components` | `Optional[JSON]` | Scorecard breakdown: `list[{key, score, weight, evidence, hard_cap?, missing_data}]`, one entry per `evaluator` component (price, size, wg_size, availability, commute, preferences, vibe). NULL on pre-migration rows and on vetoed listings. Rendered as per-component bars in `ListingDrawer`. Added in Alembic [`0006_scorecard_components.py`](../backend/alembic/versions/0006_scorecard_components.py). |
-| `veto_reason` | `Optional[str]` | Set when `evaluator.hard_filter` short-circuited evaluation (over budget, wrong city, avoid-district, etc.). Mutually exclusive with a populated `components` list; score is pinned at 0.0. Added in Alembic [`0006_scorecard_components.py`](../backend/alembic/versions/0006_scorecard_components.py). |
+| `travel_minutes` | `Optional[JSON]` | Fastest `{mode, minutes}` per `main_location.place_id` when commute data was available at score time. Shape: `{"<place_id>": {"mode": "BICYCLE", "minutes": 18}}`. Populated by `HuntEngine.run_find_only` from the full `commute.travel_times` matrix; read back by `_get_listing_detail` and re-keyed by label for the drawer. |
+| `nearby_places` | `Optional[JSON]` | Persisted nearby-place facts for place-like preferences. Shape: `[{key, label, searched, distance_m, place_name, category}]`. Populated by `HuntEngine.run_find_only` from [`places.nearby_places`](../backend/app/wg_agent/places.py); read back by `_get_listing_detail` for the drawer's nearby-preferences section. |
+| `components` | `Optional[JSON]` | Scorecard breakdown: `list[{key, score, weight, evidence, hard_cap?, missing_data}]`, one entry per `evaluator` component (price, size, wg_size, availability, commute, preferences, vibe). NULL on vetoed listings and on rows written before `components` existed. Rendered as per-component bars in `ListingDrawer`. |
+| `veto_reason` | `Optional[str]` | Set when `evaluator.hard_filter` short-circuited evaluation (over budget, wrong city, avoid-district, etc.). Mutually exclusive with a populated `components` list; score is pinned at 0.0. |
+| `scored_against_scraped_at` | `Optional[datetime]` | `ListingRow.scraped_at` at the moment the matcher produced this score. Lets the UI say "scored against listing data from N hours ago" and lets a future rescore path detect stale scores. |
 | `scored_at` | `datetime` | |
 
 - **SET**: [`repo.save_score`](../backend/app/wg_agent/repo.py) immediately after `evaluator.evaluate` in `HuntEngine.run_find_only`.
@@ -141,7 +156,7 @@ Append-only audit log for UI and debugging. `kind` is a plain string (not a DB e
 | `kind` | `str` | [`ActionKind.value`](../backend/app/wg_agent/models.py). |
 | `summary` | `str` | Short line for the log. |
 | `detail` | `Optional[str]` | Optional stack or extra text. |
-| `listing_id` | `Optional[str]` | When the action refers to one listing. |
+| `listing_id` | `Optional[str]` | FK → `listingrow.id` (nullable). Actions that reference a listing point into the global pool. |
 | `at` | `datetime` | Timestamp. |
 
 - **SET**: [`repo.append_action`](../backend/app/wg_agent/repo.py) from API boot/stop paths and from `HuntEngine` / `PeriodicHunter`.
@@ -149,13 +164,13 @@ Append-only audit log for UI and debugging. `kind` is a plain string (not a DB e
 
 ### MessageRow
 
-Reserved for outbound/inbound landlord messages. Present in Alembic [`0001_initial.py`](../backend/alembic/versions/0001_initial.py); no repository helpers in v1.
+Reserved for outbound/inbound landlord messages. Table is created by `SQLModel.metadata.create_all` on startup; no repository helpers in v1.
 
 | Field | Type | Notes |
 | ----- | ---- | ----- |
 | `id` | `Optional[int]` | Autoincrement PK. |
-| `listing_id` | `str` | Indexed; intended FK target listing id string. |
-| `hunt_id` | `str` | Indexed. |
+| `listing_id` | `str` | Indexed; FK → `listingrow.id`. |
+| `hunt_id` | `str` | Indexed; FK → `huntrow.id`. |
 | `direction` | `str` | Planned: `outbound` / `inbound`. |
 | `text` | `str` | Message body. |
 | `sent_at` | `datetime` | |
@@ -164,18 +179,20 @@ Reserved for outbound/inbound landlord messages. Present in Alembic [`0001_initi
 
 ## ER diagram
 
-Alembic enforces FKs from `wgcredentialsrow`, `searchprofilerow`, and `huntrow` to `userrow`; from `listingrow` and `agentactionrow` to `huntrow`. `photorow`, `listingscorerow`, and `messagerow` are keyed by `(listing_id, hunt_id)` (and ordinals or surrogate ids) but **do not** declare SQL-level FKs to `listingrow` in `0001_initial.py`—relationships below match the intended model.
+Every relationship below is declared as a SQL-level foreign key on MySQL via the SQLModel `Field(foreign_key=...)` annotations in [`db_models.py`](../backend/app/wg_agent/db_models.py), picked up by `SQLModel.metadata.create_all`. The scraper writes `ListingRow` + `PhotoRow`; hunts write `ListingScoreRow` + `AgentActionRow`. `ListingScoreRow` is the hunt ↔ listing membership record.
 
 ```mermaid
 erDiagram
   UserRow ||--o| WgCredentialsRow : "optional"
   UserRow ||--|| SearchProfileRow : "one"
   UserRow ||--o{ HuntRow : "has many"
-  HuntRow ||--o{ ListingRow : "discovered"
+  HuntRow ||--o{ ListingScoreRow : "scored"
   HuntRow ||--o{ AgentActionRow : "logs"
+  ListingRow ||--o{ ListingScoreRow : "matched to hunts"
   ListingRow ||--o{ PhotoRow : "ordered urls"
-  ListingRow ||--|| ListingScoreRow : "latest score"
+  ListingRow ||--o{ AgentActionRow : "referenced by"
   ListingRow ||--o{ MessageRow : "reserved v2"
+  HuntRow ||--o{ MessageRow : "reserved v2"
 ```
 
 ## The three-layer rule (in detail)
@@ -186,12 +203,12 @@ flowchart LR
   DTO --> Domain["Domain models<br/>(Pydantic, in backend/app/wg_agent/models.py)"]
   Domain --> Repo["repo.py<br/>(conversion boundary)"]
   Repo --> Tables["SQLModel tables<br/>(backend/app/wg_agent/db_models.py)"]
-  Tables --> SQLite[(SQLite)]
+  Tables --> MySQL[("MySQL")]
 ```
 
 ### React ([`types.ts`](../frontend/src/types.ts))
 
-The browser owns camelCase TypeScript types that mirror JSON after client-side normalization. Components and hooks never import SQLAlchemy or SQLModel. Network I/O goes through [`api.ts`](../frontend/src/lib/api.ts), which applies `toCamel` / `toSnake` so field names stay consistent with Python’s snake_case on the wire. This layer is disposable at build time: it has no direct knowledge of Alembic revisions or table layout.
+The browser owns camelCase TypeScript types that mirror JSON after client-side normalization. Components and hooks never import SQLAlchemy or SQLModel. Network I/O goes through [`api.ts`](../frontend/src/lib/api.ts), which applies `toCamel` / `toSnake` so field names stay consistent with Python’s snake_case on the wire. This layer is disposable at build time: it has no direct knowledge of the table layout.
 
 ### API DTOs ([`dto.py`](../backend/app/wg_agent/dto.py))
 
@@ -286,18 +303,26 @@ Values below are illustrative; timestamps are ISO-8601 strings as JSON would sho
 ```json
 {
   "id": "13115694",
-  "hunt_id": "a1b2c3d4e5f6",
   "url": "https://www.wg-gesucht.de/13115694.html",
   "title": "Room near Laim S-Bahn",
   "price_eur": 795,
   "size_m2": 14.0,
   "wg_size": 4,
+  "city": "München",
   "district": "Laim",
+  "address": "Fürstenrieder Straße 32",
   "lat": 48.1432,
   "lng": 11.5033,
   "available_from": "2026-05-01",
   "available_to": null,
   "description": "Bright room, shared kitchen…",
+  "furnished": true,
+  "pets_allowed": false,
+  "smoking_ok": false,
+  "languages": ["Deutsch", "Englisch"],
+  "scrape_status": "full",
+  "scraped_at": "2024-01-02T05:02:10",
+  "scrape_error": null,
   "first_seen_at": "2024-01-02T05:01:00",
   "last_seen_at": "2024-01-02T05:02:10"
 }
@@ -308,7 +333,6 @@ Values below are illustrative; timestamps are ISO-8601 strings as JSON would sho
 ```json
 {
   "listing_id": "13115694",
-  "hunt_id": "a1b2c3d4e5f6",
   "ordinal": 0,
   "url": "https://www.wg-gesucht.de/gal/…/thumb.jpg"
 }
@@ -373,6 +397,7 @@ Values below are illustrative; timestamps are ISO-8601 strings as JSON would sho
     }
   ],
   "veto_reason": null,
+  "scored_against_scraped_at": "2024-01-02T05:02:10",
   "scored_at": "2024-01-02T05:02:15"
 }
 ```
@@ -404,32 +429,43 @@ Values below are illustrative; timestamps are ISO-8601 strings as JSON would sho
 }
 ```
 
-## Field lifecycle for `ListingRow`
+## Field lifecycle for `ListingRow` (scraper) and `ListingScoreRow` (hunt)
 
-1. **Search stub** — `browser.anonymous_search` returns domain `Listing` objects with id, url, title, partial card fields (no long description yet). Nothing is persisted until a listing is treated as new for this hunt.
-2. **New id gate** — `HuntEngine` compares ids against `repo.list_listings_for_hunt`; unseen ids get `ActionKind.new_listing` rows first.
-3. **Deep scrape** — `browser.anonymous_scrape_listing` fills `description`, address/district, availability, etc., on the in-memory `Listing`.
-4. **Evaluate** — `evaluator.evaluate` runs `hard_filter`, all deterministic components, and the narrow `brain.vibe_score` LLM call. The domain `Listing` is mutated with `score`, `score_reason`, `match_reasons`, `mismatch_reasons`, `components`, and `veto_reason` before persist.
-5. **Persist** — `repo.upsert_listing` writes/merges `ListingRow` (preserving `first_seen_at`, updating `last_seen_at`); `repo.save_score` upserts `ListingScoreRow` with the component breakdown and optional veto reason.
-6. **Re-read** — `GET /api/hunts/{id}` and `GET /api/listings/{id}?hunt_id=` rebuild DTOs via `repo.get_hunt` / `_get_listing_detail`, joining scores + components (and photos when present).
+**Scraper container** (sole writer of `ListingRow` + `PhotoRow`):
+
+1. **Search stub** — `browser.anonymous_search` returns domain `Listing` objects with id, url, title, partial card fields.
+2. **Refresh gate** — `ScraperAgent._needs_scrape` skips listings whose `scrape_status == 'full'` and whose `scraped_at` is within `SCRAPER_REFRESH_HOURS`.
+3. **Deep scrape** — `browser.anonymous_scrape_listing` fills description, address/district, availability, etc. On HTTP failure the stub is persisted with `scrape_status='failed'` and `scrape_error`.
+4. **Persist** — `repo.upsert_global_listing` writes/merges `ListingRow` with `scrape_status='full'` when description + coords are present (otherwise `'stub'`), preserving `first_seen_at` and bumping `last_seen_at` + `scraped_at`. `repo.save_photos` replaces `PhotoRow`s.
+
+**Backend container, per hunt** (matcher, writes only `ListingScoreRow`):
+
+1. **Candidate fetch** — `repo.list_scorable_listings(hunt_id, status='full')` returns global listings not yet scored for this hunt.
+2. **Log new_listing** — one `AgentActionRow` per candidate via `repo.append_action(ActionKind.new_listing)`.
+3. **Evaluate** — `evaluator.evaluate` runs `hard_filter`, all deterministic components, and the narrow `brain.vibe_score` LLM call on the in-memory `Listing` rehydrated via `repo.row_to_domain_listing`.
+4. **Persist** — `repo.save_score` writes `ListingScoreRow` with `score`, components, veto, and `scored_against_scraped_at = row.scraped_at`. Vetoes still write a row so the UI can show the rejection reason.
+5. **Re-read** — `GET /api/hunts/{id}` rebuilds DTOs via `repo.get_hunt` → `list_listings_for_hunt`, which joins `ListingScoreRow JOIN ListingRow`. `GET /api/listings/{id}?hunt_id=` reads `ListingRow` by id and `ListingScoreRow` by `(id, hunt_id)`.
 
 ```mermaid
 sequenceDiagram
-  participant Search as anonymous_search
-  participant Engine as HuntEngine
-  participant Scrape as anonymous_scrape_listing
+  participant SA as ScraperAgent
+  participant WG as wg-gesucht.de
+  participant Engine as HuntEngine (matcher)
   participant Evaluator as evaluator.evaluate
   participant Brain as brain.vibe_score
-  participant DB as repo (SQLite)
+  participant DB as MySQL
 
-  Search-->>Engine: Listing stubs
+  SA->>WG: anonymous_search + anonymous_scrape_listing
+  WG-->>SA: enriched Listing
+  SA->>DB: upsert_global_listing (ListingRow, status=full) + save_photos (PhotoRow)
+
+  Engine->>DB: list_scorable_listings(hunt_id)
+  DB-->>Engine: ListingRow candidates
   Engine->>DB: append_action(new_listing)
-  Engine->>Scrape: per new id
-  Scrape-->>Engine: enriched Listing
   Engine->>Evaluator: hard_filter + components
   Evaluator->>Brain: vibe_score (only if not vetoed)
   Brain-->>Evaluator: VibeScore
   Evaluator-->>Engine: EvaluationResult
-  Engine->>DB: upsert_listing + save_score (with components)
+  Engine->>DB: save_score (ListingScoreRow, scored_against_scraped_at)
   Engine->>DB: append_action(evaluate) — "Scored" or "Rejected"
 ```
