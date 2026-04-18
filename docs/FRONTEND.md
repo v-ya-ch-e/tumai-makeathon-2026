@@ -50,7 +50,7 @@ frontend/src/pages/Health.tsx                Simple connectivity check page
 | Path | Component | Behavior |
 | --- | --- | --- |
 | `/` | `HomeRedirect` | Waits for `isReady`; sends authenticated users to `/dashboard`, else `/onboarding/profile` |
-| `/onboarding/profile` | `OnboardingProfile` | Creates/fetches `UserProfile`, stores username in session |
+| `/onboarding/profile` | `OnboardingProfile` | Two tabs: *Create account* (POST `/api/users`, then continue the wizard) and *Sign in* (GET `/api/users/{name}` to verify an existing username, then route to `/`). Both paths store the username in session. |
 | `/onboarding/requirements` | `OnboardingRequirements` | Edits numeric/slider/chip requirements, `PUT` search profile |
 | `/onboarding/preferences` | `OnboardingPreferences` | Toggles string tags, merges into search profile |
 | `/dashboard` | `Dashboard` | Starts/stops hunts, renders log + listings + credential dialog |
@@ -84,7 +84,7 @@ frontend/src/pages/Health.tsx                Simple connectivity check page
 
 ## Pages
 
-- **`OnboardingProfile`** — Collects username/age/gender, `POST /api/users` on first save, `setUsername`, navigates forward when `user` exists.
+- **`OnboardingProfile`** — Dual-mode page gated by a *Create account* / *Sign in* tab control. *Create* collects username/age/gender and `POST /api/users`, then navigates to `/onboarding/requirements`. *Sign in* accepts an existing username, verifies it with `getUser` (404 → inline error), then calls `setUsername` and navigates to `/` so `HomeRedirect` routes based on hydrated session. Progress steps only render on the create tab.
 - **`OnboardingRequirements`** — Binds sliders, chips, mode select, move-in dates, schedule fields to `UpsertSearchProfileBody`, persists with `putSearchProfile`. Main locations are collected via [`PlaceAutocomplete`](../frontend/src/components/PlaceAutocomplete.tsx) as structured `PlaceLocation[]` (`label`, `placeId`, `lat`, `lng`).
 - **`OnboardingPreferences`** — Grid of inline-SVG tiles toggling `preferences` string tags; saves merged profile before routing to `/dashboard`.
 - **`Dashboard`** — Loads search profile + optional credentials status, persists last hunt id in `localStorage` (`wg-hunter.hunt-id`), starts hunts (`createHunt`), attaches `streamHunt`, hydrates listings from periodic `getHunt` polling / SSE merges, hosts `ListingDrawer` + `ConnectWGDialog`, maps backend hunt status to UI pill tones.

@@ -12,6 +12,7 @@ export type OnboardingShellProps = {
   nextDisabled?: boolean
   busy?: boolean
   footer?: ReactNode
+  showProgress?: boolean
 }
 
 export function OnboardingShell({
@@ -25,15 +26,18 @@ export function OnboardingShell({
   nextDisabled = false,
   busy = false,
   footer,
+  showProgress = true,
 }: OnboardingShellProps) {
   const disabled = busy || nextDisabled
   const primaryLabel = busy ? 'Continuing…' : nextLabel
 
   return (
     <div className="min-h-screen bg-canvas">
-      <div className="w-full px-6 py-6">
-        <ProgressSteps current={step} />
-      </div>
+      {showProgress ? (
+        <div className="w-full px-6 py-6">
+          <ProgressSteps current={step} />
+        </div>
+      ) : null}
       <div className="mx-auto max-w-xl space-y-8 px-6 py-12">
         <h1 className="font-sans text-[28px] font-semibold tracking-tight text-ink">{title}</h1>
         {description ? (
