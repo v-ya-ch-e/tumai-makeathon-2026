@@ -188,6 +188,97 @@ Set up GitHub Actions to deploy on every push. See [CI-CONFIGURATION.md](./CI-CO
 
 Once configured, the workflow will SSH into your server and run the update commands automatically -- no manual steps needed.
 
+## Email notifications (Amazon SES)
+
+WG Hunter emails each user autonomously whenever a new wg-gesucht listing scores at/above `WG_NOTIFY_THRESHOLD` (default `0.9`). The per-user matcher runs inside the `backend` container on a loop — SSE to the browser is **not** required; notifications work even when the user is offline.
+
+The sender is `noreply@doubleu.team` (overridable via `SES_FROM_EMAIL`). Before any email actually leaves AWS you need to do the following **once**, in the AWS Console, in region **`eu-central-1` (Frankfurt)**.
+
+### 1. Verify the sender domain
+
+Verifying the whole domain (instead of a single address) enables DKIM and lets you send from any `@doubleu.team` address later.
+
+1. Open **[Simple Email Service → Identities](https://eu-central-1.console.aws.amazon.com/ses/home?region=eu-central-1#/identities)** and click **Create identity**.
+2. Choose **Domain**, enter `doubleu.team`, leave "Use a custom MAIL FROM domain" unchecked for now.
+3. Under **Advanced DKIM settings**, pick **Easy DKIM** with **RSA 2048-bit**. Click **Create identity**.
+4. SES generates three `CNAME` records of the form `xxx._domainkey.doubleu.team` → `xxx.dkim.amazonses.com`. Add all three to the DNS provider that hosts `doubleu.team` (the same one serving the `A` record for your EC2 box). TTL 300s is fine.
+5. Reload the SES Identities page every few minutes. You want:
+   - **Identity status: Verified**
+   - **DKIM configuration: Successful**
+
+Until both flip to green, SES refuses every `SendEmail` call for this domain.
+
+### 2. Request production access (exit the SES sandbox)
+
+A brand-new SES account is in **sandbox mode**: it can only send to pre-verified recipient addresses and is capped at 200 messages/day. For real users you must request production access.
+
+1. Open **[Account dashboard](https://eu-central-1.console.aws.amazon.com/ses/home?region=eu-central-1#/account)** and click **Request production access**.
+2. Fill in:
+   - **Mail type:** Transactional
+   - **Website URL:** `https://doubleu.team`
+   - **Use case description:** "Transactional WG-match alerts sent to users who explicitly save a notification email in their WG Hunter profile. Each user receives at most one email per new listing scoring above their configured threshold (default 90%). Volume: under 500/day. Expected bounce and complaint rates are low since recipients opt in at account creation."
+   - **Additional contacts:** leave blank
+3. Submit. AWS typically responds in a few hours (occasionally up to 24h).
+
+**While you wait**, you can still test end-to-end: go to **Identities → Create identity → Email address**, verify *your own* inbox (click the link AWS emails you), and point the debug route at that address. In sandbox mode both the sender domain *and* the recipient must be verified identities.
+
+### 3. Create an IAM user with SES send permission
+
+Never use your AWS root account for this.
+
+1. Open **[IAM → Users](https://us-east-1.console.aws.amazon.com/iam/home#/users)** and click **Create user**.
+2. Name it `wg-hunter-ses`. **Uncheck** "Provide user access to the AWS Management Console". Click **Next**.
+3. **Permissions options:** *Attach policies directly*. Search for and select **`AmazonSESFullAccess`**, or, for a tighter footprint, click **Create inline policy** and paste:
+
+   ```json
+   {
+     "Version": "2012-10-17",
+     "Statement": [{
+       "Effect": "Allow",
+       "Action": ["ses:SendEmail", "ses:SendRawEmail"],
+       "Resource": "arn:aws:ses:eu-central-1:<ACCOUNT_ID>:identity/doubleu.team"
+     }]
+   }
+   ```
+   (replace `<ACCOUNT_ID>` with your 12-digit AWS account number — visible in the top-right menu).
+4. Create the user, open it, go to **Security credentials → Create access key**, choose **Application running outside AWS**, and copy the `AKIA…` key ID and secret **now** — AWS won't show the secret again.
+
+### 4. Paste credentials into `.env` on the EC2 box
+
+SSH to the EC2 host and edit `~/tumai-makeathon-2026/.env`:
+
+```
+AWS_ACCESS_KEY_ID=AKIA...
+AWS_SECRET_ACCESS_KEY=...
+AWS_DEFAULT_REGION=eu-central-1
+SES_FROM_EMAIL=noreply@doubleu.team
+WG_NOTIFY_THRESHOLD=0.9
+WG_RESCAN_INTERVAL_MINUTES=3
+```
+
+Keep `.env` out of git (it already is via `.gitignore`). Both the `backend` and `scraper` services load it via `env_file: .env` in [`docker-compose.yml`](./docker-compose.yml), but only `backend` actually calls SES today.
+
+### 5. Redeploy and smoke-test
+
+```bash
+# on the EC2 host
+cd ~/tumai-makeathon-2026
+docker compose up -d --build
+```
+
+(or just `git push origin main` and let the CI workflow do it for you).
+
+Temporarily enable the debug route, then fire a test:
+
+```bash
+# add ENABLE_EMAIL_DEBUG=1 to .env, restart, then:
+curl "https://doubleu.team/api/debug/send-test-email?to=you@example.com"
+```
+
+Check `docker compose logs -f backend` — you should see `Sent score-alert email to you@example.com (score=0.91, user=test-user)`. If you see `Failed to send score-alert email to …: MessageRejected: Email address is not verified`, the sender domain or recipient isn't verified yet (see step 1 / step 2). After verifying the real flow, set `ENABLE_EMAIL_DEBUG=0` and redeploy so the debug route is not exposed publicly.
+
+From that point on, any saved user profile whose email is set will receive an HTML notification whenever their matcher pass scores a new listing ≥ 0.9. No frontend interaction required.
+
 ## Useful Commands
 
 | Command | Description |

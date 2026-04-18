@@ -30,7 +30,7 @@ type FieldErrors = {
 
 export default function OnboardingProfile() {
   const navigate = useNavigate()
-  const { setUsername } = useSession()
+  const { setUsername, setSession } = useSession()
 
   const [mode, setMode] = useState<Mode>('create')
   const [usernameInput, setUsernameInput] = useState('')
@@ -117,8 +117,14 @@ export default function OnboardingProfile() {
         setFooter(<p className="text-[15px] text-bad">No saved profile with that username exists yet.</p>)
         return
       }
-      setUsername(username)
-      navigate('/', { replace: true })
+      setSession(username, user)
+      // Navigate straight to /dashboard instead of going through HomeRedirect
+      // at '/'. React Router 7 re-renders the matched route synchronously from
+      // its external history store, which can out-race the React state commit
+      // from setSession. If HomeRedirect reads the still-null session it
+      // bounces us right back to /onboarding/profile, which is why sign-in
+      // appeared to only succeed on the second attempt.
+      navigate('/dashboard', { replace: true })
     } catch (error) {
       if (error instanceof ApiError) {
         setFooter(<p className="text-[15px] text-bad">{error.message}</p>)

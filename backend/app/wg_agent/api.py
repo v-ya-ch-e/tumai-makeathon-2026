@@ -11,7 +11,9 @@ from fastapi import APIRouter, Depends, HTTPException, Query, Response
 from fastapi.responses import StreamingResponse
 from sqlmodel import Session, select
 
-from . import periodic, repo
+import os
+
+from . import notifier, periodic, repo
 from .db import engine, get_session
 from .db_models import ListingRow, PhotoRow, UserListingRow
 from .dto import (
@@ -107,11 +109,12 @@ def update_user(
 
 
 @router.put("/users/{username}/search-profile", response_model=SearchProfileDTO)
-def put_search_profile(
+async def put_search_profile(
     username: str,
     body: UpsertSearchProfileBody,
     session: Session = Depends(get_session),
 ) -> SearchProfileDTO:
+    # async so we can call `asyncio.create_task` inside `spawn_user_agent`.
     if repo.get_user(session, username=username) is None:
         raise HTTPException(status_code=404, detail="User not found")
     sp = upsert_body_to_search_profile(body)
@@ -183,9 +186,10 @@ def get_credentials_status(
 
 
 @router.post("/users/{username}/agent/start", status_code=204)
-def start_agent(
+async def start_agent(
     username: str, session: Session = Depends(get_session)
 ) -> Response:
+    # async so `spawn_user_agent` can schedule the task on the running loop.
     if repo.get_user(session, username=username) is None:
         raise HTTPException(status_code=404, detail="User not found")
     sp = repo.get_search_profile(session, username=username)
@@ -242,11 +246,15 @@ def list_user_actions_endpoint(
 
 
 @router.get("/users/{username}/stream")
-async def stream_user_events(
-    username: str, session: Session = Depends(get_session)
-) -> StreamingResponse:
-    if repo.get_user(session, username=username) is None:
-        raise HTTPException(status_code=404, detail="User not found")
+async def stream_user_events(username: str) -> StreamingResponse:
+    # Do not use Depends(get_session) here: SSE responses are long-lived, and
+    # keeping the injected session open for the whole stream would leak a DB
+    # connection per subscriber and quickly exhaust the SQLAlchemy pool
+    # (QueuePool limit ... reached). Use a short-lived session only for the
+    # existence check, and let event_source open its own scoped sessions.
+    with Session(engine) as s:
+        if repo.get_user(s, username=username) is None:
+            raise HTTPException(status_code=404, detail="User not found")
 
     async def event_source():
         seen: set[tuple[datetime, str, str]] = set()
@@ -298,6 +306,29 @@ def get_listing_detail(
     if detail is None:
         raise HTTPException(status_code=404, detail="Listing not found")
     return detail
+
+
+# --- Debug / smoke tests ---------------------------------------------------
+
+
+def _email_debug_enabled() -> bool:
+    raw = os.environ.get("ENABLE_EMAIL_DEBUG", "").strip().lower()
+    return raw in {"1", "true", "yes", "on"}
+
+
+@router.get("/debug/send-test-email")
+def debug_send_test_email(
+    to: str = Query(..., description="Destination email address"),
+) -> dict:
+    """Fire a single SES test email. Disabled unless ENABLE_EMAIL_DEBUG is set.
+
+    Useful for verifying that SES credentials + verified identity + sandbox
+    status are all correctly configured without waiting for a real 0.9+ match.
+    """
+    if not _email_debug_enabled():
+        raise HTTPException(status_code=404, detail="Not Found")
+    notifier.send_test_email(to)
+    return {"status": "dispatched", "to": to}
 
 
 # --- Helpers ---------------------------------------------------------------
