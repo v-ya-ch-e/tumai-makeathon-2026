@@ -107,11 +107,12 @@ def update_user(
 
 
 @router.put("/users/{username}/search-profile", response_model=SearchProfileDTO)
-def put_search_profile(
+async def put_search_profile(
     username: str,
     body: UpsertSearchProfileBody,
     session: Session = Depends(get_session),
 ) -> SearchProfileDTO:
+    # async so we can call `asyncio.create_task` inside `spawn_user_agent`.
     if repo.get_user(session, username=username) is None:
         raise HTTPException(status_code=404, detail="User not found")
     sp = upsert_body_to_search_profile(body)
@@ -183,9 +184,10 @@ def get_credentials_status(
 
 
 @router.post("/users/{username}/agent/start", status_code=204)
-def start_agent(
+async def start_agent(
     username: str, session: Session = Depends(get_session)
 ) -> Response:
+    # async so `spawn_user_agent` can schedule the task on the running loop.
     if repo.get_user(session, username=username) is None:
         raise HTTPException(status_code=404, detail="User not found")
     sp = repo.get_search_profile(session, username=username)
