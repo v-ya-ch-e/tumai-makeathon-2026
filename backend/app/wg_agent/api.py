@@ -246,11 +246,15 @@ def list_user_actions_endpoint(
 
 
 @router.get("/users/{username}/stream")
-async def stream_user_events(
-    username: str, session: Session = Depends(get_session)
-) -> StreamingResponse:
-    if repo.get_user(session, username=username) is None:
-        raise HTTPException(status_code=404, detail="User not found")
+async def stream_user_events(username: str) -> StreamingResponse:
+    # Do not use Depends(get_session) here: SSE responses are long-lived, and
+    # keeping the injected session open for the whole stream would leak a DB
+    # connection per subscriber and quickly exhaust the SQLAlchemy pool
+    # (QueuePool limit ... reached). Use a short-lived session only for the
+    # existence check, and let event_source open its own scoped sessions.
+    with Session(engine) as s:
+        if repo.get_user(s, username=username) is None:
+            raise HTTPException(status_code=404, detail="User not found")
 
     async def event_source():
         seen: set[tuple[datetime, str, str]] = set()
