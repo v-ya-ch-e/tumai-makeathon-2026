@@ -18,6 +18,10 @@ services:
         VITE_GOOGLE_MAPS_API_KEY: ${VITE_GOOGLE_MAPS_API_KEY:-}
     ports:
       - "80:80"
+      - "443:443"
+    volumes:
+      - ./fullchain.crt:/etc/nginx/certs/fullchain.crt:ro
+      - ./privkey.key:/etc/nginx/certs/privkey.key:ro
     depends_on:
       - backend
     restart: unless-stopped
