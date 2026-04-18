@@ -136,3 +136,13 @@ export type TimelineItem = {
   category: TimelineCategory
   urgency: UrgencyLevel
 }
+
+export type MapsEntry = {
+  id: string
+  lat: number
+  lng: number
+  title: string | null
+  score: number | null
+  priceEur: number | null
+  district: string | null
+}
