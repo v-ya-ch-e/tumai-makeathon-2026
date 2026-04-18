@@ -10,7 +10,7 @@ Loop (simplified):
     7. On `asks_for_info` → reply with the student's info.
     8. Stop after messages cap or time budget expires.
 
-The orchestrator publishes every step to `HuntRun.actions` and to an asyncio.Queue
+The orchestrator publishes every step to `Hunt.actions` and to an asyncio.Queue
 so the FastAPI SSE endpoint can stream progress to the UI.
 """
 
@@ -21,7 +21,7 @@ import logging
 import re
 import time
 from datetime import datetime
-from typing import Optional
+from typing import TYPE_CHECKING, Optional
 
 from bs4 import BeautifulSoup
 
@@ -30,14 +30,16 @@ from .browser import WGBrowser, launch_browser
 from .models import (
     ActionKind,
     AgentAction,
-    HuntRequest,
-    HuntRun,
+    Hunt,
     HuntStatus,
     Listing,
     Message,
     MessageDirection,
     ReplyIntent,
 )
+
+if TYPE_CHECKING:
+    from .api import HuntRequest
 
 logger = logging.getLogger(__name__)
 
@@ -56,7 +58,7 @@ DEFAULT_MIN_SCORE = 0.55
 class HuntOrchestrator:
     """One instance per hunt run, owned by the FastAPI background task."""
 
-    def __init__(self, request: HuntRequest, run: HuntRun) -> None:
+    def __init__(self, request: "HuntRequest", run: Hunt) -> None:
         self.request = request
         self.run = run
         self.event_queue: asyncio.Queue[AgentAction] = asyncio.Queue()
@@ -86,7 +88,7 @@ class HuntOrchestrator:
 
     # --- Entry point ---------------------------------------------------------
 
-    async def run_hunt(self) -> HuntRun:
+    async def run_hunt(self) -> Hunt:
         self.run.status = HuntStatus.running
         self._log(
             ActionKind.boot,

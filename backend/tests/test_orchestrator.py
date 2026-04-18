@@ -20,16 +20,16 @@ sys.path.insert(0, str(pathlib.Path(__file__).resolve().parent.parent))
 
 from app.wg_agent import brain as brain_module
 from app.wg_agent import browser as browser_module
+from app.wg_agent.api import HuntRequest
 from app.wg_agent.models import (
     ActionKind,
-    HuntRequest,
-    HuntRun,
+    ContactInfo,
+    Hunt,
     HuntStatus,
     Listing,
     ReplyAnalysis,
     ReplyIntent,
-    RoomRequirements,
-    StudentProfile,
+    SearchProfile,
     WGCredentials,
 )
 from app.wg_agent.orchestrator import HuntOrchestrator
@@ -47,7 +47,7 @@ class _MockBrowser:
     async def ensure_logged_in(self) -> bool:
         return True
 
-    async def search(self, req: RoomRequirements, *, max_pages: int = 2) -> list[Listing]:
+    async def search(self, req: SearchProfile, *, max_pages: int = 2) -> list[Listing]:
         html = (HERE / "fixtures" / "search_muenchen.html").read_text(encoding="utf-8")
         return browser_module.parse_search_page(html)[: req.max_listings_to_consider]
 
@@ -86,9 +86,9 @@ def _fake_classify(reply_text):
     return ReplyAnalysis(intent=ReplyIntent.unclear, summary=reply_text[:80], next_action="wait")
 
 
-async def _run_one() -> HuntRun:
+async def _run_one() -> Hunt:
     req = HuntRequest(
-        requirements=RoomRequirements(
+        requirements=SearchProfile(
             city="München",
             max_rent_eur=800,
             min_size_m2=12,
@@ -98,11 +98,11 @@ async def _run_one() -> HuntRun:
             max_messages_to_send=3,
         ),
         credentials=WGCredentials(username="x@example.com", password="secret"),
-        profile=StudentProfile(first_name="Lea", age=23, email="lea@example.com"),
+        profile=ContactInfo(first_name="Lea", age=23, email="lea@example.com"),
         dry_run=True,
         headless=True,
     )
-    run = HuntRun(requirements=req.requirements, dry_run=True)
+    run = Hunt(requirements=req.requirements, dry_run=True)
 
     with patch.object(browser_module, "launch_browser", _fake_launch), \
          patch.object(brain_module, "score_listing", _fake_score), \

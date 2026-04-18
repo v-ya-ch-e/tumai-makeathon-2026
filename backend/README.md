@@ -77,7 +77,7 @@ field on the home page.
 | Method | Path                     | Description                                              |
 | ------ | ------------------------ | -------------------------------------------------------- |
 | `GET`  | `/wg/`                   | Dashboard: form to start a new hunt + list of recent runs. |
-| `POST` | `/wg/hunt`               | Kick off a new hunt. Body: `HuntRequest` (see `models.py`). |
+| `POST` | `/wg/hunt`               | Kick off a new hunt. Body: `HuntRequest` (see `api.py`). |
 | `GET`  | `/wg/hunt/{run_id}`      | JSON state of a hunt (listings, messages, action log).  |
 | `GET`  | `/wg/hunt/{run_id}/stream` | Server-Sent Events stream of live agent actions.        |
 | `GET`  | `/wg/runs/{run_id}`      | Rendered HTML view of a hunt.                           |
@@ -112,7 +112,7 @@ backend/
 │   ├── main.py                  # FastAPI entry point (plugs in the WG router)
 │   └── wg_agent/
 │       ├── WG_GESUCHT.md        # Live recon notes — update when the site changes
-│       ├── models.py            # Pydantic: RoomRequirements, Listing, HuntRun, …
+│       ├── models.py            # Pydantic: SearchProfile, Listing, Hunt, …
 │       ├── browser.py           # Playwright driver + BeautifulSoup parsers
 │       ├── brain.py             # OpenAI: score / draft / classify / reply
 │       ├── orchestrator.py      # The agent loop + action log

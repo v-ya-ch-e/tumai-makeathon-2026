@@ -29,7 +29,7 @@ from playwright.async_api import (
     async_playwright,
 )
 
-from .models import CITY_CATALOGUE, Listing, RoomRequirements, WGCredentials
+from .models import CITY_CATALOGUE, Listing, SearchProfile, WGCredentials
 
 BASE_URL = "https://www.wg-gesucht.de"
 USER_AGENT = (
@@ -51,7 +51,7 @@ def _city_slug_and_id(city: str) -> tuple[int, str]:
     return CITY_CATALOGUE["Muenchen"]
 
 
-def build_search_url(req: RoomRequirements, page_index: int = 0) -> str:
+def build_search_url(req: SearchProfile, page_index: int = 0) -> str:
     """Compose a wg-gesucht listing-search URL.
 
     IMPORTANT: the ``offer_filter=1`` and ``city_id`` query parameters trigger a
@@ -393,7 +393,7 @@ class WGBrowser:
 
     # -- search ---------------------------------------------------------------
 
-    async def search(self, req: RoomRequirements, *, max_pages: int = 2) -> list[Listing]:
+    async def search(self, req: SearchProfile, *, max_pages: int = 2) -> list[Listing]:
         """Return a deduplicated list of listing stubs for the given requirements."""
         seen: set[str] = set()
         out: list[Listing] = []

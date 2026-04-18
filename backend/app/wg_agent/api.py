@@ -11,9 +11,29 @@ from fastapi import APIRouter, HTTPException, Request
 from fastapi.responses import HTMLResponse, StreamingResponse
 from fastapi.staticfiles import StaticFiles
 from fastapi.templating import Jinja2Templates
+from pydantic import BaseModel, Field
 
-from .models import HuntRequest, HuntRun, HuntStatus
+from .models import ContactInfo, Hunt, HuntStatus, SearchProfile, WGCredentials
 from .orchestrator import HuntOrchestrator
+
+
+class HuntRequest(BaseModel):
+    """Top-level POST body that kicks off a hunt run."""
+
+    requirements: SearchProfile
+    credentials: WGCredentials
+    profile: ContactInfo
+    dry_run: bool = Field(
+        default=True,
+        description=(
+            "If True, the agent searches + scores + drafts messages but never actually "
+            "sends anything on wg-gesucht. Great for demos and safe by default."
+        ),
+    )
+    headless: bool = Field(
+        default=False,
+        description="If False, Playwright browser is visible — best for demos.",
+    )
 
 logger = logging.getLogger(__name__)
 
@@ -24,7 +44,7 @@ templates = Jinja2Templates(directory=str(HERE / "templates"))
 
 # In-memory registry of running hunts. For a real deployment this would be a
 # DB / Redis; for a hackathon demo a process-local dict is fine.
-RUNS: dict[str, HuntRun] = {}
+RUNS: dict[str, Hunt] = {}
 ORCHESTRATORS: dict[str, HuntOrchestrator] = {}
 TASKS: dict[str, asyncio.Task] = {}
 
@@ -48,9 +68,9 @@ async def run_page(request: Request, run_id: str) -> HTMLResponse:
 
 # --- REST ---------------------------------------------------------------------
 
-@router.post("/hunt", response_model=HuntRun)
-async def start_hunt(payload: HuntRequest) -> HuntRun:
-    run = HuntRun(
+@router.post("/hunt", response_model=Hunt)
+async def start_hunt(payload: HuntRequest) -> Hunt:
+    run = Hunt(
         requirements=payload.requirements,
         dry_run=payload.dry_run,
         status=HuntStatus.pending,
@@ -62,8 +82,8 @@ async def start_hunt(payload: HuntRequest) -> HuntRun:
     return run
 
 
-@router.get("/hunt/{run_id}", response_model=HuntRun)
-async def get_hunt(run_id: str) -> HuntRun:
+@router.get("/hunt/{run_id}", response_model=Hunt)
+async def get_hunt(run_id: str) -> Hunt:
     run = RUNS.get(run_id)
     if run is None:
         raise HTTPException(status_code=404, detail="Run not found")

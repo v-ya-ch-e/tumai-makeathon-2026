@@ -43,7 +43,7 @@ class RentType(int, Enum):
     overnight = 3
 
 
-class RoomRequirements(BaseModel):
+class SearchProfile(BaseModel):
     """What kind of WG room the student is hunting for."""
 
     city: str = Field(..., description="City name, e.g. 'München'")
@@ -90,7 +90,16 @@ class WGCredentials(BaseModel):
     )
 
 
-class StudentProfile(BaseModel):
+class UserProfile(BaseModel):
+    """The local account entity: a unique username + basic demographics."""
+
+    username: str = Field(..., min_length=1, description="Unique, user-chosen handle")
+    age: int = Field(..., ge=16, le=99)
+    gender: Gender = Gender.prefer_not_to_say
+    created_at: datetime = Field(default_factory=datetime.utcnow)
+
+
+class ContactInfo(BaseModel):
     """Personal info the agent uses when drafting messages."""
 
     first_name: str
@@ -107,25 +116,6 @@ class StudentProfile(BaseModel):
         description="Short paragraph the agent can quote verbatim in intro messages",
     )
     languages: list[str] = Field(default_factory=lambda: ["English", "German"])
-
-
-class HuntRequest(BaseModel):
-    """Top-level POST body that kicks off a hunt run."""
-
-    requirements: RoomRequirements
-    credentials: WGCredentials
-    profile: StudentProfile
-    dry_run: bool = Field(
-        default=True,
-        description=(
-            "If True, the agent searches + scores + drafts messages but never actually "
-            "sends anything on wg-gesucht. Great for demos and safe by default."
-        ),
-    )
-    headless: bool = Field(
-        default=False,
-        description="If False, Playwright browser is visible — best for demos.",
-    )
 
 
 # --- Output: what the agent found & did ---------------------------------------
@@ -228,12 +218,12 @@ class HuntStatus(str, Enum):
     failed = "failed"
 
 
-class HuntRun(BaseModel):
+class Hunt(BaseModel):
     id: str = Field(default_factory=lambda: uuid4().hex[:12])
     status: HuntStatus = HuntStatus.pending
     started_at: datetime = Field(default_factory=datetime.utcnow)
     finished_at: Optional[datetime] = None
-    requirements: RoomRequirements
+    requirements: SearchProfile
     dry_run: bool = True
     listings: list[Listing] = Field(default_factory=list)
     messages: list[Message] = Field(default_factory=list)

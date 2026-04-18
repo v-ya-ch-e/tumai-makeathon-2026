@@ -20,11 +20,11 @@ from openai import OpenAI
 from pydantic import ValidationError
 
 from .models import (
+    ContactInfo,
     Listing,
     ReplyAnalysis,
     ReplyIntent,
-    RoomRequirements,
-    StudentProfile,
+    SearchProfile,
 )
 
 logger = logging.getLogger(__name__)
@@ -60,7 +60,7 @@ def _listing_summary(listing: Listing) -> str:
     return "\n".join(p for p in parts if p)
 
 
-def _requirements_summary(req: RoomRequirements) -> str:
+def _requirements_summary(req: SearchProfile) -> str:
     return "\n".join(
         [
             f"City: {req.city}",
@@ -79,7 +79,7 @@ def _requirements_summary(req: RoomRequirements) -> str:
     )
 
 
-def _profile_summary(p: StudentProfile) -> str:
+def _profile_summary(p: ContactInfo) -> str:
     return "\n".join(
         [
             f"Name: {p.first_name} {p.last_name}".strip(),
@@ -122,7 +122,7 @@ Only return valid JSON, no prose.
 """
 
 
-def score_listing(listing: Listing, requirements: RoomRequirements) -> Listing:
+def score_listing(listing: Listing, requirements: SearchProfile) -> Listing:
     """Ask the LLM to rate `listing` against `requirements`. Mutates + returns listing."""
     client = _client()
     user_msg = SCORE_USER_TEMPLATE.format(
@@ -184,7 +184,7 @@ Guidelines:
 """
 
 
-def draft_message(listing: Listing, profile: StudentProfile) -> str:
+def draft_message(listing: Listing, profile: ContactInfo) -> str:
     """Return plain-text message body, ready to paste into the wg-gesucht form."""
     client = _client()
     response = client.chat.completions.create(
@@ -305,7 +305,7 @@ Guidelines:
 def reply_to_landlord(
     reply_text: str,
     listing: Listing,
-    profile: StudentProfile,
+    profile: ContactInfo,
     mode: str,
 ) -> str:
     client = _client()
