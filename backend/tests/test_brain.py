@@ -10,11 +10,13 @@ from __future__ import annotations
 
 import pathlib
 import sys
+from unittest.mock import patch
 
 from pydantic import HttpUrl
 
 sys.path.insert(0, str(pathlib.Path(__file__).resolve().parent.parent))
 
+from app.wg_agent import brain  # noqa: E402
 from app.wg_agent.brain import _listing_summary, _requirements_summary  # noqa: E402
 from app.wg_agent.models import (  # noqa: E402
     Listing,
@@ -128,3 +130,26 @@ def test_requirements_summary_omits_preferences_line_when_empty() -> None:
     integration tests without prefs keep their exact wording."""
     out = _requirements_summary(_sp([]))
     assert "Preferences" not in out
+
+
+def test_client_ignores_local_openai_base_url(monkeypatch) -> None:
+    monkeypatch.setenv("OPENAI_API_KEY", "test-key")
+    monkeypatch.setenv("OPENAI_BASE_URL", "http://127.0.0.1:60992")
+
+    with patch("app.wg_agent.brain.OpenAI") as client:
+        brain._client()
+
+    client.assert_called_once_with(api_key="test-key")
+
+
+def test_client_keeps_non_local_openai_base_url(monkeypatch) -> None:
+    monkeypatch.setenv("OPENAI_API_KEY", "test-key")
+    monkeypatch.setenv("OPENAI_BASE_URL", "https://api.openai.com/v1")
+
+    with patch("app.wg_agent.brain.OpenAI") as client:
+        brain._client()
+
+    client.assert_called_once_with(
+        api_key="test-key",
+        base_url="https://api.openai.com/v1",
+    )

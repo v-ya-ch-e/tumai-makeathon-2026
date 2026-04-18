@@ -18,6 +18,10 @@ from .models import ActionKind, AgentAction, HuntStatus, Listing, SearchProfile
 logger = logging.getLogger(__name__)
 
 
+class HuntRunFailed(RuntimeError):
+    """Fatal hunt error that should mark the run as failed."""
+
+
 def _shortest_mode_min_per_location(
     travel_times: dict[tuple[str, str], int],
 ) -> dict[str, dict[str, object]]:
@@ -96,15 +100,7 @@ class HuntEngine:
         try:
             found = await browser.anonymous_search(sp, max_pages=2)
         except Exception as exc:  # noqa: BLE001
-            err = AgentAction(
-                kind=ActionKind.error,
-                summary=f"Search failed: {exc}",
-                detail=str(exc),
-            )
-            with Session(db_module.engine) as session:
-                _append(session, self._hunt_id, err)
-            _safe_put(self._event_queue, err)
-            return 0
+            raise HuntRunFailed(f"Search failed: {exc}") from exc
 
         n_found = len(found)
         capped = found[:max_listings]

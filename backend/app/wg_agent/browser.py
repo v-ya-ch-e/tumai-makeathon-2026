@@ -113,6 +113,33 @@ def _clean(text: Optional[str]) -> str:
     return re.sub(r"\s+", " ", text).strip()
 
 
+def _looks_like_block_page(soup: BeautifulSoup, full_text: str) -> bool:
+    """Detect captcha / anti-bot interstitials so we keep the stub listing data."""
+    listing_markers = (
+        soup.select_one("#ad_description_text") is not None
+        or soup.find("h2", string=re.compile(r"Kosten|Verfügbarkeit|Adresse", re.I))
+        is not None
+        or _find_contact_url(str(soup)) is not None
+    )
+    if listing_markers:
+        return False
+
+    if soup.find(attrs={"data-sitekey": True}) is not None:
+        return True
+    if soup.find(["iframe", "script"], src=re.compile(r"turnstile|captcha", re.I)) is not None:
+        return True
+
+    return bool(
+        re.search(
+            r"captcha|turnstile|verify you are human|are you human|"
+            r"sicherheits(über|ueber)pr(ü|ue)fung|bist du ein mensch|"
+            r"ungew(ö|oe)hnlichen datenverkehr|automated requests|robot",
+            full_text,
+            re.I,
+        )
+    )
+
+
 def _normalized_photo_url(raw: Optional[str]) -> Optional[str]:
     if not raw:
         return None
@@ -402,6 +429,9 @@ def parse_listing_page(html: str, listing: Listing) -> Listing:
     """
     soup = BeautifulSoup(html, "html.parser")
     full_text = _clean(soup.get_text(" "))
+
+    if _looks_like_block_page(soup, full_text):
+        return listing
 
     h1 = soup.find("h1")
     if h1:
@@ -801,8 +831,14 @@ async def anonymous_search(
                 response = await client.get(url)
                 response.raise_for_status()
             except httpx.HTTPError:
+                if page_index == 0:
+                    raise
                 break
             batch = parse_search_page(response.text, seen_ids=seen)
+            if page_index == 0 and not batch:
+                raise RuntimeError(
+                    "Search page returned no parsable listings on the first page."
+                )
             if not batch:
                 break
             out.extend(batch)

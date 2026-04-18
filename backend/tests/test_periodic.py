@@ -193,6 +193,60 @@ def test_periodic_hunter_runs_stop_correctly(monkeypatch) -> None:
     assert any(a.kind == ActionKind.done for a in actions)
 
 
+def test_periodic_hunter_marks_search_failures_failed(monkeypatch) -> None:
+    engine = create_engine(
+        "sqlite://",
+        connect_args={"check_same_thread": False},
+    )
+    SQLModel.metadata.create_all(engine)
+    monkeypatch.setattr(db_module, "engine", engine)
+
+    async def search_boom(*_a, **_kw):
+        raise RuntimeError("dns lookup failed")
+
+    with Session(engine) as session:
+        repo.create_user(
+            session,
+            profile=UserProfile(username="u2b", age=24, gender=Gender.male),
+        )
+        sp = SearchProfile(
+            city="München",
+            max_rent_eur=800,
+            rescan_interval_minutes=30,
+            schedule="one_shot",
+        )
+        repo.upsert_search_profile(session, username="u2b", sp=sp)
+        hunt = repo.create_hunt(session, username="u2b", schedule="one_shot")
+        repo.update_hunt_status(session, hunt_id=hunt.id, status=HuntStatus.running)
+
+    q: asyncio.Queue = asyncio.Queue()
+    hunter = PeriodicHunter(
+        hunt.id,
+        "u2b",
+        interval_minutes=0,
+        event_queue=q,
+        schedule="one_shot",
+    )
+
+    with patch(
+        "app.wg_agent.periodic.browser.anonymous_search",
+        new=AsyncMock(side_effect=search_boom),
+    ):
+        asyncio.run(hunter.start())
+
+    with Session(engine) as session:
+        hrow = session.get(HuntRow, hunt.id)
+        actions = repo.list_actions_for_hunt(session, hunt_id=hunt.id)
+
+    assert hrow is not None
+    assert hrow.status == HuntStatus.failed.value
+    assert any(
+        a.kind == ActionKind.error and "dns lookup failed" in a.summary
+        for a in actions
+    )
+    assert not any(a.kind == ActionKind.done for a in actions)
+
+
 def test_commute_times_reach_score_listing(monkeypatch) -> None:
     engine = create_engine(
         "sqlite://",

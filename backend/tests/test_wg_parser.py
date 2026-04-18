@@ -144,10 +144,34 @@ def test_parse_listing_photo_urls() -> None:
     ]
 
 
+def test_parse_listing_page_ignores_captcha_interstitial() -> None:
+    html = """
+    <html>
+      <body>
+        <h1>Bitte bestätige, dass du ein Mensch bist</h1>
+        <form action="/captcha">
+          <div class="cf-turnstile" data-sitekey="demo"></div>
+        </form>
+      </body>
+    </html>
+    """
+
+    stub = Listing(
+        id="13115694",
+        url=LISTING_URL,
+        title="AVAILABLE ROOM in internationaler 8er WG",
+    )
+    enriched = parse_listing_page(html, stub)
+
+    assert enriched.title == "AVAILABLE ROOM in internationaler 8er WG"
+    assert enriched.description is None
+
+
 if __name__ == "__main__":
     test_parse_search_page()
     test_parse_listing_page()
     test_parse_listing_structured_fields()
     test_parse_listing_description_is_not_page_chrome()
     test_parse_listing_photo_urls()
+    test_parse_listing_page_ignores_captcha_interstitial()
     print("parser smoke tests passed")
