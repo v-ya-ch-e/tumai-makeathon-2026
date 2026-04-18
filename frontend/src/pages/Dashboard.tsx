@@ -60,6 +60,10 @@ function formatBudget(profile: SearchProfile): string {
   return profile.priceMaxEur !== null ? `Up to ${profile.priceMaxEur} EUR` : 'Flexible'
 }
 
+function huntIdForUsername(username: string): string {
+  return `user:${encodeURIComponent(username)}`
+}
+
 function topScore(listings: Listing[]): string {
   const scored = listings.map((listing) => listing.score).filter((score): score is number => score !== null)
   if (scored.length === 0) return '—'
@@ -132,7 +136,12 @@ export default function Dashboard() {
       }
       setProfile(searchProfile)
       const storedId = localStorage.getItem(LS_HUNT_ID)
-      const nextHunt = await refreshHunt(storedId)
+      const expectedHuntId = huntIdForUsername(username)
+      const huntId = storedId === expectedHuntId ? storedId : expectedHuntId
+      if (storedId !== huntId) {
+        localStorage.setItem(LS_HUNT_ID, huntId)
+      }
+      const nextHunt = await refreshHunt(huntId)
       if (!cancelled) applyHunt(nextHunt)
     })()
     return () => {

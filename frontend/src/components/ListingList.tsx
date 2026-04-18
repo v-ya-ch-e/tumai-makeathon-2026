@@ -92,7 +92,7 @@ export function ListingList({ listings, onOpen, emptyLabel }: ListingListProps) 
               </div>
 
               <div className="min-w-0">
-                <div className="flex flex-wrap items-start justify-between gap-3">
+                <div className="grid gap-3 sm:grid-cols-[minmax(0,1fr)_auto] sm:items-start">
                   <div className="min-w-0">
                     <h3 className="truncate text-[20px] font-semibold text-ink">
                       {listing.title ?? `Listing ${listing.id}`}
@@ -101,7 +101,7 @@ export function ListingList({ listings, onOpen, emptyLabel }: ListingListProps) 
                       {subline(listing) || 'Location and availability still loading'}
                     </p>
                   </div>
-                  <div className="flex flex-wrap items-center gap-2">
+                  <div className="flex items-start justify-start sm:justify-end">
                     <StatusPill tone={scoreTone(listing.score)}>{scoreLabel(listing.score)}</StatusPill>
                   </div>
                 </div>
