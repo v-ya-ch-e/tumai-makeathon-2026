@@ -258,8 +258,13 @@ async def stream_user_events(username: str) -> StreamingResponse:
 
     async def event_source():
         seen: set[tuple[datetime, str, str]] = set()
+        # Only replay the most-recent slice of history on connect. Emitting
+        # every historical action on every (re)connect triggers a refresh storm
+        # on the client (each `evaluate`/`new_listing` event causes a refresh).
         with Session(engine) as s:
-            initial = repo.list_actions_for_user(s, username=username)
+            initial = repo.list_actions_for_user(
+                s, username=username, limit=200
+            )
         for a in initial:
             seen.add((a.at, a.kind.value, a.summary))
             yield _sse(action_to_dto(a).model_dump(mode="json"))
