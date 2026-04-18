@@ -6,10 +6,15 @@ The active workstream is **WG Hunter** — a fully autonomous `wg-gesucht.de` ro
 
 ```text
 ┌──────────────┐          ┌──────────────────────────┐          ┌────────────────┐
-│ React SPA    │ ──fetch──▶ FastAPI (/api + SPA)     │ ──httpx──▶ wg-gesucht.de  │
+│ React SPA    │ ──fetch──▶ FastAPI (/api + SPA)     │ ──httpx──▶ Google Maps    │
 │ (Vite, TS)   │ ◀── SSE ──│ HuntEngine → evaluator   │ ──httpx──▶ OpenAI (vibe)  │
-└──────────────┘          │ SQLite (+ Alembic)       │ ──httpx──▶ Google Maps    │
-                          └──────────────────────────┘
+└──────────────┘          └──────────────────────────┘          └────────────────┘
+                                       │                         ┌────────────────┐
+                                       ▼                         │ wg-gesucht.de  │
+                                  ┌─────────┐    ┌──────────┐    └────────────────┘
+                                  │ MySQL   │◀───│ Scraper  │───httpx──────▲
+                                  │ (AWS)   │    │ container│
+                                  └─────────┘    └──────────┘
 ```
 
 See [`docs/ARCHITECTURE.md`](./docs/ARCHITECTURE.md) for the full diagram.
@@ -49,7 +54,7 @@ Prerequisites (details in [`docs/SETUP.md`](./docs/SETUP.md)):
    npm run build
    ```
 
-3. Run the backend — it migrates SQLite (`~/.wg_hunter/app.db`), resumes any `running` hunts, and serves the built SPA at `/`:
+3. Run the backend — it creates any missing tables on the shared AWS MySQL, resumes any `running` hunts, and serves the built SPA at `/`:
 
    ```bash
    cd ../backend
@@ -59,7 +64,14 @@ Prerequisites (details in [`docs/SETUP.md`](./docs/SETUP.md)):
 
    Open http://127.0.0.1:8000/ — the dashboard is ready.
 
-4. Frontend dev loop (optional, for UI iteration) — in a second terminal, from `frontend/`:
+4. Run the scraper (separate terminal, same `.env`):
+
+   ```bash
+   set -a && source ../.env && set +a
+   venv/bin/python -m app.scraper.main
+   ```
+
+5. Frontend dev loop (optional, for UI iteration) — in a third terminal, from `frontend/`:
 
    ```bash
    npm run dev
@@ -69,11 +81,14 @@ Prerequisites (details in [`docs/SETUP.md`](./docs/SETUP.md)):
 
 ### Reset the database
 
-```bash
-rm ~/.wg_hunter/app.db*
+Drop and recreate the MySQL database (coordinate with the team — it's shared):
+
+```sql
+DROP DATABASE wg_hunter;
+CREATE DATABASE wg_hunter CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci;
 ```
 
-Restart `uvicorn`; Alembic recreates the schema.
+Restart the backend; `SQLModel.metadata.create_all` recreates the schema on the next boot.
 
 ### Run the test suites
 

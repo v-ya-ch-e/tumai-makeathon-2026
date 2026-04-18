@@ -6,8 +6,8 @@ ADR index for WG Hunter. Each entry lists context, decision, consequences, and t
 
 ## ADR-001: SQLite + SQLModel + Alembic for persistence
 
-- **Date:** 2026-04-18  
-- **Status:** Accepted  
+- **Date:** 2026-04-18
+- **Status:** Superseded by ADR-018 (MySQL-only) and ADR-019 (no Alembic)
 
 **Context:** Hackathon demos need zero external infra but still benefit from ACID transactions; we may later point the same code at Postgres for a “real” deployment.
 
@@ -66,8 +66,8 @@ ADR index for WG Hunter. Each entry lists context, decision, consequences, and t
 
 ## ADR-005: Alembic from day 1
 
-- **Date:** 2026-04-18  
-- **Status:** Accepted  
+- **Date:** 2026-04-18
+- **Status:** Superseded by ADR-019
 
 **Context:** SQLite tempts teams to rely on `create_all()` and skip migration history, which breaks as soon as collaborators diverge.
 
@@ -284,5 +284,44 @@ Persistence: one additive Alembic revision [`0006_scorecard_components.py`](../b
 5. The browser key remains `VITE_GOOGLE_MAPS_API_KEY`, while the backend key is separate as `GOOGLE_MAPS_SERVER_KEY` so it can be IP-restricted and never shipped to the browser bundle.
 
 **Consequences:** Setup becomes simpler again for teams already provisioned in Google Cloud: the APIs to enable are `Geocoding API`, `Distance Matrix API`, and `Places API (New)` for the backend, plus `Maps JavaScript API` and `Places API (New)` for the browser autocomplete. The downstream evaluator, repo persistence, and UI drawer stay unchanged because the provider clients preserve the existing contracts. We deliberately keep explicit throttling even though Google quotas can be higher than Geoapify's free tier, because concurrent hunts can still create avoidable burst traffic. Trade-off: the backend uses one legacy Google service, `Distance Matrix API`, because it preserves the smallest and most reliable matrix-shaped diff across `DRIVE`, `BICYCLE`, and `TRANSIT` in the current codebase.
+
+**Introduced in:** this commit
+
+---
+
+## ADR-018: Separate scraper container + global ListingRow, MySQL-only
+
+- **Date:** 2026-04-18
+- **Status:** Accepted
+- **Supersedes:** ADR-004 (per-hunt composite PK) and the SQLite parts of ADR-001
+
+**Context:** Every hunt re-scraped the same wg-gesucht listings, redoing work already done by a concurrent hunt for the same city. `ListingRow` used a composite `(id, hunt_id)` PK (ADR-004) so two users watching Munich stored the same listing HTML twice — and paid the bandwidth + parse cost twice. The product also needed a scraper that keeps running when no one has pressed *Start hunt*, so fresh inventory exists the moment a user wants to match. Finally, SQLite under `~/.wg_hunter/app.db` (ADR-001) was fine for single-developer demos but awkward for a team: no shared view of the pool, no referential integrity for v2 messaging, no multi-writer story.
+
+**Decision:** Split scraping from matching and move to MySQL.
+
+1. **Scraping** lives in a separate `scraper` container ([`app/scraper/{agent.py, main.py}`](../backend/app/scraper/agent.py)). It runs an asyncio loop that calls `browser.anonymous_search` + `anonymous_scrape_listing` against a permissive env-driven `SearchProfile` and writes to a global `ListingRow` pool via `repo.upsert_global_listing`. It refreshes listings whose `scraped_at` is older than `SCRAPER_REFRESH_HOURS` (default 24h), records partial results with `scrape_status='stub'`, and records scrape exceptions with `scrape_status='failed'` + `scrape_error`. Scraper writes `PhotoRow` too.
+2. **`ListingRow` becomes global.** `id` is the sole primary key; `hunt_id` is dropped. Added columns: `scrape_status` (`stub` | `full` | `failed`, indexed), `scraped_at` (indexed), `scrape_error`. `PhotoRow` loses `hunt_id` too; its PK is `(listing_id, ordinal)`, FK to `listingrow.id`.
+3. **Hunts become pure matchers.** [`HuntEngine.run_find_only`](../backend/app/wg_agent/periodic.py) no longer calls `browser.*`; it iterates `repo.list_scorable_listings(hunt_id, status='full')` (global listings this hunt has not yet scored) and writes one `ListingScoreRow` per candidate — including vetoed listings with `score=0.0`. `ListingScoreRow` grows one new column, `scored_against_scraped_at`, which records the `ListingRow.scraped_at` at score time so the UI can show staleness and future rescores can detect stale rows.
+4. **`ListingScoreRow` is the hunt ↔ listing membership record.** [`list_listings_for_hunt`](../backend/app/wg_agent/repo.py) joins `ListingScoreRow JOIN ListingRow` on the hunt id, which preserves the frontend's `HuntDTO.listings` contract without introducing a new table. The matcher's invariant is: every listing it evaluates gets a `ListingScoreRow` written, or the listing disappears from the UI view.
+5. **MySQL-only persistence.** [`db.py`](../backend/app/wg_agent/db.py) requires `WG_DB_URL` at import time (clear `RuntimeError` pointing at `.env` when missing), and the engine uses `pool_pre_ping=True` + `pool_recycle=1800` for AWS RDS hygiene. Schema is materialised by `SQLModel.metadata.create_all(engine)` on startup (see [ADR-019](#adr-019-drop-alembic-use-sqlmodelmetadatacreate_all)). `AgentActionRow.listing_id` and `MessageRow.{listing_id, hunt_id}` now carry real FKs that MySQL enforces (they were undeclared under the SQLite-era setup because the composite listing key made that awkward). The `docker-compose.yml` adds a `scraper` service that reuses the `backend` image and is configured via the same `.env`; developers point at the team-shared AWS RDS, so there's no local `mysql` service.
+6. **Tests stay zero-infra.** [`backend/tests/conftest.py`](../backend/tests/conftest.py) sets `WG_DB_URL=sqlite://` before any test module imports, and each test builds its own in-memory SQLite engine + monkey-patches `db_module.engine`. SQLModel metadata works against both dialects, and the MySQL-specific engine options live only on the production builder.
+
+**Consequences:** One listing is scraped once per refresh cycle regardless of how many users match against it, which cuts outbound traffic to wg-gesucht linearly in the number of concurrent hunts. Hunts start instantly once the scraper has warmed the pool (no synchronous scrape on the request path). The scraper can be stopped, scaled, or replaced without touching the backend. Referential integrity is now enforced everywhere on MySQL. Trade-offs: (1) `start hunt` on an empty pool surfaces zero candidates until the scraper runs — that's the design, but teams should warm the pool before demos; (2) the composite-PK invariant from ADR-004 is explicitly dropped, so any future code that reads `ListingRow` must use `listing_id` alone and route `hunt_id` through `ListingScoreRow` (documented in [DATA_MODEL.md](./DATA_MODEL.md)); (3) a SQLite-free production requires every developer to have `WG_DB_URL` configured — tests bypass this via `conftest.py`, local dev reads from the shared RDS.
+
+**Introduced in:** this commit
+
+---
+
+## ADR-019: Drop Alembic, use `SQLModel.metadata.create_all`
+
+- **Date:** 2026-04-18
+- **Status:** Accepted
+- **Supersedes:** ADR-005 (Alembic from day 1), and the migration-tooling part of ADR-001
+
+**Context:** Immediately after the MySQL move (ADR-018) the Alembic tree held exactly one migration — `0001_initial_mysql.py`, the consolidated initial schema. There were no rename, backfill, or data-migration scripts anywhere in `backend/alembic/versions/`, and none of the planned near-term schema changes need preservation semantics: the dev workflow is already `DROP DATABASE wg_hunter; CREATE DATABASE wg_hunter;` before a schema change lands (see [SETUP.md "Reset the database"](./SETUP.md#reset-the-database)), because the team shares one AWS RDS instance and treats its contents as disposable during the hackathon. Against that backdrop, Alembic was pure overhead — a dependency, a `backend/alembic/` directory, a second place to keep in sync with `db_models.py`, and two `command.upgrade(cfg, "head")` calls (one per container) that race on every startup.
+
+**Decision:** Delete Alembic. Both [`backend/app/main.py`](../backend/app/main.py) and [`backend/app/scraper/main.py`](../backend/app/scraper/main.py) call `db.init_db()` on startup, which in turn calls `SQLModel.metadata.create_all(engine)`. That single function creates any missing tables on first boot (including all FKs and indexes declared via SQLModel `Field(...)` annotations in [`db_models.py`](../backend/app/wg_agent/db_models.py)), and is a no-op on subsequent boots. Removed: `backend/alembic/` (env.py, script.py.mako, versions/), `backend/alembic.ini`, and the `alembic>=1.13` line from `backend/requirements.txt`.
+
+**Consequences:** One fewer dependency, one fewer directory, one fewer "keep the migration file in sync with `db_models.py`" failure mode. Startup is measurably faster (Alembic's context load was ~300 ms per container). The trade-off is explicit and documented: **`create_all` does not add columns to existing tables.** Any non-additive schema change requires dropping the database (see [SETUP.md](./SETUP.md) + [BACKEND.md "Schema evolution"](./BACKEND.md#schema-evolution)). That matches our stated dev workflow, but it is strictly worse than Alembic for any future "preserve this data across a column rename" scenario. When such a scenario arises, running `alembic init` and `--autogenerate` re-establishes the plumbing in ten minutes — we just don't carry its weight before we need it.
 
 **Introduced in:** this commit

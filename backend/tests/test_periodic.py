@@ -1,4 +1,9 @@
-"""HuntEngine / PeriodicHunter behavior (in-memory DB, mocked network + LLM)."""
+"""HuntEngine / PeriodicHunter behavior (in-memory DB, mocked network + LLM).
+
+Post-ADR-018 the matcher reads the global ListingRow pool and never calls
+`browser.anonymous_search`. Tests pre-seed the pool via `upsert_global_listing`
+before the matcher runs.
+"""
 
 from __future__ import annotations
 
@@ -50,47 +55,50 @@ def _stub_result(score: float, summary: str = "ok") -> EvaluationResult:
     )
 
 
-def _fake_listings(
-    ids: tuple[str, ...], *, lat: float | None = None, lng: float | None = None
-) -> list[Listing]:
-    out: list[Listing] = []
+def _seed_listings(
+    session: Session,
+    ids: tuple[str, ...],
+    *,
+    lat: float | None = None,
+    lng: float | None = None,
+) -> None:
+    """Write the given listings into the global pool as fully-scraped rows."""
     for lid in ids:
-        out.append(
-            Listing(
+        repo.upsert_global_listing(
+            session,
+            listing=Listing(
                 id=lid,
                 url=HttpUrl(f"https://www.wg-gesucht.de/{lid}.html"),
                 title=f"Room {lid}",
                 price_eur=500,
                 lat=lat,
                 lng=lng,
-            )
+                description=f"Nice room {lid}",
+            ),
+            status="full",
         )
-    return out
 
 
-def test_periodic_hunter_dedupes_new_listings(monkeypatch) -> None:
+def _make_engine() -> tuple:
     engine = create_engine(
         "sqlite://",
         connect_args={"check_same_thread": False},
     )
     SQLModel.metadata.create_all(engine)
+    return engine
+
+
+def test_hunt_engine_scores_every_pool_listing_once(monkeypatch) -> None:
+    """Matcher scores each pool listing once; second pass adds no score rows."""
+    engine = _make_engine()
     monkeypatch.setattr(db_module, "engine", engine)
-
-    async def search_side_effect(*_a, **_kw):
-        search_side_effect.calls += 1  # type: ignore[attr-defined]
-        if search_side_effect.calls == 1:
-            return _fake_listings(("a", "b", "c"))
-        return _fake_listings(("a", "b", "d"))
-
-    search_side_effect.calls = 0  # type: ignore[attr-defined]
-
-    async def scrape_identity(lst: Listing, *_args, **_kwargs) -> Listing:
-        return lst
 
     async def evaluate_stub(
         _lst: Listing, _sp: SearchProfile, *, travel_times=None, nearby_places=None
     ) -> EvaluationResult:
         return _stub_result(0.9)
+
+    search_spy = AsyncMock()
 
     with Session(engine) as session:
         repo.create_user(
@@ -105,30 +113,31 @@ def test_periodic_hunter_dedupes_new_listings(monkeypatch) -> None:
         )
         repo.upsert_search_profile(session, username="u1", sp=sp)
         hunt = repo.create_hunt(session, username="u1", schedule="one_shot")
+        _seed_listings(session, ("a", "b", "c"))
 
     q: asyncio.Queue = asyncio.Queue()
     he = HuntEngine(hunt.id, "u1", q)
 
     with (
         patch(
-            "app.wg_agent.periodic.browser.anonymous_search",
-            new=AsyncMock(side_effect=search_side_effect),
-        ),
-        patch(
-            "app.wg_agent.periodic.browser.anonymous_scrape_listing",
-            new=AsyncMock(side_effect=scrape_identity),
-        ),
-        patch(
             "app.wg_agent.periodic.evaluator.evaluate",
             new=AsyncMock(side_effect=evaluate_stub),
+        ),
+        patch(
+            # Regression: matcher must never call the scraper's search path.
+            "app.wg_agent.browser.anonymous_search",
+            new=search_spy,
         ),
     ):
 
         async def run() -> None:
             await he.run_find_only()
+            # Second pass: no new listings since the last scrape, so no new scores.
             await he.run_find_only()
 
         asyncio.run(run())
+
+    search_spy.assert_not_called()
 
     with Session(engine) as session:
         actions = repo.list_actions_for_hunt(session, hunt_id=hunt.id)
@@ -136,21 +145,61 @@ def test_periodic_hunter_dedupes_new_listings(monkeypatch) -> None:
 
     new_listing_actions = [a for a in actions if a.kind == ActionKind.new_listing]
     assert len([a for a in actions if a.kind == ActionKind.search]) >= 2
-    assert len(new_listing_actions) == 4
-    assert len({a.listing_id for a in new_listing_actions if a.listing_id}) == 4
-    assert len(listings) == 4
+    assert len(new_listing_actions) == 3
+    assert len({a.listing_id for a in new_listing_actions if a.listing_id}) == 3
+    assert len(listings) == 3
+
+
+def test_hunt_engine_sees_listings_added_between_passes(monkeypatch) -> None:
+    """The rescan path picks up new global listings added between passes."""
+    engine = _make_engine()
+    monkeypatch.setattr(db_module, "engine", engine)
+
+    async def evaluate_stub(
+        _lst: Listing, _sp: SearchProfile, *, travel_times=None, nearby_places=None
+    ) -> EvaluationResult:
+        return _stub_result(0.6)
+
+    with Session(engine) as session:
+        repo.create_user(
+            session,
+            profile=UserProfile(username="u1b", age=22, gender=Gender.female),
+        )
+        sp = SearchProfile(
+            city="München",
+            max_rent_eur=900,
+            rescan_interval_minutes=30,
+            schedule="one_shot",
+        )
+        repo.upsert_search_profile(session, username="u1b", sp=sp)
+        hunt = repo.create_hunt(session, username="u1b", schedule="one_shot")
+        _seed_listings(session, ("a", "b"))
+
+    q: asyncio.Queue = asyncio.Queue()
+    he = HuntEngine(hunt.id, "u1b", q)
+
+    with patch(
+        "app.wg_agent.periodic.evaluator.evaluate",
+        new=AsyncMock(side_effect=evaluate_stub),
+    ):
+
+        async def run() -> None:
+            await he.run_find_only()
+            with Session(engine) as s:
+                _seed_listings(s, ("c", "d"))
+            await he.run_find_only()
+
+        asyncio.run(run())
+
+    with Session(engine) as session:
+        listings = repo.list_listings_for_hunt(session, hunt_id=hunt.id)
+    assert {l.id for l in listings} == {"a", "b", "c", "d"}
 
 
 def test_periodic_hunter_runs_stop_correctly(monkeypatch) -> None:
-    engine = create_engine(
-        "sqlite://",
-        connect_args={"check_same_thread": False},
-    )
-    SQLModel.metadata.create_all(engine)
+    """Empty pool → matcher runs, hunt finishes as done (one_shot)."""
+    engine = _make_engine()
     monkeypatch.setattr(db_module, "engine", engine)
-
-    async def search_empty(*_a, **_kw):
-        return []
 
     with Session(engine) as session:
         repo.create_user(
@@ -176,15 +225,10 @@ def test_periodic_hunter_runs_stop_correctly(monkeypatch) -> None:
         schedule="one_shot",
     )
 
-    with patch(
-        "app.wg_agent.periodic.browser.anonymous_search",
-        new=AsyncMock(side_effect=search_empty),
-    ):
+    async def run() -> None:
+        await hunter.start()
 
-        async def run() -> None:
-            await hunter.start()
-
-        asyncio.run(run())
+    asyncio.run(run())
 
     with Session(engine) as session:
         hrow = session.get(HuntRow, hunt.id)
@@ -195,78 +239,14 @@ def test_periodic_hunter_runs_stop_correctly(monkeypatch) -> None:
     assert any(a.kind == ActionKind.done for a in actions)
 
 
-def test_periodic_hunter_marks_search_failures_failed(monkeypatch) -> None:
-    engine = create_engine(
-        "sqlite://",
-        connect_args={"check_same_thread": False},
-    )
-    SQLModel.metadata.create_all(engine)
-    monkeypatch.setattr(db_module, "engine", engine)
-
-    async def search_boom(*_a, **_kw):
-        raise RuntimeError("dns lookup failed")
-
-    with Session(engine) as session:
-        repo.create_user(
-            session,
-            profile=UserProfile(username="u2b", age=24, gender=Gender.male),
-        )
-        sp = SearchProfile(
-            city="München",
-            max_rent_eur=800,
-            rescan_interval_minutes=30,
-            schedule="one_shot",
-        )
-        repo.upsert_search_profile(session, username="u2b", sp=sp)
-        hunt = repo.create_hunt(session, username="u2b", schedule="one_shot")
-        repo.update_hunt_status(session, hunt_id=hunt.id, status=HuntStatus.running)
-
-    q: asyncio.Queue = asyncio.Queue()
-    hunter = PeriodicHunter(
-        hunt.id,
-        "u2b",
-        interval_minutes=0,
-        event_queue=q,
-        schedule="one_shot",
-    )
-
-    with patch(
-        "app.wg_agent.periodic.browser.anonymous_search",
-        new=AsyncMock(side_effect=search_boom),
-    ):
-        asyncio.run(hunter.start())
-
-    with Session(engine) as session:
-        hrow = session.get(HuntRow, hunt.id)
-        actions = repo.list_actions_for_hunt(session, hunt_id=hunt.id)
-
-    assert hrow is not None
-    assert hrow.status == HuntStatus.failed.value
-    assert any(
-        a.kind == ActionKind.error and "dns lookup failed" in a.summary
-        for a in actions
-    )
-    assert not any(a.kind == ActionKind.done for a in actions)
-
-
-def test_commute_times_reach_score_listing(monkeypatch) -> None:
-    engine = create_engine(
-        "sqlite://",
-        connect_args={"check_same_thread": False},
-    )
-    SQLModel.metadata.create_all(engine)
+def test_commute_times_reach_evaluator_and_persist(monkeypatch) -> None:
+    engine = _make_engine()
     monkeypatch.setattr(db_module, "engine", engine)
 
     tum = PlaceLocation(
         label="TUM", place_id="ChIJ_TUM", lat=48.149, lng=11.568
     )
     fake_matrix = {("ChIJ_TUM", "TRANSIT"): 1080}
-
-    async def search_once(*_a, **_kw):
-        return _fake_listings(("lst1",), lat=48.13, lng=11.50)
-
-    async def scrape_identity(lst: Listing, *_args, **_kwargs) -> Listing:
-        return lst
 
     captured: dict = {}
 
@@ -293,19 +273,12 @@ def test_commute_times_reach_score_listing(monkeypatch) -> None:
         )
         repo.upsert_search_profile(session, username="u3", sp=sp)
         hunt = repo.create_hunt(session, username="u3", schedule="one_shot")
+        _seed_listings(session, ("lst1",), lat=48.13, lng=11.50)
 
     q: asyncio.Queue = asyncio.Queue()
     he = HuntEngine(hunt.id, "u3", q)
 
     with (
-        patch(
-            "app.wg_agent.periodic.browser.anonymous_search",
-            new=AsyncMock(side_effect=search_once),
-        ),
-        patch(
-            "app.wg_agent.periodic.browser.anonymous_scrape_listing",
-            new=AsyncMock(side_effect=scrape_identity),
-        ),
         patch(
             "app.wg_agent.periodic.commute.travel_times",
             new=AsyncMock(return_value=fake_matrix),
@@ -325,14 +298,12 @@ def test_commute_times_reach_score_listing(monkeypatch) -> None:
     assert score_row.travel_minutes == {
         "ChIJ_TUM": {"mode": "TRANSIT", "minutes": 18}
     }
+    # The matcher stamps scored_against_scraped_at with the listing's scraped_at.
+    assert score_row.scored_against_scraped_at is not None
 
 
 def test_nearby_places_reach_evaluator_and_persist(monkeypatch) -> None:
-    engine = create_engine(
-        "sqlite://",
-        connect_args={"check_same_thread": False},
-    )
-    SQLModel.metadata.create_all(engine)
+    engine = _make_engine()
     monkeypatch.setattr(db_module, "engine", engine)
 
     fake_nearby = {
@@ -345,12 +316,6 @@ def test_nearby_places_reach_evaluator_and_persist(monkeypatch) -> None:
             category="sport.fitness.fitness_centre",
         )
     }
-
-    async def search_once(*_a, **_kw):
-        return _fake_listings(("lst-nearby",), lat=48.13, lng=11.50)
-
-    async def scrape_identity(lst: Listing, *_args, **_kwargs) -> Listing:
-        return lst
 
     captured: dict = {}
 
@@ -374,19 +339,12 @@ def test_nearby_places_reach_evaluator_and_persist(monkeypatch) -> None:
         )
         repo.upsert_search_profile(session, username="u-nearby", sp=sp)
         hunt = repo.create_hunt(session, username="u-nearby", schedule="one_shot")
+        _seed_listings(session, ("lst-nearby",), lat=48.13, lng=11.50)
 
     q: asyncio.Queue = asyncio.Queue()
     he = HuntEngine(hunt.id, "u-nearby", q)
 
     with (
-        patch(
-            "app.wg_agent.periodic.browser.anonymous_search",
-            new=AsyncMock(side_effect=search_once),
-        ),
-        patch(
-            "app.wg_agent.periodic.browser.anonymous_scrape_listing",
-            new=AsyncMock(side_effect=scrape_identity),
-        ),
         patch(
             "app.wg_agent.periodic.places.nearby_places",
             new=AsyncMock(return_value=fake_nearby),
@@ -407,22 +365,12 @@ def test_nearby_places_reach_evaluator_and_persist(monkeypatch) -> None:
 
 
 def test_commute_skipped_when_listing_lacks_coords(monkeypatch) -> None:
-    engine = create_engine(
-        "sqlite://",
-        connect_args={"check_same_thread": False},
-    )
-    SQLModel.metadata.create_all(engine)
+    engine = _make_engine()
     monkeypatch.setattr(db_module, "engine", engine)
 
     tum = PlaceLocation(
         label="TUM", place_id="ChIJ_TUM", lat=48.149, lng=11.568
     )
-
-    async def search_once(*_a, **_kw):
-        return _fake_listings(("lst2",))  # lat/lng default None
-
-    async def scrape_identity(lst: Listing, *_args, **_kwargs) -> Listing:
-        return lst
 
     async def evaluate_stub(
         _lst: Listing, _sp: SearchProfile, *, travel_times=None, nearby_places=None
@@ -443,20 +391,13 @@ def test_commute_skipped_when_listing_lacks_coords(monkeypatch) -> None:
         )
         repo.upsert_search_profile(session, username="u4", sp=sp)
         hunt = repo.create_hunt(session, username="u4", schedule="one_shot")
+        _seed_listings(session, ("lst2",))  # lat/lng default None
 
     q: asyncio.Queue = asyncio.Queue()
     he = HuntEngine(hunt.id, "u4", q)
     travel_mock = AsyncMock(return_value={})
 
     with (
-        patch(
-            "app.wg_agent.periodic.browser.anonymous_search",
-            new=AsyncMock(side_effect=search_once),
-        ),
-        patch(
-            "app.wg_agent.periodic.browser.anonymous_scrape_listing",
-            new=AsyncMock(side_effect=scrape_identity),
-        ),
         patch("app.wg_agent.periodic.commute.travel_times", new=travel_mock),
         patch(
             "app.wg_agent.periodic.evaluator.evaluate",

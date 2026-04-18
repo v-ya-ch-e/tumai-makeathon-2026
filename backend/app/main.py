@@ -2,8 +2,6 @@ import logging
 from contextlib import asynccontextmanager
 from pathlib import Path
 
-from alembic import command
-from alembic.config import Config
 from fastapi import FastAPI, HTTPException
 from fastapi.responses import FileResponse
 from fastapi.staticfiles import StaticFiles
@@ -16,7 +14,6 @@ logger = logging.getLogger(__name__)
 # Path resolution: backend/app/main.py -> repo-root/frontend/dist
 REPO_ROOT = Path(__file__).resolve().parents[2]
 FRONTEND_DIST = REPO_ROOT / "frontend" / "dist"
-BACKEND_DIR = Path(__file__).resolve().parents[1]
 
 
 @asynccontextmanager
@@ -25,10 +22,6 @@ async def lifespan(app: FastAPI):
 
     wg_db.init_db()
     logger.info("WG database URL: %s", wg_db.DATABASE_URL)
-    alembic_ini = BACKEND_DIR / "alembic.ini"
-    cfg = Config(str(alembic_ini))
-    cfg.set_main_option("script_location", str(BACKEND_DIR / "alembic"))
-    command.upgrade(cfg, "head")
     from .wg_agent import periodic as wg_periodic
 
     await wg_periodic.resume_running_hunts()

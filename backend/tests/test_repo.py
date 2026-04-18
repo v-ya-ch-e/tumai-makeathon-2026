@@ -126,11 +126,11 @@ def test_repo_round_trip() -> None:
             title="Room B",
             price_eur=600,
         )
-        repo.upsert_listing(session, hunt_id=hunt.id, listing=l1)
-        repo.upsert_listing(session, hunt_id=hunt.id, listing=l2)
+        # Global listing pool (scraper-owned) + photos are keyed by listing id only.
+        repo.upsert_global_listing(session, listing=l1, status="full")
+        repo.upsert_global_listing(session, listing=l2, status="full")
         repo.save_photos(
             session,
-            hunt_id=hunt.id,
             listing_id="wg1",
             urls=[
                 "https://img.wg-gesucht.de/photos/wg1-cover.jpg",
@@ -183,6 +183,112 @@ def test_repo_round_trip() -> None:
 
         repo.delete_credentials(session, username="lea")
         assert repo.credentials_status(session, username="lea") == (False, None)
+
+
+def test_list_listings_for_hunt_joins_through_score_row() -> None:
+    """Membership moved from ListingRow.hunt_id to ListingScoreRow (ADR-018).
+
+    A listing appears in a hunt's matched set only when a ListingScoreRow
+    exists for (listing_id, hunt_id), regardless of how many other hunts
+    have also scored the same global listing.
+    """
+    engine = create_engine(
+        "sqlite://", connect_args={"check_same_thread": False}
+    )
+    SQLModel.metadata.create_all(engine)
+
+    with Session(engine) as session:
+        repo.create_user(
+            session,
+            profile=UserProfile(username="alice", age=22, gender=Gender.female),
+        )
+        repo.create_user(
+            session,
+            profile=UserProfile(username="bob", age=24, gender=Gender.male),
+        )
+        hunt_a = repo.create_hunt(session, username="alice", schedule="one_shot")
+        hunt_b = repo.create_hunt(session, username="bob", schedule="one_shot")
+
+        # Scraper populates the global pool — no hunt_id involved.
+        l1 = Listing(id="lx", url=HttpUrl("https://www.wg-gesucht.de/lx"), title="X")
+        l2 = Listing(id="ly", url=HttpUrl("https://www.wg-gesucht.de/ly"), title="Y")
+        repo.upsert_global_listing(session, listing=l1, status="full")
+        repo.upsert_global_listing(session, listing=l2, status="full")
+
+        # Only hunt A has scored lx; hunt B has not scored anything.
+        repo.save_score(
+            session,
+            hunt_id=hunt_a.id,
+            listing_id="lx",
+            score=0.7,
+            reason="ok",
+            match_reasons=[],
+            mismatch_reasons=[],
+        )
+
+        a_listings = repo.list_listings_for_hunt(session, hunt_id=hunt_a.id)
+        b_listings = repo.list_listings_for_hunt(session, hunt_id=hunt_b.id)
+
+    assert [l.id for l in a_listings] == ["lx"]
+    assert b_listings == []
+
+
+def test_list_scorable_listings_excludes_already_scored() -> None:
+    engine = create_engine(
+        "sqlite://", connect_args={"check_same_thread": False}
+    )
+    SQLModel.metadata.create_all(engine)
+
+    with Session(engine) as session:
+        repo.create_user(
+            session,
+            profile=UserProfile(username="u", age=22, gender=Gender.female),
+        )
+        hunt_a = repo.create_hunt(session, username="u", schedule="one_shot")
+        hunt_b = repo.create_hunt(session, username="u", schedule="one_shot")
+
+        for lid in ("g1", "g2"):
+            repo.upsert_global_listing(
+                session,
+                listing=Listing(
+                    id=lid,
+                    url=HttpUrl(f"https://www.wg-gesucht.de/{lid}"),
+                    title=f"Room {lid}",
+                ),
+                status="full",
+            )
+        # Stub listing must not be returned.
+        repo.upsert_global_listing(
+            session,
+            listing=Listing(
+                id="stub1",
+                url=HttpUrl("https://www.wg-gesucht.de/stub1"),
+                title="Partial",
+            ),
+            status="stub",
+        )
+
+        repo.save_score(
+            session,
+            hunt_id=hunt_a.id,
+            listing_id="g1",
+            score=0.5,
+            reason="ok",
+            match_reasons=[],
+            mismatch_reasons=[],
+        )
+
+        a_candidates = {
+            r.id
+            for r in repo.list_scorable_listings(session, hunt_id=hunt_a.id)
+        }
+        b_candidates = {
+            r.id
+            for r in repo.list_scorable_listings(session, hunt_id=hunt_b.id)
+        }
+
+    assert a_candidates == {"g2"}
+    assert b_candidates == {"g1", "g2"}
 
 
 def test_repo_tolerates_legacy_preference_strings() -> None:

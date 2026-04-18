@@ -1,52 +1,48 @@
-"""SQLModel engine, session factory, and SQLite WAL setup."""
+"""SQLModel engine + session factory (MySQL-only).
+
+No Alembic. Schema changes are expected to be additive on an empty dev DB —
+`init_db` calls `SQLModel.metadata.create_all(engine)` on startup, which
+creates missing tables on first boot and silently no-ops on subsequent
+boots. Destructive changes require a `DROP DATABASE; CREATE DATABASE`
+(see docs/SETUP.md "Reset the database").
+"""
 
 from __future__ import annotations
 
 import os
 from collections.abc import Iterator
-from pathlib import Path
 
-from sqlalchemy import event
-from sqlmodel import Session, create_engine
+from sqlmodel import Session, SQLModel, create_engine
 
 from . import crypto
-
-_DEFAULT_DB_PATH = Path.home() / ".wg_hunter" / "app.db"
-
-
-def _default_sqlite_url() -> str:
-    _DEFAULT_DB_PATH.parent.mkdir(parents=True, exist_ok=True)
-    return f"sqlite:///{_DEFAULT_DB_PATH.resolve()}"
+from . import db_models as _db_models  # noqa: F401  (registers tables on SQLModel.metadata)
 
 
 def _resolve_database_url() -> str:
     raw = os.environ.get("WG_DB_URL")
-    if raw:
-        return raw
-    return _default_sqlite_url()
+    if not raw:
+        raise RuntimeError(
+            "WG_DB_URL is not set. WG Hunter requires a MySQL connection string; "
+            "copy .env.example to .env and fill in the team-shared AWS MySQL "
+            "credentials (mysql+pymysql://user:pass@host:3306/wg_hunter?charset=utf8mb4)."
+        )
+    return raw
 
 
 DATABASE_URL = _resolve_database_url()
 
-_connect_args = (
-    {"check_same_thread": False} if DATABASE_URL.startswith("sqlite") else {}
+engine = create_engine(
+    DATABASE_URL,
+    pool_pre_ping=True,
+    pool_recycle=1800,
+    echo=False,
 )
-engine = create_engine(DATABASE_URL, connect_args=_connect_args, echo=False)
-
-
-@event.listens_for(engine, "connect")
-def _sqlite_wal(dbapi_connection, connection_record) -> None:  # noqa: ARG001
-    if engine.dialect.name != "sqlite":
-        return
-    cursor = dbapi_connection.cursor()
-    cursor.execute("PRAGMA journal_mode=WAL")
-    cursor.close()
 
 
 def init_db() -> None:
+    """Ensure the Fernet key + schema exist. Safe to call repeatedly."""
     crypto.ensure_key()
-    with engine.connect() as conn:
-        conn.close()
+    SQLModel.metadata.create_all(engine)
 
 
 def get_session() -> Iterator[Session]:

@@ -47,9 +47,11 @@ The Reply brief asks for Bedrock. Today we call OpenAI directly via [`brain._cli
 
 Track what's shipped so reviewers and demo judges can spot-check the history without spelunking git.
 
-- **2026-04-18** — ADR-015: scorecard evaluator with deterministic components + narrow LLM vibe. Replaces the single-LLM-call scoring path. Alembic `0006_scorecard_components.py`; 50 new tests in [`test_evaluator.py`](../backend/tests/test_evaluator.py); component-breakdown bars in [`ListingDrawer`](../frontend/src/components/ListingDrawer.tsx).
+- **2026-04-18** — ADR-019: dropped Alembic in favour of `SQLModel.metadata.create_all` on startup; deleted `backend/alembic/` + `backend/alembic.ini` + the `alembic` dependency. See [BACKEND.md "Schema evolution"](./BACKEND.md#schema-evolution).
+- **2026-04-18** — ADR-018: split scraper into its own container, global `ListingRow` pool, MySQL-only persistence. See [DECISIONS.md](./DECISIONS.md#adr-018-separate-scraper-container--global-listingrow-mysql-only).
+- **2026-04-18** — ADR-015: scorecard evaluator with deterministic components + narrow LLM vibe. Replaces the single-LLM-call scoring path. 50 new tests in [`test_evaluator.py`](../backend/tests/test_evaluator.py); component-breakdown bars in [`ListingDrawer`](../frontend/src/components/ListingDrawer.tsx).
 - **2026-04-18** — ADR-014: structured DOM selectors + `map_config.markers` coords in `parse_listing_page`; zeroed out the cookie-banner-text-in-prompt regression and cut Geocoding API calls to near-zero for listings that render a map.
-- **2026-04-18** — ADR-013: weighted preferences + per-location commute budgets. Alembic `0005_weighted_prefs.py`; UI: 1–5 weight slider on each preference tile + per-location ideal-commute input.
+- **2026-04-18** — ADR-013: weighted preferences + per-location commute budgets. UI: 1–5 weight slider on each preference tile + per-location ideal-commute input.
 - **2026-04-18** — ADR-012: commute-aware scoring via Routes API's `computeRouteMatrix`, LLM-only composition (superseded by ADR-015).
 - **2026-04-18** — ADR-010 + ADR-011: structured `main_locations` with client-side Places Autocomplete and server-side Geocoding for listing addresses.
 

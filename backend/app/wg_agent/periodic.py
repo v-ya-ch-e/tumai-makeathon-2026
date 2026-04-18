@@ -1,4 +1,9 @@
-"""Periodic hunt runner: find + rank loop with SSE-friendly action queue."""
+"""Periodic hunt runner: matcher-only find + rank loop with SSE-friendly action queue.
+
+Post-ADR-018 the hunt engine no longer scrapes. It iterates the global
+`ListingRow` pool (populated by the separate scraper container) and writes
+one `ListingScoreRow` per (listing, hunt) pair via `repo.save_score`.
+"""
 
 from __future__ import annotations
 
@@ -10,10 +15,10 @@ from typing import Optional
 
 from sqlmodel import Session
 
-from . import browser, commute, evaluator, places, repo
+from . import commute, evaluator, places, repo
 from . import db as db_module
 from .db_models import HuntRow
-from .models import ActionKind, AgentAction, HuntStatus, Listing, NearbyPlace, SearchProfile
+from .models import ActionKind, AgentAction, HuntStatus, NearbyPlace, SearchProfile
 
 logger = logging.getLogger(__name__)
 
@@ -96,9 +101,10 @@ def _append(session: Session, hunt_id: str, action: AgentAction) -> None:
 
 
 class HuntEngine:
-    """Simplified find + rank engine for v1.
+    """Match + rank engine for v1.
 
-    Logs actions via repo.append_action (persisted) and onto a shared
+    Never scrapes — the scraper container is the sole writer of `ListingRow`.
+    Logs actions via `repo.append_action` (persisted) and onto a shared
     asyncio.Queue for SSE. Does not send messages or poll the inbox.
     """
 
@@ -113,34 +119,32 @@ class HuntEngine:
         self._event_queue = event_queue
 
     async def run_find_only(self, *, max_listings: int = 15) -> int:
-        # v1 always uses anonymous search; credentials are stored but unused.
         with Session(db_module.engine) as session:
             sp = repo.get_search_profile(session, username=self._username)
         if sp is None:
             sp = SearchProfile(city="München", max_rent_eur=2000)
 
         with Session(db_module.engine) as session:
-            existing = {l.id for l in repo.list_listings_for_hunt(session, hunt_id=self._hunt_id)}
+            candidate_rows = repo.list_scorable_listings(
+                session,
+                hunt_id=self._hunt_id,
+                status="full",
+                limit=max_listings,
+            )
 
-        try:
-            found = await browser.anonymous_search(sp, max_pages=2)
-        except Exception as exc:  # noqa: BLE001
-            raise HuntRunFailed(f"Search failed: {exc}") from exc
-
-        n_found = len(found)
-        capped = found[:max_listings]
-        new_stubs = [L for L in capped if L.id not in existing]
-        new_count = len(new_stubs)
+        n_candidates = len(candidate_rows)
+        new_count = n_candidates
 
         search_action = AgentAction(
             kind=ActionKind.search,
-            summary=f"Anonymous search found {n_found} listings on up to 2 pages.",
+            summary=f"Matched {n_candidates} candidates from shared pool.",
         )
         with Session(db_module.engine) as session:
             _append(session, self._hunt_id, search_action)
         _safe_put(self._event_queue, search_action)
 
-        for listing in new_stubs:
+        for row in candidate_rows:
+            listing = repo.row_to_domain_listing(row)
             nl = AgentAction(
                 kind=ActionKind.new_listing,
                 summary=f"New listing: {listing.title or listing.id}",
@@ -151,46 +155,43 @@ class HuntEngine:
             _safe_put(self._event_queue, nl)
 
             try:
-                enriched = await browser.anonymous_scrape_listing(
-                    listing, req_city=sp.city
-                )
                 travel_times: dict[tuple[str, str], int] = {}
                 nearby_places: dict[str, NearbyPlace] = {}
                 if (
-                    enriched.lat is not None
-                    and enriched.lng is not None
+                    listing.lat is not None
+                    and listing.lng is not None
                     and sp.main_locations
                 ):
                     travel_times = await commute.travel_times(
-                        origin=(enriched.lat, enriched.lng),
+                        origin=(listing.lat, listing.lng),
                         destinations=sp.main_locations,
                         modes=commute.modes_for(sp),
                     )
                 if (
-                    enriched.lat is not None
-                    and enriched.lng is not None
+                    listing.lat is not None
+                    and listing.lng is not None
                     and sp.preferences
                 ):
                     nearby_places = await places.nearby_places(
-                        origin=(enriched.lat, enriched.lng),
+                        origin=(listing.lat, listing.lng),
                         preferences=sp.preferences,
                     )
                 result = await evaluator.evaluate(
-                    enriched,
+                    listing,
                     sp,
                     travel_times=travel_times,
                     nearby_places=nearby_places,
                 )
-                enriched.score = result.score
-                enriched.score_reason = result.summary
-                enriched.match_reasons = list(result.match_reasons)
-                enriched.mismatch_reasons = list(result.mismatch_reasons)
-                enriched.components = list(result.components)
-                enriched.veto_reason = result.veto_reason
+                listing.score = result.score
+                listing.score_reason = result.summary
+                listing.match_reasons = list(result.match_reasons)
+                listing.mismatch_reasons = list(result.mismatch_reasons)
+                listing.components = list(result.components)
+                listing.veto_reason = result.veto_reason
             except Exception as exc:  # noqa: BLE001
                 err = AgentAction(
                     kind=ActionKind.error,
-                    summary=f"Scrape/score failed for {listing.id}: {exc}",
+                    summary=f"Score failed for {listing.id}: {exc}",
                     detail=str(exc),
                     listing_id=listing.id,
                 )
@@ -203,32 +204,26 @@ class HuntEngine:
                 _shortest_mode_min_per_location(travel_times) if travel_times else None
             )
             with Session(db_module.engine) as session:
-                repo.upsert_listing(session, hunt_id=self._hunt_id, listing=enriched)
-                repo.save_photos(
-                    session,
-                    hunt_id=self._hunt_id,
-                    listing_id=enriched.id,
-                    urls=list(enriched.photo_urls),
-                )
                 repo.save_score(
                     session,
                     hunt_id=self._hunt_id,
-                    listing_id=enriched.id,
-                    score=float(enriched.score or 0.0),
-                    reason=enriched.score_reason,
-                    match_reasons=list(enriched.match_reasons),
-                    mismatch_reasons=list(enriched.mismatch_reasons),
+                    listing_id=listing.id,
+                    score=float(listing.score or 0.0),
+                    reason=listing.score_reason,
+                    match_reasons=list(listing.match_reasons),
+                    mismatch_reasons=list(listing.mismatch_reasons),
                     travel_minutes=travel_minutes,
                     nearby_places=nearby_places,
-                    components=list(enriched.components),
-                    veto_reason=enriched.veto_reason,
+                    components=list(listing.components),
+                    veto_reason=listing.veto_reason,
+                    scored_against_scraped_at=row.scraped_at,
                 )
 
             if result.veto_reason is not None:
                 ev = AgentAction(
                     kind=ActionKind.evaluate,
-                    summary=f"Rejected {enriched.id}: {result.veto_reason}",
-                    listing_id=enriched.id,
+                    summary=f"Rejected {listing.id}: {result.veto_reason}",
+                    listing_id=listing.id,
                 )
             else:
                 ev_detail_parts: list[str] = []
@@ -250,9 +245,9 @@ class HuntEngine:
                     ev_detail_parts.append(nearby_detail)
                 ev = AgentAction(
                     kind=ActionKind.evaluate,
-                    summary=f"Scored {enriched.id}: {enriched.score:.2f}",
+                    summary=f"Scored {listing.id}: {listing.score:.2f}",
                     detail=" | ".join(ev_detail_parts) or None,
-                    listing_id=enriched.id,
+                    listing_id=listing.id,
                 )
             with Session(db_module.engine) as session:
                 _append(session, self._hunt_id, ev)

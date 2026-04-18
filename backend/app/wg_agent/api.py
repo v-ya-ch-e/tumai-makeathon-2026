@@ -75,13 +75,13 @@ def _sse(data: dict) -> str:
 def _get_listing_detail(
     session: Session, *, listing_id: str, hunt_id: str
 ) -> Optional[ListingDetailDTO]:
-    row = session.get(ListingRow, (listing_id, hunt_id))
+    row = session.get(ListingRow, listing_id)
     if row is None:
         return None
     score_row = session.get(ListingScoreRow, (listing_id, hunt_id))
     photo_rows = session.exec(
         select(PhotoRow)
-        .where(PhotoRow.listing_id == listing_id, PhotoRow.hunt_id == hunt_id)
+        .where(PhotoRow.listing_id == listing_id)
         .order_by(PhotoRow.ordinal)
     ).all()
     photos = [p.url for p in photo_rows]

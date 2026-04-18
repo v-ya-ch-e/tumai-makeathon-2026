@@ -6,12 +6,16 @@ Autonomous WG-Gesucht room hunter for the TUM.ai Makeathon 2026 ("Campus Co-Pilo
 
 ## What WG Hunter does
 
-A student fills a short wizard — demographics, rent/size/commute requirements, weighted preferences (`gym` weight 4, `furnished` weight 5, …) — and clicks **Start hunt**. The backend spins up a background task that:
+Two cooperating agents sit on top of a shared MySQL database.
 
-1. Queries `wg-gesucht.de` search pages via **httpx** (anonymous, no login).
-2. For each new listing it hasn't seen in this hunt: deep-scrapes the listing HTML, pulls landlord-precise `(lat, lng)` from the embedded map config, and (if the user configured main locations) asks Google Distance Matrix for commute times per mode.
-3. Runs the **scorecard evaluator** — deterministic components (price, size, WG size, availability, commute, preferences) plus one narrow LLM call (`brain.vibe_score`) that judges prose fit only — and composes a weighted score. Listings that fail the deterministic hard filter (over budget, wrong city, avoid-district, etc.) never reach the LLM.
-4. Persists everything in SQLite (per-hunt `ListingRow` + `ListingScoreRow`, append-only `AgentActionRow` log).
+**Scraper container** ([`app/scraper/`](../backend/app/scraper/)) — Runs continuously, independent of any user. Queries `wg-gesucht.de` search pages via **httpx** (anonymous), deep-scrapes every new listing, and writes one global `ListingRow` per wg-gesucht id (with description, `(lat, lng)` from the embedded map config, photos, etc.). Refreshes listings whose `scraped_at` is older than `SCRAPER_REFRESH_HOURS`.
+
+**Backend container** — A student fills a short wizard (demographics, rent/size/commute requirements, weighted preferences) and clicks **Start hunt**. The backend spins up a background task that *matches* — not scrapes:
+
+1. Reads candidates from the shared `ListingRow` pool via `repo.list_scorable_listings(hunt_id, status='full')` — only listings the scraper has fully deep-scraped and this hunt has not yet scored.
+2. For each candidate, asks Google Distance Matrix for commute times per mode and Google Places for nearby-preference distances (if the user configured main locations / preferences).
+3. Runs the **scorecard evaluator** — deterministic components (price, size, WG size, availability, commute, preferences) plus one narrow LLM call (`brain.vibe_score`) that judges prose fit only — and composes a weighted score. Listings that fail the deterministic hard filter never reach the LLM.
+4. Persists one `ListingScoreRow` per `(listing_id, hunt_id)` (including vetoes with `score=0.0` and `veto_reason` set). This row is also the hunt ↔ listing membership record — it's what `list_listings_for_hunt` joins on.
 5. Streams every action to the browser over **Server-Sent Events** so the dashboard's live log and ranked-listings view update in real time. Clicking a listing opens a drawer with the component breakdown, commute times, and a link back to wg-gesucht.
 
 No messaging in v1 — the orchestrator has that code staged for a future iteration but the demo path is strictly *find and surface*.
@@ -20,8 +24,9 @@ No messaging in v1 — the orchestrator has that code staged for a future iterat
 
 | Layer | Choice | Why |
 | --- | --- | --- |
-| Backend | **FastAPI** + async tasks | One process hosts API, SSE, periodic hunt loop, and the built SPA |
-| Persistence | **SQLite + SQLModel + Alembic** | Zero external infra for demos; migrations from day one (ADR-001, ADR-005) |
+| Backend | **FastAPI** + async matcher tasks | Hosts API, SSE, per-hunt matcher loops, and the built SPA |
+| Scraper | **Standalone Python container** | Sole writer of `ListingRow` + `PhotoRow`; decouples scrape cadence from hunt cadence (ADR-018) |
+| Persistence | **MySQL (AWS RDS) + SQLModel** | One shared DB for all developers via `WG_DB_URL`; schema is bootstrapped via `SQLModel.metadata.create_all` on startup (ADR-018) |
 | Frontend | **Vite + React 19 + TypeScript + Tailwind 3** | Desktop-first SPA, no SSR (ADR-002) |
 | Scoring | **Scorecard evaluator** (code) + **OpenAI** (narrow vibe call) | Deterministic components are unit-testable; LLM only judges what it's good at (ADR-015) |
 | External | **wg-gesucht.de** (httpx scrape), **Google Maps Platform** (frontend autocomplete + backend geocoding/routing/nearby places), **OpenAI** | No APIs for wg-gesucht exist; we scrape defensively |
@@ -50,7 +55,7 @@ flowchart LR
   DTO --> Domain["Domain models<br/>(Pydantic, backend/app/wg_agent/models.py)"]
   Domain --> Repo["repo.py<br/>(conversion boundary)"]
   Repo --> Tables["SQLModel tables<br/>(backend/app/wg_agent/db_models.py)"]
-  Tables --> SQLite[(SQLite)]
+  Tables --> MySQL[(MySQL)]
 ```
 
 - UI never imports SQLModel types; it sees only DTOs as JSON.
@@ -65,8 +70,9 @@ One documented exception: [`api._get_listing_detail`](../backend/app/wg_agent/ap
 ### In
 - Vite + React onboarding (profile → requirements → preferences) and a dashboard with SSE-fed action log and ranked listing cards with a component-breakdown drawer.
 - FastAPI serves `frontend/dist/` as SPA and exposes JSON + SSE under `/api/*`.
-- SQLite + SQLModel + Alembic migrations (through `0006_scorecard_components.py`); Fernet-encrypted optional wg-gesucht credentials at rest.
-- `PeriodicHunter` + `HuntEngine`: anonymous listing search and per-listing scrape via **httpx**, then `evaluator.evaluate` (deterministic components + one narrow `brain.vibe_score` LLM call); results persisted per `hunt_id`.
+- MySQL + SQLModel schema bootstrap via `SQLModel.metadata.create_all` on startup; Fernet-encrypted optional wg-gesucht credentials at rest.
+- Standalone scraper container ([`app/scraper/`](../backend/app/scraper/)): periodic anonymous listing search + deep scrape via **httpx**, fills the shared global `ListingRow` pool with status/scraped_at/scrape_error bookkeeping (ADR-018).
+- `PeriodicHunter` + `HuntEngine` **matcher**: iterates `list_scorable_listings` per hunt, runs `evaluator.evaluate` (deterministic components + one narrow `brain.vibe_score` LLM call); results persisted per `(listing_id, hunt_id)` with `scored_against_scraped_at` set for future rescoring.
 - Commute-aware scoring: server-side Google geocoding fallback for listing addresses, Google Distance Matrix per mode, and Google Places lookups for nearby user-preference amenities; the matrix drives `commute_fit`, nearby-place distances drive `preference_fit`, and both appear in the drawer (ADR-017).
 - Scorecard evaluator (ADR-015): deterministic hard-filter vetoes + six component curves + narrow vibe LLM + weighted composition with hard caps. Unit-tested curve-by-curve in [`test_evaluator.py`](../backend/tests/test_evaluator.py).
 

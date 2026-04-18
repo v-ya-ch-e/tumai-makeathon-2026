@@ -1,12 +1,13 @@
 # Setup
 
-Clone the repo and run the WG Hunter stack locally: FastAPI backend + Vite-built React UI, with SQLite under `~/.wg_hunter/`.
+Clone the repo and run the WG Hunter stack locally: FastAPI backend + background scraper + Vite-built React UI, all pointing at the team-shared AWS MySQL.
 
 ## Prerequisites
 
 - Python **3.11+**
 - **Node.js** 20+ (Node **24** is what we use day-to-day; it works with the checked-in lockfile)
 - **npm** 10+
+- **MySQL connection string** — WG Hunter is MySQL-only. Developers use the team-shared AWS RDS instance by setting `WG_DB_URL` in `.env`; no local MySQL install is required.
 - A working **`OPENAI_API_KEY`** (see [`.env.example`](../.env.example)). The evaluator's `vibe_fit` component calls OpenAI once per scored listing; without it, every listing's vibe component degrades to `missing_data` and the composite score uses only the deterministic components.
 - Optional location API keys:
   - `VITE_GOOGLE_MAPS_API_KEY` — **Maps JavaScript API** + **Places API (New)**, referrer-restricted to `http://localhost:5173/*`, `http://localhost:8000/*`, and your deployed origin. Used only by the onboarding wizard's Main locations autocomplete ([`PlaceAutocomplete.tsx`](../frontend/src/components/PlaceAutocomplete.tsx)). Without it the field falls back to a disabled placeholder.
@@ -22,7 +23,11 @@ Clone the repo and run the WG Hunter stack locally: FastAPI backend + Vite-built
    cp .env.example .env
    ```
 
-   Edit `.env` and set `OPENAI_API_KEY`. Optionally set `VITE_GOOGLE_MAPS_API_KEY` for the Places Autocomplete widget and `GOOGLE_MAPS_SERVER_KEY` for backend routing/geocoding/place enrichment; Vite reads this file via [`envDir: '..'`](../frontend/vite.config.ts) from `frontend/`, so one repo-root `.env` covers both backend and frontend.
+   Edit `.env` and set:
+   - `WG_DB_URL` — MySQL DSN for the team-shared AWS RDS (ask a teammate; format `mysql+pymysql://user:pass@host:3306/wg_hunter?charset=utf8mb4`). Required for both the backend and scraper processes.
+   - `OPENAI_API_KEY` — OpenAI key for the vibe-score component.
+   - Optionally `VITE_GOOGLE_MAPS_API_KEY` for the Places Autocomplete widget and `GOOGLE_MAPS_SERVER_KEY` for backend routing/geocoding/place enrichment; Vite reads this file via [`envDir: '..'`](../frontend/vite.config.ts) from `frontend/`, so one repo-root `.env` covers backend, scraper, and frontend.
+   - Optionally tune the scraper via `SCRAPER_CITY`, `SCRAPER_MAX_RENT`, `SCRAPER_MAX_PAGES`, `SCRAPER_INTERVAL_SECONDS`, `SCRAPER_REFRESH_HOURS` (defaults in [`.env.example`](../.env.example)).
 
 3. **Backend**
 
@@ -44,7 +49,7 @@ Clone the repo and run the WG Hunter stack locally: FastAPI backend + Vite-built
    npm run build
    ```
 
-5. **Run the backend** (loads `OPENAI_API_KEY` from the repo-root `.env`)
+5. **Run the backend** (loads env from the repo-root `.env`)
 
    ```bash
    cd ../backend
@@ -52,9 +57,18 @@ Clone the repo and run the WG Hunter stack locally: FastAPI backend + Vite-built
    venv/bin/uvicorn app.main:app --reload
    ```
 
-   Open [http://127.0.0.1:8000/](http://127.0.0.1:8000/). On startup the app runs Alembic `upgrade head` and resumes hunts still marked `running` in SQLite ([`main.py`](../backend/app/main.py), [`periodic.resume_running_hunts`](../backend/app/wg_agent/periodic.py)).
+   Open [http://127.0.0.1:8000/](http://127.0.0.1:8000/). On startup the app calls `db.init_db()` (which bootstraps any missing tables via `SQLModel.metadata.create_all`) and resumes hunts still marked `running` ([`main.py`](../backend/app/main.py), [`periodic.resume_running_hunts`](../backend/app/wg_agent/periodic.py)).
 
-6. **Frontend dev loop** — in a second terminal, from `frontend/`:
+6. **Run the scraper** — in a second terminal, from `backend/` (same `.env`):
+
+   ```bash
+   set -a && source ../.env && set +a
+   venv/bin/python -m app.scraper.main
+   ```
+
+   This runs migrations, then enters the scraper loop. In docker-compose setups, the `scraper` service takes care of this.
+
+7. **Frontend dev loop** — in a third terminal, from `frontend/`:
 
    ```bash
    npm run dev
@@ -64,11 +78,16 @@ Clone the repo and run the WG Hunter stack locally: FastAPI backend + Vite-built
 
 ## Reset the database
 
-```bash
-rm ~/.wg_hunter/app.db*
+Drop and recreate the MySQL database, then restart both backend and scraper — `db.init_db()` will recreate the schema via `SQLModel.metadata.create_all` on the next startup:
+
+```sql
+DROP DATABASE wg_hunter;
+CREATE DATABASE wg_hunter CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci;
 ```
 
-Restart `uvicorn`. Alembic recreates an empty schema on the next `upgrade head`.
+This is also the correct way to pick up a model change that isn't additive: we don't use Alembic in this project ([docs/BACKEND.md "Schema evolution"](./BACKEND.md#schema-evolution) explains why), so column additions to existing tables require a reset too.
+
+For a dev DB on AWS, coordinate with the team before resetting — everyone shares the instance.
 
 ## Your first contribution
 
@@ -96,9 +115,13 @@ Every component in [`evaluator.py`](../backend/app/wg_agent/evaluator.py) is pur
 
 ## Troubleshooting
 
+- **`WG_DB_URL is not set` at startup** — The backend and scraper both raise if this env var is missing. Re-source `.env` (`set -a && source ../.env && set +a`) in the terminal you launch from, and confirm the MySQL DSN is present.
+
+- **`Can't connect to MySQL server` / SSL handshake errors** — Check that the RDS instance accepts connections from your IP and that the DSN includes `?charset=utf8mb4`. The engine uses `pool_pre_ping=True` so stale connections are transparently reopened, but first-connect failures will still surface on startup.
+
 - **`OPENAI_API_KEY` is not set** — Ensure `set -a && source ../.env && set +a` (or export the variable) in the same shell session before launching `uvicorn`.
 
-- **Alembic / SQLite revision mismatch after manual edits** — Stop the server, `rm ~/.wg_hunter/app.db*`, start again so `upgrade head` applies [`0001_initial.py`](../backend/alembic/versions/0001_initial.py) cleanly.
+- **Schema drifted after a model change** — Coordinate with the team, drop + recreate the MySQL database (see "Reset the database"), then restart both backend and scraper so `db.init_db()` rebuilds the schema from `SQLModel.metadata`.
 
 - **Port 8000 already in use** — `lsof -ti :8000 | xargs kill` (macOS) then restart `uvicorn`.
 
