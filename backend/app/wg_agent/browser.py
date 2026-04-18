@@ -19,6 +19,7 @@ from pathlib import Path
 from typing import Optional
 from urllib.parse import urlencode
 
+import httpx
 from bs4 import BeautifulSoup
 from playwright.async_api import (
     Browser,
@@ -36,6 +37,9 @@ USER_AGENT = (
     "Mozilla/5.0 (Macintosh; Intel Mac OS X 14_5) AppleWebKit/537.36 "
     "(KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36"
 )
+
+# Delay between anonymous listing fetches to stay well under abuse thresholds.
+ANONYMOUS_PAGE_DELAY_SECONDS = 1.5
 
 
 # --- Small helpers ------------------------------------------------------------
@@ -501,3 +505,47 @@ async def launch_browser(
         creds=creds,
         storage_state_path=save_path,
     )
+
+
+# --- Anonymous (no-login) httpx path -----------------------------------------
+# Used when the user has not connected a wg-gesucht account. Listing pages are
+# publicly readable, so we can search + deep-scrape without Playwright at all.
+
+
+def _anon_client() -> httpx.AsyncClient:
+    return httpx.AsyncClient(
+        headers={"User-Agent": USER_AGENT, "Accept-Language": "de-DE,de;q=0.9,en;q=0.8"},
+        follow_redirects=True,
+        timeout=httpx.Timeout(20.0, connect=10.0),
+    )
+
+
+async def anonymous_search(
+    req: SearchProfile, *, max_pages: int = 2
+) -> list[Listing]:
+    """Return a deduplicated list of listing stubs without logging in."""
+    seen: set[str] = set()
+    out: list[Listing] = []
+    async with _anon_client() as client:
+        for page_index in range(max_pages):
+            url = build_search_url(req, page_index=page_index)
+            try:
+                response = await client.get(url)
+                response.raise_for_status()
+            except httpx.HTTPError:
+                break
+            batch = parse_search_page(response.text, seen_ids=seen)
+            if not batch:
+                break
+            out.extend(batch)
+            if page_index + 1 < max_pages:
+                await asyncio.sleep(ANONYMOUS_PAGE_DELAY_SECONDS)
+    return out
+
+
+async def anonymous_scrape_listing(listing: Listing) -> Listing:
+    """Deep-scrape a listing's public detail page using httpx + parse_listing_page."""
+    async with _anon_client() as client:
+        response = await client.get(str(listing.url))
+        response.raise_for_status()
+    return parse_listing_page(response.text, listing)
