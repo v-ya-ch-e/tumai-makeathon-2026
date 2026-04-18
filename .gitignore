@@ -68,3 +68,8 @@ Thumbs.db
 backend/tests/fixtures/
 wg_state.json
 *_state.json
+
+# SSL certificates
+*.ca-bundle
+*.crt
+*.key
