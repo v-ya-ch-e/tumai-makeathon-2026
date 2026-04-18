@@ -39,38 +39,38 @@ export function OnboardingShell({
   const primaryLabel = busy ? 'Continuing…' : nextLabel
 
   return (
-    <div className="relative min-h-screen overflow-hidden bg-canvas">
-      <div className="relative mx-auto max-w-7xl px-5 py-5 sm:px-8 lg:px-10">
+    <div className="min-h-screen bg-canvas">
+      <div className="app-shell">
         {showProgress ? (
-          <div className="mb-8 flex items-center justify-between gap-4 rounded-[24px] border border-hairline/80 bg-surface/90 px-5 py-4 shadow-[0_18px_38px_rgba(39,33,29,0.05)]">
+          <div className="mb-8 flex flex-col gap-3 border-b border-hairline pb-4 sm:flex-row sm:items-center sm:justify-between">
             <ProgressSteps current={step} steps={progressSteps} />
-            <span className="hidden font-mono text-[11px] uppercase tracking-[0.24em] text-ink-muted sm:inline">
+            <span className="hidden font-mono text-[11px] uppercase tracking-[0.22em] text-ink-muted sm:inline">
               WG Hunter
             </span>
           </div>
         ) : null}
 
-        <div className={aside ? 'grid gap-6 lg:grid-cols-[minmax(0,1.3fr)_340px] xl:grid-cols-[minmax(0,1.35fr)_380px]' : 'grid gap-6'}>
-          <section className="overflow-hidden rounded-[32px] border border-hairline/80 bg-surface/95 shadow-[0_30px_80px_rgba(39,33,29,0.08)]">
-            <div className="border-b border-hairline/80 px-6 py-8 sm:px-8 lg:px-10">
+        <div className={aside ? 'grid gap-8 lg:grid-cols-[minmax(0,1fr)_320px]' : 'grid gap-6'}>
+          <section className="page-frame overflow-hidden">
+            <div className="border-b border-hairline px-6 py-8 sm:px-8 lg:px-10">
               {eyebrow ? (
-                <p className="mb-3 font-mono text-[12px] uppercase tracking-[0.28em] text-accent">
+                <p className="section-kicker mb-3 text-accent">
                   {eyebrow}
                 </p>
               ) : null}
-              <h1 className="max-w-2xl text-[32px] font-semibold tracking-[-0.03em] text-ink sm:text-[40px]">
+              <h1 className="page-title max-w-2xl">
                 {title}
               </h1>
               {description ? (
-                <p className="mt-4 max-w-2xl text-[16px] leading-7 text-ink-muted">{description}</p>
+                <p className="body-copy mt-4 max-w-2xl">{description}</p>
               ) : null}
             </div>
 
-            <div className="bg-[linear-gradient(180deg,rgba(255,250,242,0.24),rgba(255,250,242,0))] px-6 py-8 sm:px-8 lg:px-10">
+            <div className="px-6 py-8 sm:px-8 lg:px-10">
               {children}
             </div>
 
-            <div className="border-t border-hairline/80 px-6 py-5 sm:px-8 lg:px-10">
+            <div className="border-t border-hairline px-6 py-5 sm:px-8 lg:px-10">
               {footer ? <div className="mb-4">{footer}</div> : null}
               <div className="flex flex-col gap-4 sm:flex-row sm:items-center sm:justify-between">
                 <div>
@@ -79,7 +79,7 @@ export function OnboardingShell({
                       Back
                     </Button>
                   ) : (
-                    <p className="text-[13px] text-ink-muted">We save only what the hunt needs.</p>
+                    <p className="text-[13px] text-ink-muted">We only store what the hunt needs.</p>
                   )}
                 </div>
                 <div className="flex items-center justify-end gap-3">

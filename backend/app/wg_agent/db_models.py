@@ -12,15 +12,10 @@ from sqlmodel import Field, SQLModel
 class UserRow(SQLModel, table=True):
     __tablename__ = "userrow"
     username: str = Field(primary_key=True)
+    email: Optional[str] = Field(default=None, index=True, unique=True)
     age: int
     gender: str
     created_at: datetime
-
-
-class UserNotifyRow(SQLModel, table=True):
-    __tablename__ = "usernotifyrow"
-    username: str = Field(primary_key=True, foreign_key="userrow.username")
-    notify_email: str
 
 
 class WgCredentialsRow(SQLModel, table=True):
@@ -47,27 +42,10 @@ class SearchProfileRow(SQLModel, table=True):
     updated_at: datetime = Field(default_factory=datetime.utcnow)
 
 
-class HuntRow(SQLModel, table=True):
-    __tablename__ = "huntrow"
-    id: str = Field(primary_key=True)
-    username: str = Field(foreign_key="userrow.username", index=True)
-    status: str
-    schedule: str
-    started_at: datetime
-    stopped_at: Optional[datetime] = None
-
-
 class ListingRow(SQLModel, table=True):
-    """Global wg-gesucht listing, owned by the scraper.
+    """Global wg-gesucht listing; the scraper is the sole writer.
 
-    The composite `(id, hunt_id)` primary key was dropped when the background
-    scraper became the sole writer (ADR-018). Membership between a hunt and
-    a listing is now expressed by the presence of a `ListingScoreRow`.
-
-    `furnished` / `pets_allowed` / `smoking_ok` / `city` / `address` /
-    `languages` are persisted so the matcher (backend container) can honour
-    weight-5 structured-preference vetoes and feed the vibe prompt with the
-    same neighborhood context the scraper parsed.
+    `deleted_at` marks listings no longer visible on wg-gesucht.
     """
 
     __tablename__ = "listingrow"
@@ -94,6 +72,7 @@ class ListingRow(SQLModel, table=True):
     scrape_error: Optional[str] = None
     first_seen_at: datetime
     last_seen_at: datetime
+    deleted_at: Optional[datetime] = Field(default=None, index=True)
 
 
 class PhotoRow(SQLModel, table=True):
@@ -103,10 +82,10 @@ class PhotoRow(SQLModel, table=True):
     url: str
 
 
-class ListingScoreRow(SQLModel, table=True):
-    __tablename__ = "listingscorerow"
+class UserListingRow(SQLModel, table=True):
+    __tablename__ = "userlistingrow"
+    username: str = Field(primary_key=True, foreign_key="userrow.username")
     listing_id: str = Field(primary_key=True, foreign_key="listingrow.id")
-    hunt_id: str = Field(primary_key=True, foreign_key="huntrow.id")
     score: float
     reason: Optional[str] = None
     match_reasons: list = Field(default_factory=list, sa_column=Column(JSON))
@@ -119,22 +98,12 @@ class ListingScoreRow(SQLModel, table=True):
     scored_at: datetime
 
 
-class AgentActionRow(SQLModel, table=True):
-    __tablename__ = "agentactionrow"
+class UserActionRow(SQLModel, table=True):
+    __tablename__ = "useractionrow"
     id: Optional[int] = Field(default=None, primary_key=True)
-    hunt_id: str = Field(foreign_key="huntrow.id", index=True)
+    username: str = Field(foreign_key="userrow.username", index=True)
     kind: str
     summary: str
     detail: Optional[str] = None
     listing_id: Optional[str] = Field(default=None, foreign_key="listingrow.id")
     at: datetime
-
-
-class MessageRow(SQLModel, table=True):
-    __tablename__ = "messagerow"
-    id: Optional[int] = Field(default=None, primary_key=True)
-    listing_id: str = Field(index=True, foreign_key="listingrow.id")
-    hunt_id: str = Field(index=True, foreign_key="huntrow.id")
-    direction: str
-    text: str
-    sent_at: datetime

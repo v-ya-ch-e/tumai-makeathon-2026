@@ -6,6 +6,7 @@ from fastapi import FastAPI, HTTPException
 from fastapi.responses import FileResponse
 from fastapi.staticfiles import StaticFiles
 
+from .deadline_agent.api import router as deadline_router
 from .wg_agent.api import router as api_router
 
 logger = logging.getLogger(__name__)
@@ -24,12 +25,13 @@ async def lifespan(app: FastAPI):
     logger.info("WG database: %s", wg_db.describe_database())
     from .wg_agent import periodic as wg_periodic
 
-    await wg_periodic.resume_running_hunts()
+    await wg_periodic.resume_user_agents()
     yield
 
 
 app = FastAPI(title="TUM.ai Campus Co-Pilot · WG Hunter", lifespan=lifespan)
 app.include_router(api_router)
+app.include_router(deadline_router)
 
 
 @app.get("/health")
@@ -43,7 +45,7 @@ def api_healthz() -> dict[str, str]:
 
 
 # --- SPA serving -------------------------------------------------------------
-# Vite's `npm run build` emits `frontend/dist/{index.html, assets/…}`.
+# Vite's `npm run build` emits `frontend/dist/{index.html, assets/...}`.
 # /assets/ is served verbatim; every non-/api/* path falls back to
 # index.html so client-side React Router can handle it.
 

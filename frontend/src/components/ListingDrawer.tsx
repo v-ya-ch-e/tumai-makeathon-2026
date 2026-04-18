@@ -1,8 +1,9 @@
 import clsx from 'clsx'
-import { useEffect, useState } from 'react'
-import { Button, Drawer, StatusPill, type StatusPillTone } from './ui'
+import { useEffect, useState, type ReactNode } from 'react'
 import { getListingDetail } from '../lib/api'
+import { useSession } from '../lib/session'
 import type { Component, Listing, ListingDetail } from '../types'
+import { Button, Drawer, StatusPill, type StatusPillTone } from './ui'
 
 export type ListingDrawerProps = {
   open: boolean
@@ -18,7 +19,7 @@ function scoreTone(score: number | null): StatusPillTone {
 }
 
 function formatScore(score: number | null): string {
-  return score === null ? 'unscored' : score.toFixed(2)
+  return score === null ? 'Pending' : score.toFixed(2)
 }
 
 const COMPONENT_LABELS: Record<string, string> = {
@@ -32,10 +33,7 @@ const COMPONENT_LABELS: Record<string, string> = {
 }
 
 function componentLabel(key: string): string {
-  return (
-    COMPONENT_LABELS[key] ??
-    key.replace(/_/g, ' ').replace(/\b\w/g, (c) => c.toUpperCase())
-  )
+  return COMPONENT_LABELS[key] ?? key.replace(/_/g, ' ').replace(/\b\w/g, (char) => char.toUpperCase())
 }
 
 function barClassName(score: number, missing: boolean): string {
@@ -45,30 +43,28 @@ function barClassName(score: number, missing: boolean): string {
   return 'bg-bad'
 }
 
-function ComponentBar({ c }: { c: Component }) {
-  const widthPct = c.missingData ? 100 : Math.max(2, Math.round(c.score * 100))
-  const primaryEvidence = c.evidence.slice(0, 2).join(' · ')
+function ComponentBar({ component }: { component: Component }) {
+  const widthPct = component.missingData ? 100 : Math.max(2, Math.round(component.score * 100))
+  const primaryEvidence = component.evidence.slice(0, 2).join(' · ')
   return (
     <li
       className={clsx(
         'grid grid-cols-[96px_1fr_48px] items-center gap-3 text-[13px]',
-        c.missingData && 'opacity-60',
+        component.missingData && 'opacity-60',
       )}
     >
-      <span className="truncate text-ink-muted">{componentLabel(c.key)}</span>
+      <span className="truncate text-ink-muted">{componentLabel(component.key)}</span>
       <div className="space-y-1">
         <div className="h-1.5 w-full rounded-full bg-hairline/60">
           <div
-            className={clsx('h-1.5 rounded-full', barClassName(c.score, c.missingData))}
+            className={clsx('h-1.5 rounded-full', barClassName(component.score, component.missingData))}
             style={{ width: `${widthPct}%` }}
           />
         </div>
-        {primaryEvidence ? (
-          <p className="line-clamp-1 text-[12px] text-ink-muted">{primaryEvidence}</p>
-        ) : null}
+        {primaryEvidence ? <p className="line-clamp-1 text-[12px] text-ink-muted">{primaryEvidence}</p> : null}
       </div>
       <span className="text-right tabular-nums text-ink">
-        {c.missingData ? '—' : c.score.toFixed(2)}
+        {component.missingData ? '—' : component.score.toFixed(2)}
       </span>
     </li>
   )
@@ -76,30 +72,48 @@ function ComponentBar({ c }: { c: Component }) {
 
 function Stat({ label, value }: { label: string; value: string }) {
   return (
-    <>
-      <dt className="text-[12px] uppercase tracking-[0.14em] text-ink-muted">{label}</dt>
-      <dd className="text-[14px] font-medium text-ink">{value}</dd>
-    </>
+    <div>
+      <dt className="data-label">{label}</dt>
+      <dd className="mt-1 text-[14px] text-ink">{value}</dd>
+    </div>
+  )
+}
+
+function Section({
+  title,
+  children,
+  className,
+}: {
+  title: string
+  children: ReactNode
+  className?: string
+}) {
+  return (
+    <section className={clsx('rounded-card border border-hairline bg-surface p-5', className)}>
+      <h3 className="text-[15px] font-semibold text-ink">{title}</h3>
+      <div className="mt-3">{children}</div>
+    </section>
   )
 }
 
 export function ListingDrawer({ open, listing, onClose }: ListingDrawerProps) {
+  const { username } = useSession()
   const [detail, setDetail] = useState<ListingDetail | null>(null)
   const [loading, setLoading] = useState(false)
   const [error, setError] = useState<string | null>(null)
 
   useEffect(() => {
-    if (!open || !listing) return
+    if (!open || !listing || !username) return
     setDetail(null)
     setError(null)
     setLoading(true)
     let cancelled = false
     void (async () => {
       try {
-        const d = await getListingDetail(listing.id, listing.huntId)
-        if (!cancelled) setDetail(d)
-      } catch (e) {
-        if (!cancelled) setError(e instanceof Error ? e.message : String(e))
+        const nextDetail = await getListingDetail(listing.id, username)
+        if (!cancelled) setDetail(nextDetail)
+      } catch (nextError) {
+        if (!cancelled) setError(nextError instanceof Error ? nextError.message : String(nextError))
       } finally {
         if (!cancelled) setLoading(false)
       }
@@ -107,9 +121,9 @@ export function ListingDrawer({ open, listing, onClose }: ListingDrawerProps) {
     return () => {
       cancelled = true
     }
-  }, [open, listing?.id, listing?.huntId])
+  }, [open, listing?.id, username])
 
-  const active: Listing | null = detail?.listing ?? listing
+  const activeListing: Listing | null = detail?.listing ?? listing
 
   return (
     <Drawer
@@ -117,99 +131,93 @@ export function ListingDrawer({ open, listing, onClose }: ListingDrawerProps) {
       onClose={onClose}
       widthClass="w-[560px]"
       title={
-        active ? (
+        activeListing ? (
           <div className="flex items-center gap-3">
-            <span className="truncate">{active.title ?? `Listing ${active.id}`}</span>
-            <StatusPill tone={scoreTone(active.score)}>{formatScore(active.score)}</StatusPill>
+            <span className="truncate">{activeListing.title ?? `Listing ${activeListing.id}`}</span>
+            <StatusPill tone={scoreTone(activeListing.score)}>{formatScore(activeListing.score)}</StatusPill>
           </div>
         ) : (
           'Listing'
         )
       }
     >
-      {active ? (
-        <div className="space-y-8">
+      {activeListing ? (
+        <div className="space-y-6">
           {detail && detail.photos.length > 0 ? (
-            <div className="overflow-hidden rounded-[24px] border border-hairline/80 bg-surface shadow-[0_18px_42px_rgba(39,33,29,0.08)]">
+            <div className="overflow-hidden rounded-card border border-hairline bg-surface">
               <img
                 src={detail.photos[0]}
-                alt={active.title ?? active.id}
+                alt={activeListing.title ?? activeListing.id}
                 className="w-full object-cover"
                 style={{ maxHeight: 360 }}
               />
             </div>
           ) : null}
 
-          <section className="rounded-[24px] border border-hairline/80 bg-surface p-5 shadow-[0_14px_32px_rgba(39,33,29,0.05)]">
+          <Section title="Listing facts">
             <dl className="grid grid-cols-2 gap-x-4 gap-y-4 text-[14px]">
-              <Stat label="Price" value={active.priceEur !== null ? `${active.priceEur} €` : '—'} />
-              <Stat label="Size" value={active.sizeM2 !== null ? `${active.sizeM2} m²` : '—'} />
-              <Stat label="WG size" value={active.wgSize !== null ? `${active.wgSize} people` : '—'} />
-              <Stat label="District" value={active.district ?? '—'} />
+              <Stat label="Price" value={activeListing.priceEur !== null ? `${activeListing.priceEur} EUR` : '—'} />
+              <Stat label="Size" value={activeListing.sizeM2 !== null ? `${activeListing.sizeM2} m²` : '—'} />
+              <Stat label="WG size" value={activeListing.wgSize !== null ? `${activeListing.wgSize} people` : '—'} />
+              <Stat label="District" value={activeListing.district ?? '—'} />
               <Stat
                 label="Available"
-                value={`${active.availableFrom ?? '—'}${active.availableTo ? ` → ${active.availableTo}` : ''}`}
+                value={`${activeListing.availableFrom ?? '—'}${activeListing.availableTo ? ` → ${activeListing.availableTo}` : ''}`}
               />
             </dl>
-          </section>
+          </Section>
 
-          {active.vetoReason ? (
-            <section className="space-y-2 rounded-[22px] border border-bad/40 bg-bad/5 p-4">
-              <h3 className="text-[14px] font-semibold text-bad">Rejected</h3>
-              <p className="text-[13px] text-ink">{active.vetoReason}</p>
-            </section>
-          ) : active.components.length > 0 ? (
-            <section className="space-y-3 rounded-[24px] border border-hairline/80 bg-surface p-5 shadow-[0_14px_32px_rgba(39,33,29,0.05)]">
-              <h3 className="text-[15px] font-semibold text-ink">Score breakdown</h3>
-              {active.scoreReason ? (
-                <p className="text-[13px] text-ink-muted">{active.scoreReason}</p>
+          {activeListing.vetoReason ? (
+            <Section title="Why it was rejected" className="border-bad/35 bg-bad/5">
+              <p className="text-[14px] leading-6 text-ink">{activeListing.vetoReason}</p>
+            </Section>
+          ) : activeListing.components.length > 0 ? (
+            <Section title="Score breakdown">
+              {activeListing.scoreReason ? (
+                <p className="text-[13px] leading-6 text-ink-muted">{activeListing.scoreReason}</p>
               ) : null}
-              <ul className="space-y-2">
-                {active.components.map((c) => (
-                  <ComponentBar key={c.key} c={c} />
+              <ul className="mt-4 space-y-2">
+                {activeListing.components.map((component) => (
+                  <ComponentBar key={component.key} component={component} />
                 ))}
               </ul>
-            </section>
-          ) : active.scoreReason ? (
-            <section className="space-y-2 rounded-[24px] border border-hairline/80 bg-surface p-5 shadow-[0_14px_32px_rgba(39,33,29,0.05)]">
-              <h3 className="text-[15px] font-semibold text-ink">Why the agent flagged it</h3>
-              <p className="text-[14px] text-ink">{active.scoreReason}</p>
-              {active.matchReasons.length > 0 ? (
-                <ul className="list-inside list-disc text-[13px] text-good">
-                  {active.matchReasons.map((r, i) => (
-                    <li key={`m-${i}`}>{r}</li>
+            </Section>
+          ) : activeListing.scoreReason ? (
+            <Section title="Why it stands out">
+              <p className="text-[14px] leading-6 text-ink">{activeListing.scoreReason}</p>
+              {activeListing.matchReasons.length > 0 ? (
+                <ul className="mt-3 list-inside list-disc text-[13px] leading-6 text-good">
+                  {activeListing.matchReasons.map((reason, index) => (
+                    <li key={`match-${index}`}>{reason}</li>
                   ))}
                 </ul>
               ) : null}
-              {active.mismatchReasons.length > 0 ? (
-                <ul className="list-inside list-disc text-[13px] text-bad">
-                  {active.mismatchReasons.map((r, i) => (
-                    <li key={`x-${i}`}>{r}</li>
+              {activeListing.mismatchReasons.length > 0 ? (
+                <ul className="mt-3 list-inside list-disc text-[13px] leading-6 text-bad">
+                  {activeListing.mismatchReasons.map((reason, index) => (
+                    <li key={`mismatch-${index}`}>{reason}</li>
                   ))}
                 </ul>
               ) : null}
-            </section>
+            </Section>
           ) : null}
 
-          {detail?.travelMinutesPerLocation &&
-          Object.keys(detail.travelMinutesPerLocation).length > 0 ? (
-            <section className="space-y-2 rounded-[24px] border border-hairline/80 bg-surface p-5 shadow-[0_14px_32px_rgba(39,33,29,0.05)]">
-              <h3 className="text-[15px] font-semibold text-ink">Commute</h3>
-              <ul className="text-[13px] text-ink">
+          {detail?.travelMinutesPerLocation && Object.keys(detail.travelMinutesPerLocation).length > 0 ? (
+            <Section title="Commute">
+              <ul className="space-y-2 text-[13px] text-ink">
                 {Object.entries(detail.travelMinutesPerLocation).map(([label, minutes]) => (
-                  <li key={label}>
+                  <li key={label} className="flex items-start justify-between gap-4">
                     <span className="text-ink-muted">{label}</span>
-                    <span> — {minutes} min</span>
+                    <span>{minutes} min</span>
                   </li>
                 ))}
               </ul>
-            </section>
+            </Section>
           ) : null}
 
           {detail && detail.nearbyPreferencePlaces.length > 0 ? (
-            <section className="space-y-2">
-              <h3 className="text-[15px] font-semibold text-ink">Nearby preferences</h3>
-              <ul className="space-y-1 text-[13px] text-ink">
+            <Section title="Nearby preference checks">
+              <ul className="space-y-2 text-[13px] leading-6 text-ink">
                 {detail.nearbyPreferencePlaces.map((place) => (
                   <li key={place.key}>
                     <span className="text-ink-muted">{place.label}</span>
@@ -227,46 +235,42 @@ export function ListingDrawer({ open, listing, onClose }: ListingDrawerProps) {
                   </li>
                 ))}
               </ul>
-            </section>
+            </Section>
           ) : null}
 
-          {active.description ? (
-            <section className="space-y-2 rounded-[24px] border border-hairline/80 bg-surface p-5 shadow-[0_14px_32px_rgba(39,33,29,0.05)]">
-              <h3 className="text-[15px] font-semibold text-ink">Description</h3>
-              <p className="whitespace-pre-wrap text-[14px] leading-relaxed text-ink">
-                {active.description}
-              </p>
-            </section>
+          {activeListing.description ? (
+            <Section title="Original description">
+              <p className="whitespace-pre-wrap text-[14px] leading-7 text-ink">{activeListing.description}</p>
+            </Section>
           ) : null}
 
           {detail && detail.photos.length > 1 ? (
-            <section className="space-y-3 rounded-[24px] border border-hairline/80 bg-surface p-5 shadow-[0_14px_32px_rgba(39,33,29,0.05)]">
-              <h3 className="text-[15px] font-semibold text-ink">More photos</h3>
+            <Section title="More photos">
               <div className="grid grid-cols-2 gap-2">
-                {detail.photos.slice(1).map((url, i) => (
+                {detail.photos.slice(1).map((url, index) => (
                   <img
-                    key={i}
+                    key={index}
                     src={url}
                     alt=""
-                    className="h-32 w-full rounded-[16px] border border-hairline object-cover"
+                    className="h-32 w-full rounded border border-hairline object-cover"
                   />
                 ))}
               </div>
-            </section>
+            </Section>
           ) : null}
 
-          <div className="flex items-center gap-3 border-t border-hairline pt-4">
+          <div className="flex flex-wrap items-center gap-3 border-t border-hairline pt-4">
             <Button
               variant="primary"
               size="sm"
               onClick={() => {
-                window.open(active.url, '_blank', 'noopener,noreferrer')
+                window.open(activeListing.url, '_blank', 'noopener,noreferrer')
               }}
             >
-              Open on wg-gesucht
+              Open on WG-Gesucht
             </Button>
             <Button variant="secondary" size="sm" disabled>
-              Send message (needs login)
+              Messaging comes later
             </Button>
           </div>
 

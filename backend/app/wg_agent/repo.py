@@ -1,9 +1,7 @@
 """Domain <-> SQLModel row conversions (repository layer).
 
-Post-ADR-018: `ListingRow` + `PhotoRow` are written exclusively by the
-scraper container; hunts only write `ListingScoreRow` + `AgentActionRow`.
-Hunt <-> listing membership is expressed by the presence of a
-`ListingScoreRow`, which is what `list_listings_for_hunt` now joins on.
+Post-refactor: listings, scores, and actions belong to users, not hunts.
+Scraper owns `ListingRow`+`PhotoRow`; per-user agent owns `UserListingRow`+`UserActionRow`.
 """
 
 from __future__ import annotations
@@ -11,20 +9,17 @@ from __future__ import annotations
 import json
 from datetime import datetime
 from typing import Optional
-from uuid import uuid4
 
 from pydantic import HttpUrl
 from sqlmodel import Session, select
 
 from . import crypto
 from .db_models import (
-    AgentActionRow,
-    HuntRow,
     ListingRow,
-    ListingScoreRow,
     PhotoRow,
     SearchProfileRow,
-    UserNotifyRow,
+    UserActionRow,
+    UserListingRow,
     UserRow,
     WgCredentialsRow,
 )
@@ -33,8 +28,6 @@ from .models import (
     AgentAction,
     ComponentScore,
     Gender,
-    Hunt,
-    HuntStatus,
     Listing,
     NearbyPlace,
     PlaceLocation,
@@ -49,9 +42,20 @@ def _default_requirements() -> SearchProfile:
     return SearchProfile(city="München", max_rent_eur=2000)
 
 
+def _user_row_to_profile(row: UserRow) -> UserProfile:
+    return UserProfile(
+        username=row.username,
+        email=row.email,
+        age=row.age,
+        gender=Gender(row.gender),
+        created_at=row.created_at,
+    )
+
+
 def create_user(session: Session, *, profile: UserProfile) -> UserProfile:
     row = UserRow(
         username=profile.username,
+        email=profile.email,
         age=profile.age,
         gender=profile.gender.value,
         created_at=profile.created_at,
@@ -66,28 +70,26 @@ def get_user(session: Session, *, username: str) -> Optional[UserProfile]:
     row = session.get(UserRow, username)
     if row is None:
         return None
-    return UserProfile(
-        username=row.username,
-        age=row.age,
-        gender=Gender(row.gender),
-        created_at=row.created_at,
-    )
+    return _user_row_to_profile(row)
+
+
+def get_user_by_email(session: Session, *, email: str) -> Optional[UserProfile]:
+    row = session.exec(select(UserRow).where(UserRow.email == email)).first()
+    if row is None:
+        return None
+    return _user_row_to_profile(row)
 
 
 def update_user(session: Session, *, username: str, profile: UserProfile) -> UserProfile:
     row = session.get(UserRow, username)
     if row is None:
         raise KeyError(username)
+    row.email = profile.email
     row.age = profile.age
     row.gender = profile.gender.value
     session.commit()
     session.refresh(row)
-    return UserProfile(
-        username=row.username,
-        age=row.age,
-        gender=Gender(row.gender),
-        created_at=row.created_at,
-    )
+    return _user_row_to_profile(row)
 
 
 def _parse_preference(raw: object) -> Optional[PreferenceWeight]:
@@ -195,76 +197,6 @@ def credentials_status(
     return (True, row.saved_at)
 
 
-def create_hunt(session: Session, *, username: str, schedule: str) -> Hunt:
-    hunt_id = uuid4().hex[:12]
-    now = datetime.utcnow()
-    row = HuntRow(
-        id=hunt_id,
-        username=username,
-        status=HuntStatus.pending.value,
-        schedule=schedule,
-        started_at=now,
-        stopped_at=None,
-    )
-    session.add(row)
-    session.commit()
-    h = get_hunt(session, hunt_id=hunt_id)
-    assert h is not None
-    return h
-
-
-def get_hunt(session: Session, *, hunt_id: str) -> Optional[Hunt]:
-    hunt_row = session.get(HuntRow, hunt_id)
-    if hunt_row is None:
-        return None
-    req = get_search_profile(session, username=hunt_row.username)
-    if req is None:
-        req = _default_requirements()
-    listings = list_listings_for_hunt(session, hunt_id=hunt_id)
-    actions = list_actions_for_hunt(session, hunt_id=hunt_id)
-    return Hunt(
-        id=hunt_row.id,
-        status=HuntStatus(hunt_row.status),
-        started_at=hunt_row.started_at,
-        finished_at=hunt_row.stopped_at,
-        requirements=req,
-        listings=listings,
-        messages=[],
-        actions=actions,
-    )
-
-
-def update_hunt_status(
-    session: Session,
-    *,
-    hunt_id: str,
-    status: HuntStatus,
-    stopped_at: Optional[datetime] = None,
-) -> None:
-    row = session.get(HuntRow, hunt_id)
-    if row is None:
-        return
-    row.status = status.value
-    if stopped_at is not None:
-        row.stopped_at = stopped_at
-    session.add(row)
-    session.commit()
-
-
-def append_action(session: Session, *, hunt_id: str, action: AgentAction) -> None:
-    session.add(
-        AgentActionRow(
-            hunt_id=hunt_id,
-            kind=action.kind.value,
-            summary=action.summary,
-            detail=action.detail,
-            listing_id=action.listing_id,
-            at=action.at,
-        )
-    )
-    session.commit()
-
-
 def upsert_global_listing(
     session: Session,
     *,
@@ -275,11 +207,17 @@ def upsert_global_listing(
     """Write a listing to the global pool (scraper only).
 
     Preserves `first_seen_at`, bumps `last_seen_at`, stamps `scraped_at` with
-    the current UTC time, and updates `scrape_status` + `scrape_error`.
+    the current UTC time, and updates `scrape_status` + `scrape_error`. When
+    called with `status="deleted"`, also stamps `deleted_at`; otherwise the
+    existing `deleted_at` is preserved.
     """
     now = datetime.utcnow()
     existing = session.get(ListingRow, listing.id)
     first_seen = existing.first_seen_at if existing else now
+    if status == "deleted":
+        deleted_at: Optional[datetime] = now
+    else:
+        deleted_at = existing.deleted_at if existing else None
     row = ListingRow(
         id=listing.id,
         url=str(listing.url),
@@ -304,15 +242,16 @@ def upsert_global_listing(
         scrape_error=scrape_error,
         first_seen_at=first_seen,
         last_seen_at=now,
+        deleted_at=deleted_at,
     )
     session.merge(row)
     session.commit()
 
 
-def save_score(
+def save_user_match(
     session: Session,
     *,
-    hunt_id: str,
+    username: str,
     listing_id: str,
     score: float,
     reason: Optional[str],
@@ -335,9 +274,9 @@ def save_score(
         if components is not None
         else None
     )
-    row = ListingScoreRow(
+    row = UserListingRow(
+        username=username,
         listing_id=listing_id,
-        hunt_id=hunt_id,
         score=score,
         reason=reason,
         match_reasons=list(match_reasons),
@@ -365,58 +304,47 @@ def save_photos(
     session.commit()
 
 
-def list_hunts_by_status(session: Session, *, status: HuntStatus) -> list[Hunt]:
-    rows = session.exec(
-        select(HuntRow).where(HuntRow.status == status.value)
-    ).all()
-    out: list[Hunt] = []
-    for r in rows:
-        h = get_hunt(session, hunt_id=r.id)
-        if h is not None:
-            out.append(h)
-    return out
+def list_user_listings(session: Session, *, username: str) -> list[Listing]:
+    """Return every listing this user has scored, excluding deleted listings.
 
-
-def list_listings_for_hunt(session: Session, *, hunt_id: str) -> list[Listing]:
-    """Return every listing this hunt has scored (matched listings).
-
-    The join through `ListingScoreRow` is what makes a listing "belong" to a
-    hunt now that the scraper owns `ListingRow`. Vetoed listings (score=0.0,
-    `veto_reason` set) are included so the UI can show rejection reasons.
+    Ordered by score (DESC), then `scored_at` (DESC).
     """
     pairs = session.exec(
-        select(ListingRow, ListingScoreRow).join(
-            ListingScoreRow, ListingScoreRow.listing_id == ListingRow.id
-        ).where(ListingScoreRow.hunt_id == hunt_id)
+        select(ListingRow, UserListingRow)
+        .join(UserListingRow, UserListingRow.listing_id == ListingRow.id)
+        .where(UserListingRow.username == username)
+        .where(ListingRow.deleted_at.is_(None))
+        .order_by(UserListingRow.score.desc(), UserListingRow.scored_at.desc())
     ).all()
     out: list[Listing] = []
-    for lr, score_row in pairs:
+    for lr, match_row in pairs:
         out.append(
             _listing_from_row(
                 lr,
-                score_row,
+                match_row,
                 cover_photo_url=_cover_photo_url(session, listing_id=lr.id),
             )
         )
     return out
 
 
-def list_scorable_listings(
+def list_scorable_listings_for_user(
     session: Session,
     *,
-    hunt_id: str,
+    username: str,
     status: str = "full",
     limit: Optional[int] = None,
 ) -> list[ListingRow]:
-    """Global listings with the given scrape status that this hunt has not
-    yet scored. These are the candidates the matcher iterates."""
+    """Global listings with the given scrape status that this user has not
+    yet scored, excluding soft-deleted listings."""
     already_scored = session.exec(
-        select(ListingScoreRow.listing_id).where(ListingScoreRow.hunt_id == hunt_id)
+        select(UserListingRow.listing_id).where(UserListingRow.username == username)
     ).all()
     scored_ids = {row for row in already_scored}
     stmt = (
         select(ListingRow)
         .where(ListingRow.scrape_status == status)
+        .where(ListingRow.deleted_at.is_(None))
         .order_by(ListingRow.last_seen_at.desc())
     )
     rows = session.exec(stmt).all()
@@ -443,12 +371,33 @@ def list_stale_listings(
     return list(session.exec(stmt).all())
 
 
-def list_actions_for_hunt(session: Session, *, hunt_id: str) -> list[AgentAction]:
-    rows = session.exec(
-        select(AgentActionRow)
-        .where(AgentActionRow.hunt_id == hunt_id)
-        .order_by(AgentActionRow.id)
-    ).all()
+def append_user_action(
+    session: Session, *, username: str, action: AgentAction
+) -> None:
+    session.add(
+        UserActionRow(
+            username=username,
+            kind=action.kind.value,
+            summary=action.summary,
+            detail=action.detail,
+            listing_id=action.listing_id,
+            at=action.at,
+        )
+    )
+    session.commit()
+
+
+def list_actions_for_user(
+    session: Session, *, username: str, limit: Optional[int] = None
+) -> list[AgentAction]:
+    stmt = (
+        select(UserActionRow)
+        .where(UserActionRow.username == username)
+        .order_by(UserActionRow.id)
+    )
+    if limit is not None:
+        stmt = stmt.limit(limit)
+    rows = session.exec(stmt).all()
     return [
         AgentAction(
             at=r.at,
@@ -459,6 +408,30 @@ def list_actions_for_hunt(session: Session, *, hunt_id: str) -> list[AgentAction
         )
         for r in rows
     ]
+
+
+def mark_listing_deleted(session: Session, *, listing_id: str) -> None:
+    row = session.get(ListingRow, listing_id)
+    if row is None:
+        return
+    row.scrape_status = "deleted"
+    row.deleted_at = datetime.utcnow()
+    session.add(row)
+    session.commit()
+
+
+def list_active_listing_ids(session: Session) -> set[str]:
+    rows = session.exec(
+        select(ListingRow.id)
+        .where(ListingRow.scrape_status == "full")
+        .where(ListingRow.deleted_at.is_(None))
+    ).all()
+    return {row for row in rows}
+
+
+def list_usernames_with_search_profile(session: Session) -> list[str]:
+    rows = session.exec(select(SearchProfileRow.username)).all()
+    return [row for row in rows]
 
 
 def row_to_domain_listing(row: ListingRow) -> Listing:
@@ -494,16 +467,16 @@ def row_to_domain_listing(row: ListingRow) -> Listing:
 
 def _listing_from_row(
     row: ListingRow,
-    score_row: Optional[ListingScoreRow],
+    match_row: Optional[UserListingRow],
     *,
     cover_photo_url: Optional[str] = None,
 ) -> Listing:
-    score = score_row.score if score_row else None
-    reason = score_row.reason if score_row else None
-    match_reasons = list(score_row.match_reasons or []) if score_row else []
-    mismatch_reasons = list(score_row.mismatch_reasons or []) if score_row else []
-    components = _components_from_row(score_row)
-    veto_reason = score_row.veto_reason if score_row else None
+    score = match_row.score if match_row else None
+    reason = match_row.reason if match_row else None
+    match_reasons = list(match_row.match_reasons or []) if match_row else []
+    mismatch_reasons = list(match_row.mismatch_reasons or []) if match_row else []
+    components = _components_from_row(match_row)
+    veto_reason = match_row.veto_reason if match_row else None
     title = row.title or ""
     return Listing(
         id=row.id,
@@ -525,7 +498,7 @@ def _listing_from_row(
         pets_allowed=row.pets_allowed,
         smoking_ok=row.smoking_ok,
         cover_photo_url=cover_photo_url,
-        best_commute_minutes=_best_commute_minutes(score_row),
+        best_commute_minutes=_best_commute_minutes(match_row),
         score=score,
         score_reason=reason,
         match_reasons=match_reasons,
@@ -536,17 +509,17 @@ def _listing_from_row(
 
 
 def _components_from_row(
-    score_row: Optional[ListingScoreRow],
+    match_row: Optional[UserListingRow],
 ) -> list[ComponentScore]:
     """Rehydrate `components` JSON into domain models, skipping malformed rows.
 
     Pre-migration score rows (no `components` column populated) return
     []; the UI then falls back to `score_reason` / match lists.
     """
-    if score_row is None or not score_row.components:
+    if match_row is None or not match_row.components:
         return []
     out: list[ComponentScore] = []
-    for raw in score_row.components:
+    for raw in match_row.components:
         if not isinstance(raw, dict):
             continue
         try:
@@ -567,11 +540,11 @@ def _cover_photo_url(
     return photo_row.url if photo_row is not None else None
 
 
-def _best_commute_minutes(score_row: Optional[ListingScoreRow]) -> Optional[int]:
-    if score_row is None or not score_row.travel_minutes:
+def _best_commute_minutes(match_row: Optional[UserListingRow]) -> Optional[int]:
+    if match_row is None or not match_row.travel_minutes:
         return None
     best: Optional[int] = None
-    for entry in score_row.travel_minutes.values():
+    for entry in match_row.travel_minutes.values():
         if not isinstance(entry, dict):
             continue
         minutes = entry.get("minutes")
@@ -582,12 +555,4 @@ def _best_commute_minutes(score_row: Optional[ListingScoreRow]) -> Optional[int]
     return best
 
 
-def get_notify_email(session: Session, username: str) -> Optional[str]:
-    row = session.get(UserNotifyRow, username)
-    return row.notify_email if row is not None else None
 
-
-def set_notify_email(session: Session, username: str, email: str) -> None:
-    row = UserNotifyRow(username=username, notify_email=email)
-    session.merge(row)
-    session.commit()

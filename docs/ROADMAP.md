@@ -12,10 +12,10 @@ Background reading for each item is linked inline. The evaluator pipeline is def
 
 **Shape of the change:**
 - Add a new `evaluator.can_search_filter(stub_listing, profile) -> Optional[VetoResult]` that runs **only** the vetoes that don't need the scraped description or coords (price, WG size, move-in date). Keep the full `hard_filter` for the post-scrape pass.
-- In [`HuntEngine.run_find_only`](../backend/app/wg_agent/periodic.py), run this cheaper filter on the `new_stubs` list produced by `anonymous_search` and before the `new_listing` action + deep scrape. Log a compact `Skipped pre-filter: <reason>` action so the UI still hears about vetoed stubs.
-- Write the skip to `ListingRow` + `ListingScoreRow` (with `score=0.0`, `veto_reason=<reason>`, `components=null`) so the user can still see the rejected listing in the drawer and understand why, mirroring today's post-scrape veto path.
+- In the scraper ([`ScraperAgent.run_once`](../backend/app/scraper/agent.py)), run this cheaper filter on the `new_stubs` list produced by `anonymous_search` before the deep-scrape step, so stubs clearly outside the team-wide budget never hit wg-gesucht again. For per-user vetoes, run the same filter inside [`UserAgent.run_match_pass`](../backend/app/wg_agent/periodic.py) before the `new_listing` action and log a compact `Skipped pre-filter: <reason>` action so the UI still hears about vetoed candidates.
+- Persist the per-user skip to `UserListingRow` (with `score=0.0`, `veto_reason=<reason>`, `components=null`) so the user can still see the rejected listing in the drawer and understand why, mirroring today's post-scrape veto path.
 
-**Touches:** `evaluator.py`, `periodic.py`, `test_evaluator.py` (add pre-filter cases), `test_periodic.py` (assert the skipped stub still persists a score row).
+**Touches:** `evaluator.py`, `periodic.py`, `scraper/agent.py`, `test_evaluator.py` (add pre-filter cases), `test_periodic.py` (assert the skipped candidate still persists a `UserListingRow`).
 
 ### Surface rejections in the dashboard list
 
@@ -37,7 +37,7 @@ Instead of one `vibe_fit` LLM call, ask the LLM to rate each soft component (`pr
 
 ### Landlord messaging path
 
-[`orchestrator.py`](../backend/app/wg_agent/orchestrator.py) + [`brain.draft_message`](../backend/app/wg_agent/brain.py) + [`brain.classify_reply`](../backend/app/wg_agent/brain.py) + [`MessageRow`](../backend/app/wg_agent/db_models.py) are already in the repo, guarded behind the legacy `HuntRequest` body and exercised by [`test_orchestrator.py`](../backend/tests/test_orchestrator.py). What's missing is the UI ("draft preview", "send", "inbox"), the dry-run / rate-limit toggles from [`WG_GESUCHT.md`](./WG_GESUCHT.md) §5, and Playwright credentials that survive across deploys. Treat this as a full v2 workstream, not a PR.
+[`brain.draft_message`](../backend/app/wg_agent/brain.py) + [`brain.classify_reply`](../backend/app/wg_agent/brain.py) + [`brain.reply_to_landlord`](../backend/app/wg_agent/brain.py) already live in the repo as dead code. What's missing is persistence (a new `MessageRow` table keyed by `username`), the UI ("draft preview", "send", "inbox"), the dry-run / rate-limit toggles from [`WG_GESUCHT.md`](./WG_GESUCHT.md) §5, and Playwright credentials that survive across deploys. Treat this as a full v2 workstream, not a PR.
 
 ### AWS Bedrock swap (challenge requirement)
 

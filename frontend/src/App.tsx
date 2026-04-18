@@ -8,6 +8,7 @@ import OnboardingPreferences from './pages/OnboardingPreferences'
 import OnboardingProfile from './pages/OnboardingProfile'
 import OnboardingRequirements from './pages/OnboardingRequirements'
 import Profile from './pages/Profile'
+import TimelinePage from './pages/Timeline'
 
 const GOOGLE_MAPS_API_KEY = import.meta.env.VITE_GOOGLE_MAPS_API_KEY
 
@@ -49,6 +50,7 @@ export default function App() {
             <Route path="/onboarding/requirements" element={<OnboardingRequirements />} />
             <Route path="/onboarding/preferences" element={<OnboardingPreferences />} />
             <Route path="/dashboard" element={<Dashboard />} />
+            <Route path="/timeline" element={<TimelinePage />} />
             <Route path="/profile" element={<Profile />} />
           </Routes>
         </BrowserRouter>

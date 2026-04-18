@@ -151,6 +151,7 @@ class UserProfile(BaseModel):
     """The local account entity: a unique username + basic demographics."""
 
     username: str = Field(..., min_length=1, description="Unique, user-chosen handle")
+    email: Optional[EmailStr] = None
     age: int = Field(..., ge=16, le=99)
     gender: Gender = Gender.prefer_not_to_say
     created_at: datetime = Field(default_factory=datetime.utcnow)

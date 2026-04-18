@@ -38,7 +38,7 @@ def _build_body(
     listing_url: str,
     score: float,
     match_reasons: list[str],
-    hunt_id: str,
+    username: str,
 ) -> tuple[str, str]:
     """Return (subject, plain-text body)."""
     pct = round(score * 100)
@@ -61,9 +61,9 @@ Why it scored well:
 {reasons_block}
 
 ---
-Hunt ID: {hunt_id}
+User: {username}
 Sent by WG Hunter via noreply@doubleu.team — you are receiving this because
-you set a notification email in your hunt profile.
+you set a notification email in your profile.
 """
     return subject, body
 
@@ -74,10 +74,10 @@ def send_high_score_alert(
     listing_url: str,
     score: float,
     match_reasons: list[str],
-    hunt_id: str,
+    username: str,
 ) -> None:
     """Send a score-alert email via SES. Logs and swallows all errors."""
-    subject, body = _build_body(listing_title, listing_url, score, match_reasons, hunt_id)
+    subject, body = _build_body(listing_title, listing_url, score, match_reasons, username)
     try:
         client = _client()
         client.send_email(
@@ -88,7 +88,7 @@ def send_high_score_alert(
                 "Body": {"Text": {"Data": body, "Charset": "UTF-8"}},
             },
         )
-        logger.info("Sent score-alert email to %s (score=%.2f, hunt=%s)", to_email, score, hunt_id)
+        logger.info("Sent score-alert email to %s (score=%.2f, user=%s)", to_email, score, username)
     except Exception as exc:  # noqa: BLE001
         logger.warning("Failed to send score-alert email to %s: %s", to_email, exc)
 
@@ -99,7 +99,7 @@ def notify_if_high_score(
     listing_url: str,
     score: float,
     match_reasons: list[str],
-    hunt_id: str,
+    username: str,
 ) -> None:
     """Send alert only when score >= WG_NOTIFY_THRESHOLD and to_email is set."""
     if not to_email:
@@ -112,7 +112,7 @@ def notify_if_high_score(
         listing_url=listing_url,
         score=score,
         match_reasons=match_reasons,
-        hunt_id=hunt_id,
+        username=username,
     )
 
 
@@ -124,5 +124,5 @@ def send_test_email(to_email: str) -> None:
         listing_url="https://www.wg-gesucht.de/test",
         score=0.91,
         match_reasons=["Price within budget", "5 min commute to TUM", "Furnished"],
-        hunt_id="test-hunt-0000",
+        username="test-user",
     )

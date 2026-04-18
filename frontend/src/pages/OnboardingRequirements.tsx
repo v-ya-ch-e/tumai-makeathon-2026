@@ -1,4 +1,3 @@
-import clsx from 'clsx'
 import { useEffect, useMemo, useState, type ReactNode } from 'react'
 import { useNavigate } from 'react-router-dom'
 import { OnboardingShell } from '../components/OnboardingShell'
@@ -43,7 +42,7 @@ const DEFAULT_STATE: LocalState = {
 
 const BUDGET_PRESETS = [
   { label: 'Lean', max: '700' },
-  { label: 'Balanced', max: '950' },
+  { label: 'Typical', max: '950' },
   { label: 'Flexible', max: '1400' },
 ]
 
@@ -70,21 +69,21 @@ export default function OnboardingRequirements() {
     let cancelled = false
     void (async () => {
       try {
-        const sp = await getSearchProfile(username)
-        if (cancelled || !sp) {
+        const searchProfile = await getSearchProfile(username)
+        if (cancelled || !searchProfile) {
           setHydrated(true)
           return
         }
         setState({
-          priceMax: sp.priceMaxEur !== null ? String(sp.priceMaxEur) : '',
-          mainLocations: sp.mainLocations,
-          hasCar: sp.hasCar,
-          hasBike: sp.hasBike,
-          mode: sp.mode,
-          moveInFrom: sp.moveInFrom ?? '',
-          moveInUntil: sp.moveInUntil ?? '',
-          schedule: sp.schedule,
-          rescanIntervalMinutes: String(sp.rescanIntervalMinutes),
+          priceMax: searchProfile.priceMaxEur !== null ? String(searchProfile.priceMaxEur) : '',
+          mainLocations: searchProfile.mainLocations,
+          hasCar: searchProfile.hasCar,
+          hasBike: searchProfile.hasBike,
+          mode: searchProfile.mode,
+          moveInFrom: searchProfile.moveInFrom ?? '',
+          moveInUntil: searchProfile.moveInUntil ?? '',
+          schedule: searchProfile.schedule,
+          rescanIntervalMinutes: String(searchProfile.rescanIntervalMinutes),
         })
       } finally {
         if (!cancelled) setHydrated(true)
@@ -96,8 +95,8 @@ export default function OnboardingRequirements() {
   }, [isReady, username, navigate])
 
   const priceSummary = useMemo(() => {
-    const max = state.priceMax || 'flexible'
-    return max === 'flexible' ? 'Flexible budget cap' : `Up to ${max}€`
+    if (!state.priceMax) return 'Flexible'
+    return `Up to ${state.priceMax} EUR`
   }, [state.priceMax])
 
   const validate = (): ValidationErrors => {
@@ -105,31 +104,31 @@ export default function OnboardingRequirements() {
     const priceMax = state.priceMax === '' ? null : Number(state.priceMax)
 
     if (priceMax !== null && (!Number.isFinite(priceMax) || priceMax < 0)) {
-      nextErrors.price = 'Maximum price must be a non-negative number.'
+      nextErrors.price = 'Maximum rent must be a non-negative number.'
     }
 
     const rescan = Number(state.rescanIntervalMinutes)
     if (state.schedule === 'periodic' && (!Number.isInteger(rescan) || rescan < 5 || rescan > 1440)) {
-      nextErrors.rescanInterval = 'Rescan interval must be between 5 and 1440 minutes.'
+      nextErrors.rescanInterval = 'Rescan interval must stay between 5 and 1440 minutes.'
     }
 
     if (state.mainLocations.length === 0) {
-      nextErrors.locations = 'Add at least one city, university, or neighbourhood.'
+      nextErrors.locations = 'Add at least one city, campus, or district to anchor the search.'
     }
 
-    const bad = state.mainLocations.find(
+    const invalidLocation = state.mainLocations.find(
       (location) =>
         location.maxCommuteMinutes !== null &&
         (!Number.isInteger(location.maxCommuteMinutes) ||
           location.maxCommuteMinutes < 5 ||
           location.maxCommuteMinutes > 240),
     )
-    if (bad) {
-      nextErrors.commute = `Ideal commute for “${bad.label}” must stay between 5 and 240 minutes, or be left blank.`
+    if (invalidLocation) {
+      nextErrors.commute = `Commute for “${invalidLocation.label}” must stay between 5 and 240 minutes, or be left blank.`
     }
 
     if (state.moveInFrom && state.moveInUntil && state.moveInUntil < state.moveInFrom) {
-      nextErrors.moveInWindow = 'Latest move-in date must be on or after the earliest date.'
+      nextErrors.moveInWindow = 'Latest move-in date must be on or after the earliest one.'
     }
 
     return nextErrors
@@ -141,9 +140,7 @@ export default function OnboardingRequirements() {
 
     const nextErrors = validate()
     setErrors(nextErrors)
-    if (Object.keys(nextErrors).length > 0) {
-      return
-    }
+    if (Object.keys(nextErrors).length > 0) return
 
     const body: UpsertSearchProfileBody = {
       priceMinEur: 0,
@@ -163,11 +160,11 @@ export default function OnboardingRequirements() {
     try {
       await putSearchProfile(username, body)
       navigate('/onboarding/preferences')
-    } catch (e) {
-      if (e instanceof ApiError) {
-        setFooter(<p className="text-[15px] text-bad">{e.message}</p>)
+    } catch (error) {
+      if (error instanceof ApiError) {
+        setFooter(<p className="text-[15px] text-bad">{error.message}</p>)
       } else {
-        setFooter(<p className="text-[15px] text-bad">{String(e)}</p>)
+        setFooter(<p className="text-[15px] text-bad">{String(error)}</p>)
       }
     } finally {
       setBusy(false)
@@ -178,8 +175,8 @@ export default function OnboardingRequirements() {
     return (
       <OnboardingShell
         step={2}
-        eyebrow="Search brief"
-        title="What are you looking for?"
+        eyebrow="Requirements"
+        title="Define the search brief"
         onNext={() => undefined}
         busy
         progressSteps={progressSteps}
@@ -192,30 +189,38 @@ export default function OnboardingRequirements() {
   return (
     <OnboardingShell
       step={2}
-      eyebrow="Search brief"
-      title="Shape the hunt around your real life"
-      description="Set your budget, commute anchors, and search behavior. We use this brief to filter and rank listings before they ever hit the dashboard."
+      eyebrow="Requirements"
+      title="Define the search brief"
+      description="Set the real constraints first: rent ceiling, places you need to reach, and how aggressively the agent should rescan WG-Gesucht."
       onBack={() => navigate('/onboarding/profile')}
       onNext={() => void handleNext()}
       busy={busy}
       footer={footer}
       progressSteps={progressSteps}
       aside={
-        <Card className="rounded-[28px] border-hairline/80 bg-surface/92 p-6">
-          <p className="font-mono text-[12px] uppercase tracking-[0.24em] text-accent">Search summary</p>
-          <SummaryItem label="Budget" value={priceSummary} />
-          <SummaryItem label="Places" value={state.mainLocations.length > 0 ? `${state.mainLocations.length} added` : 'Not set'} />
-          <SummaryItem label="Mobility" value={mobilitySummary(state)} />
-          <SummaryItem label="Mode" value={modeLabel(state.mode)} />
-          <SummaryItem label="Cadence" value={state.schedule === 'periodic' ? `Every ${state.rescanIntervalMinutes || '30'} min` : 'One-off sweep'} />
+        <Card className="panel p-6">
+          <p className="section-kicker">Current brief</p>
+          <div className="mt-5 space-y-3">
+            <SummaryRow label="Budget" value={priceSummary} />
+            <SummaryRow
+              label="Anchors"
+              value={state.mainLocations.length > 0 ? `${state.mainLocations.length} places` : 'Not set'}
+            />
+            <SummaryRow label="Travel" value={mobilitySummary(state)} />
+            <SummaryRow label="Listing type" value={modeLabel(state.mode)} />
+            <SummaryRow
+              label="Rescan"
+              value={state.schedule === 'periodic' ? `Every ${state.rescanIntervalMinutes || '30'} min` : 'One pass'}
+            />
+          </div>
         </Card>
       }
     >
-      <div className="space-y-6">
-        <SectionCard
-          title="Budget"
-          hint={errors.price ?? 'Give the agent a workable monthly range so it can veto obviously bad fits fast.'}
-          tone={errors.price ? 'bad' : 'default'}
+      <div className="overflow-hidden rounded-card border border-hairline bg-surface">
+        <RequirementSection
+          title="Monthly rent"
+          hint={errors.price ?? 'Set the highest monthly rent you would still consider, including cases the agent should reject immediately.'}
+          error={Boolean(errors.price)}
         >
           <div className="flex flex-wrap gap-2">
             {BUDGET_PRESETS.map((preset) => (
@@ -226,16 +231,13 @@ export default function OnboardingRequirements() {
                   setState((prev) => ({ ...prev, priceMax: preset.max }))
                   setErrors((prev) => ({ ...prev, price: undefined }))
                 }}
-                className="rounded-full border border-hairline bg-surface px-3 py-1.5 text-[13px] text-ink transition-colors hover:bg-surface-raised"
+                className="rounded border border-hairline bg-surface px-3 py-2 text-[13px] text-ink transition-colors hover:border-ink hover:bg-surface-raised"
               >
                 {preset.label}
               </button>
             ))}
           </div>
-          <div className="mt-4 max-w-sm space-y-2">
-            <label htmlFor="req-price-max" className="block text-[13px] text-ink-muted">
-              Highest monthly rent you would still accept
-            </label>
+          <div className="mt-4 max-w-sm">
             <Input
               id="req-price-max"
               type="number"
@@ -243,19 +245,23 @@ export default function OnboardingRequirements() {
               min={0}
               max={5000}
               value={state.priceMax}
-              onChange={(e) => {
-                setState({ ...state, priceMax: e.target.value })
+              onChange={(event) => {
+                setState({ ...state, priceMax: event.target.value })
                 if (errors.price) setErrors((prev) => ({ ...prev, price: undefined }))
               }}
               placeholder="Leave blank if flexible"
             />
           </div>
-        </SectionCard>
+        </RequirementSection>
 
-        <SectionCard
-          title="Commute anchors"
-          hint={errors.locations ?? errors.commute ?? 'Choose the places that matter most: campus, office, neighborhood, or even a friend\'s area.'}
-          tone={errors.locations || errors.commute ? 'bad' : 'default'}
+        <RequirementSection
+          title="Places that matter"
+          hint={
+            errors.locations ??
+            errors.commute ??
+            'Add the campus, workplace, or district you actually need to reach. Each place can carry its own commute limit.'
+          }
+          error={Boolean(errors.locations || errors.commute)}
         >
           <PlaceAutocomplete
             id="req-main-locations"
@@ -266,49 +272,49 @@ export default function OnboardingRequirements() {
             }}
           />
           <p className="mt-3 text-[13px] leading-6 text-ink-muted">
-            Set the longest commute you would still tolerate for each place. Five minutes is amazing; this number is your upper comfort limit.
+            Use the commute field to define your upper comfort limit. Leave it blank if the place matters, but timing does not.
           </p>
-        </SectionCard>
+        </RequirementSection>
 
-        <div className="grid gap-6 lg:grid-cols-2">
-          <SectionCard title="Mobility" hint="Tell the agent which modes you can actually use for day-to-day commuting." compact>
-            <div className="flex flex-wrap gap-2">
-              <Chip selected={state.hasBike} onToggle={() => setState({ ...state, hasBike: !state.hasBike })}>
-                I can bike
-              </Chip>
-              <Chip selected={state.hasCar} onToggle={() => setState({ ...state, hasCar: !state.hasCar })}>
-                I can drive
-              </Chip>
-            </div>
-            <p className="mt-3 text-[13px] leading-6 text-ink-muted">
-              Transit is always considered. Turn these on only if you would genuinely use them when commuting.
-            </p>
-          </SectionCard>
+        <RequirementSection
+          title="How you can travel"
+          hint="Transit is always considered. Turn on bike or car only if you would genuinely use them in daily travel."
+        >
+          <div className="flex flex-wrap gap-2">
+            <Chip selected={state.hasBike} onToggle={() => setState({ ...state, hasBike: !state.hasBike })}>
+              Bike
+            </Chip>
+            <Chip selected={state.hasCar} onToggle={() => setState({ ...state, hasCar: !state.hasCar })}>
+              Car
+            </Chip>
+          </div>
+        </RequirementSection>
 
-          <SectionCard title="Listing type" hint="Either is the best default unless you already know you only want one format." compact>
-            <div className="flex flex-wrap gap-2">
-              <Chip selected={state.mode === 'wg'} onToggle={() => setState({ ...state, mode: 'wg' })}>
-                WG room
-              </Chip>
-              <Chip selected={state.mode === 'flat'} onToggle={() => setState({ ...state, mode: 'flat' })}>
-                Whole flat
-              </Chip>
-              <Chip selected={state.mode === 'both'} onToggle={() => setState({ ...state, mode: 'both' })}>
-                Either
-              </Chip>
-            </div>
-          </SectionCard>
-        </div>
+        <RequirementSection
+          title="What to search"
+          hint="Leave this on either unless you already know the agent should ignore one listing type."
+        >
+          <div className="flex flex-wrap gap-2">
+            <Chip selected={state.mode === 'wg'} onToggle={() => setState({ ...state, mode: 'wg' })}>
+              WG room
+            </Chip>
+            <Chip selected={state.mode === 'flat'} onToggle={() => setState({ ...state, mode: 'flat' })}>
+              Whole flat
+            </Chip>
+            <Chip selected={state.mode === 'both'} onToggle={() => setState({ ...state, mode: 'both' })}>
+              Either
+            </Chip>
+          </div>
+        </RequirementSection>
 
-        <SectionCard
+        <RequirementSection
           title="Move-in window"
-          hint={errors.moveInWindow ?? 'Optional, but helpful if your timing is non-negotiable.'}
-          tone={errors.moveInWindow ? 'bad' : 'default'}
-          compact
+          hint={errors.moveInWindow ?? 'Optional, but useful when timing rules out otherwise good listings.'}
+          error={Boolean(errors.moveInWindow)}
         >
           <div className="grid gap-4 sm:grid-cols-2">
-            <div className="space-y-2">
-              <label htmlFor="req-move-from" className="block text-[13px] text-ink-muted">
+            <div>
+              <label htmlFor="req-move-from" className="data-label">
                 Earliest
               </label>
               <Input
@@ -316,16 +322,15 @@ export default function OnboardingRequirements() {
                 type="date"
                 value={state.moveInFrom}
                 max={state.moveInUntil || undefined}
-                onChange={(e) => {
-                  setState({ ...state, moveInFrom: e.target.value })
-                  if (errors.moveInWindow) {
-                    setErrors((prev) => ({ ...prev, moveInWindow: undefined }))
-                  }
+                onChange={(event) => {
+                  setState({ ...state, moveInFrom: event.target.value })
+                  if (errors.moveInWindow) setErrors((prev) => ({ ...prev, moveInWindow: undefined }))
                 }}
+                className="mt-2"
               />
             </div>
-            <div className="space-y-2">
-              <label htmlFor="req-move-until" className="block text-[13px] text-ink-muted">
+            <div>
+              <label htmlFor="req-move-until" className="data-label">
                 Latest
               </label>
               <Input
@@ -333,21 +338,20 @@ export default function OnboardingRequirements() {
                 type="date"
                 value={state.moveInUntil}
                 min={state.moveInFrom || undefined}
-                onChange={(e) => {
-                  setState({ ...state, moveInUntil: e.target.value })
-                  if (errors.moveInWindow) {
-                    setErrors((prev) => ({ ...prev, moveInWindow: undefined }))
-                  }
+                onChange={(event) => {
+                  setState({ ...state, moveInUntil: event.target.value })
+                  if (errors.moveInWindow) setErrors((prev) => ({ ...prev, moveInWindow: undefined }))
                 }}
+                className="mt-2"
               />
             </div>
           </div>
-        </SectionCard>
+        </RequirementSection>
 
-        <SectionCard
-          title="Run behavior"
-          hint={errors.rescanInterval ?? 'Choose whether the agent should do one sweep or keep scanning in the background.'}
-          tone={errors.rescanInterval ? 'bad' : 'default'}
+        <RequirementSection
+          title="Run mode"
+          hint={errors.rescanInterval ?? 'Choose between one pass or a recurring background scan.'}
+          error={Boolean(errors.rescanInterval)}
         >
           <div className="flex flex-wrap gap-2">
             <Chip
@@ -357,7 +361,7 @@ export default function OnboardingRequirements() {
                 setErrors((prev) => ({ ...prev, rescanInterval: undefined }))
               }}
             >
-              One-off sweep
+              One pass
             </Chip>
             <Chip
               selected={state.schedule === 'periodic'}
@@ -370,9 +374,9 @@ export default function OnboardingRequirements() {
             </Chip>
           </div>
           {state.schedule === 'periodic' ? (
-            <div className="mt-4 max-w-xs space-y-2">
-              <label htmlFor="req-rescan" className="block text-[13px] text-ink-muted">
-                Rescan every (minutes)
+            <div className="mt-4 max-w-xs">
+              <label htmlFor="req-rescan" className="data-label">
+                Minutes between rescans
               </label>
               <Input
                 id="req-rescan"
@@ -381,67 +385,60 @@ export default function OnboardingRequirements() {
                 min={5}
                 max={1440}
                 value={state.rescanIntervalMinutes}
-                onChange={(e) => {
-                  setState({ ...state, rescanIntervalMinutes: e.target.value })
-                  if (errors.rescanInterval) {
-                    setErrors((prev) => ({ ...prev, rescanInterval: undefined }))
-                  }
+                onChange={(event) => {
+                  setState({ ...state, rescanIntervalMinutes: event.target.value })
+                  if (errors.rescanInterval) setErrors((prev) => ({ ...prev, rescanInterval: undefined }))
                 }}
+                className="mt-2"
               />
             </div>
           ) : null}
-        </SectionCard>
+        </RequirementSection>
       </div>
     </OnboardingShell>
   )
 }
 
-function SectionCard({
+function RequirementSection({
   title,
   hint,
   children,
-  compact = false,
-  tone = 'default',
+  error = false,
 }: {
   title: string
   hint: string
   children: ReactNode
-  compact?: boolean
-  tone?: 'default' | 'bad'
+  error?: boolean
 }) {
   return (
-    <Card
-      className={clsx(
-        'rounded-[28px] border-hairline/80 bg-surface-raised/85',
-        compact ? 'p-5' : 'p-6',
-        tone === 'bad' && 'border-bad/40 bg-bad/5',
-      )}
-    >
-      <p className="text-[18px] font-semibold tracking-[-0.02em] text-ink">{title}</p>
-      <p className="mt-2 text-[13px] leading-6 text-ink-muted">{hint}</p>
-      <div className="mt-4">{children}</div>
-    </Card>
+    <section className="grid gap-4 border-t border-hairline px-5 py-5 first:border-t-0 md:grid-cols-[200px_minmax(0,1fr)] md:gap-6 md:px-6">
+      <div>
+        <h2 className="text-[15px] font-semibold text-ink">{title}</h2>
+        <p className={`mt-1 text-[13px] leading-6 ${error ? 'text-bad' : 'text-ink-muted'}`}>{hint}</p>
+      </div>
+      <div>{children}</div>
+    </section>
   )
 }
 
-function SummaryItem({ label, value }: { label: string; value: string }) {
+function SummaryRow({ label, value }: { label: string; value: string }) {
   return (
-    <div className="mt-4 rounded-2xl border border-hairline/80 bg-surface-raised px-4 py-3">
-      <p className="text-[11px] uppercase tracking-[0.2em] text-ink-muted">{label}</p>
-      <p className="mt-1 text-[15px] font-semibold text-ink">{value}</p>
+    <div className="flex items-start justify-between gap-4 border-t border-hairline pt-3 first:border-t-0 first:pt-0">
+      <span className="data-label">{label}</span>
+      <span className="text-right text-[14px] text-ink">{value}</span>
     </div>
   )
 }
 
 function mobilitySummary(state: LocalState): string {
-  if (state.hasBike && state.hasCar) return 'Bike + car'
-  if (state.hasBike) return 'Bike'
-  if (state.hasCar) return 'Car'
-  return 'Transit / walking'
+  if (state.hasBike && state.hasCar) return 'Transit, bike, and car'
+  if (state.hasBike) return 'Transit and bike'
+  if (state.hasCar) return 'Transit and car'
+  return 'Transit and walking'
 }
 
 function modeLabel(mode: Mode): string {
   if (mode === 'wg') return 'WG room'
   if (mode === 'flat') return 'Whole flat'
-  return 'WG or flat'
+  return 'WG room or flat'
 }

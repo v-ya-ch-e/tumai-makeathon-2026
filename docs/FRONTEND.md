@@ -43,30 +43,31 @@ frontend/src/components/ListingDrawer.tsx    Detail fetch + `Drawer` presentatio
 frontend/src/pages/OnboardingProfile.tsx       Step 1: demographics
 frontend/src/pages/OnboardingRequirements.tsx Step 2: rent, locations, schedule
 frontend/src/pages/OnboardingPreferences.tsx  Step 3: preference tiles
-frontend/src/pages/Dashboard.tsx               Hunt controls, log, listings, drawer host
-frontend/src/pages/Profile.tsx                 Account page: edit age / gender, jump back into the wizard
+frontend/src/pages/Dashboard.tsx               Agent controls, log, listings, drawer host
+frontend/src/pages/Profile.tsx                 Account page: edit age / gender / email, jump back into the wizard
 frontend/src/pages/Health.tsx                Simple connectivity check page
 ```
 
 ## Routes
 
 | Path | Component | Behavior |
-| --- | --- | --- |
+| ---- | --------- | -------- |
 | `/` | `HomeRedirect` | Waits for `isReady`; sends authenticated users to `/dashboard`, else `/onboarding/profile` |
-| `/onboarding/profile` | `OnboardingProfile` | Two tabs: *Create account* (POST `/api/users`, then continue the wizard) and *Sign in* (GET `/api/users/{name}` to verify an existing username, then route to `/`). Both paths store the username in session. |
-| `/onboarding/requirements` | `OnboardingRequirements` | Edits numeric/slider/chip requirements, `PUT` search profile |
+| `/onboarding/profile` | `OnboardingProfile` | Two tabs: *Create account* (POST `/api/users`, then continue the wizard) and *Sign in* (GET `/api/users/{name}` to verify an existing username, then route to `/`). Both paths store the username in session atomically via `setSession`. |
+| `/onboarding/requirements` | `OnboardingRequirements` | Edits numeric/slider/chip requirements, `PUT` search profile (backend auto-spawns the per-user agent as a side effect) |
 | `/onboarding/preferences` | `OnboardingPreferences` | Toggles string tags, merges into search profile |
-| `/dashboard` | `Dashboard` | Starts/stops hunts, renders log + listings + credential dialog |
-| `/profile` | `Profile` | Account settings: edit age/gender (`PUT /api/users/{username}`) and shortcut back into the onboarding wizard steps |
+| `/dashboard` | `Dashboard` | Starts/pauses the per-user agent, renders log + listings + credential dialog |
+| `/profile` | `Profile` | Account settings: edit email/age/gender (`PUT /api/users/{username}`) and shortcut back into the onboarding wizard steps |
 | `/health` | `HealthPage` | Lightweight sanity page for local debugging |
 
 ## Session
 
-[`SessionProvider`](../frontend/src/lib/session.tsx) keeps `username`, hydrated `user`, `isReady`, and `refreshUser`.
+[`SessionProvider`](../frontend/src/lib/session.tsx) keeps `username`, hydrated `user`, `isReady`, `refreshUser`, `setUsername`, and `setSession`.
 
 - **Storage key:** `wg-hunter.username` in `localStorage`.
 - **Hydration:** On mount, `refreshUser` reads the key; if present, calls `getUser` and clears stale keys when the API returns 404.
-- **`setUsername`:** Writes or removes the key, updates local state, then `refreshUser` to pull the full `User` DTO.
+- **`setSession(username, user)`:** Atomic, synchronous — writes the localStorage key, sets `username`, and sets the fully-hydrated `User` in a single update. Used by both the create-account and sign-in paths on `/onboarding/profile`. This replaces the previous `setUsername(name) → refreshUser()` two-step, which lost the first login attempt to a race between the state write and the next fetch.
+- **`setUsername(null)`:** Logout only — clears the localStorage key and resets `username` + `user`.
 - **`isReady`:** Gates `HomeRedirect` so `/` does not flash the wrong destination before the first `getUser` completes.
 
 ## API client (`lib/api.ts`)
@@ -74,9 +75,12 @@ frontend/src/pages/Health.tsx                Simple connectivity check page
 - **`toCamel` / `toSnake`** — Deep key rewriting between snake_case JSON (backend) and camelCase TS objects.
 - **`ApiError`** — Carries HTTP status plus parsed body for non-2xx responses.
 - **`requestJson`** — Shared `fetch` wrapper: applies `toCamel` on JSON successes; throws `ApiError` on failures.
-- **404 policy** — `getUser`, `getSearchProfile`, `getHunt`, and `getListingDetail` return `null` on 404 instead of throwing (safe idempotent reads). Mutating calls still throw `ApiError` on errors.
-- **User mutations** — `createUser` → `POST /api/users`; `updateUser` → `PUT /api/users/{username}` (age / gender only — username is immutable). Both return `UserDTO` normalized to camelCase.
-- **`streamHunt`** — Constructs `EventSource` against `/api/hunts/{id}/stream`, JSON-parses each `message` event, normalizes with `toCamel`, returns a disposer that calls `es.close()`.
+- **404 policy** — `getUser`, `getSearchProfile`, and `getListingDetail` return `null` on 404 instead of throwing (safe idempotent reads). Mutating calls still throw `ApiError` on errors.
+- **User mutations** — `createUser` → `POST /api/users` (accepts optional `email`); `updateUser` → `PUT /api/users/{username}` (email / age / gender — username is immutable). Both return `UserDTO` normalized to camelCase.
+- **Per-user reads** — `getUserListings(username)`, `getUserActions(username, limit?)`, `getAgentStatus(username)` map directly to `/api/users/{username}/listings|actions|agent`.
+- **Agent control** — `startAgent(username)` / `pauseAgent(username)` map to `POST /api/users/{username}/agent/start|pause`.
+- **`streamUser(username)`** — Constructs `EventSource` against `/api/users/{username}/stream`, JSON-parses each `message` event, normalizes with `toCamel`, returns a disposer that calls `es.close()`. The stream is continuous — there is no terminal `stream-end` event.
+- **`getListingDetail(listingId, username)`** — `GET /api/listings/{listingId}?username=...`.
 
 ## Components
 
@@ -84,18 +88,26 @@ frontend/src/pages/Health.tsx                Simple connectivity check page
 - **`OnboardingShell`** — Wraps the three wizard pages with `ProgressSteps`, title slot, and sticky footer actions (`Button` variants).
 - **`ConnectWGDialog`** — Modal form for email/password or pasted storage JSON; calls credential `PUT`/`DELETE` APIs; consumed from `Dashboard`.
 - **`AppTabs`** — Pill-style nav used on both the dashboard header and the profile page to switch between `/dashboard` and `/profile` without leaving the shared card shell.
-- **`ActionLog`** — Renders `Action` rows with `font-mono` kind labels and timestamps; fed from SSE + initial `hunt.actions`.
+- **`ActionLog`** — Renders `Action` rows with `font-mono` kind labels and timestamps; fed from SSE + initial `getUserActions`.
 - **`ListingList`** — Scrollable ranked cards (score pill, meta); notifies parent on row activate.
-- **`ListingDrawer`** — Fetches `getListingDetail`, shows description/meta inside `Drawer`, external link to wg-gesucht.
+- **`ListingDrawer`** — Fetches `getListingDetail(listingId, username)`, shows description/meta inside `Drawer`, external link to wg-gesucht.
 
 ## Pages
 
-- **`OnboardingProfile`** — Dual-mode page gated by a *Create account* / *Sign in* tab control. *Create* collects username/age/gender and `POST /api/users`, then navigates to `/onboarding/requirements`. *Sign in* accepts an existing username, verifies it with `getUser` (404 → inline error), then calls `setUsername` and navigates to `/` so `HomeRedirect` routes based on hydrated session. Progress steps only render on the create tab.
-- **`OnboardingRequirements`** — Binds sliders, chips, mode select, move-in dates, schedule fields to `UpsertSearchProfileBody`, persists with `putSearchProfile`. Main locations are collected via [`PlaceAutocomplete`](../frontend/src/components/PlaceAutocomplete.tsx) as structured `PlaceLocation[]` (`label`, `placeId`, `lat`, `lng`, optional `maxCommuteMinutes`). Each picked location renders a row with a 5–240 minute ideal-commute input; blank means no budget.
+- **`OnboardingProfile`** — Dual-mode page gated by a *Create account* / *Sign in* tab control. *Create* collects username / optional email / age / gender and `POST /api/users`, then calls `setSession(username, user)` and navigates to `/onboarding/requirements`. *Sign in* accepts an existing username, verifies it with `getUser` (404 → inline error), then calls `setSession(username, user)` and navigates to `/` so `HomeRedirect` routes based on hydrated session. Progress steps only render on the create tab.
+- **`OnboardingRequirements`** — Binds sliders, chips, mode select, move-in dates, schedule fields to `UpsertSearchProfileBody`, persists with `putSearchProfile`. Saving the profile is also what boots the user's matcher agent on the backend. Main locations are collected via [`PlaceAutocomplete`](../frontend/src/components/PlaceAutocomplete.tsx) as structured `PlaceLocation[]` (`label`, `placeId`, `lat`, `lng`, optional `maxCommuteMinutes`). Each picked location renders a row with a 5–240 minute ideal-commute input; blank means no budget.
 - **`OnboardingPreferences`** — Grouped grid of inline-SVG tiles toggling `PreferenceWeight[]` entries; selected tiles expand to show an inline [`WeightSlider`](../frontend/src/components/ui/WeightSlider.tsx) bound to the 1–5 importance value (default 3). Saves merged profile before routing to `/dashboard`.
-- **`Dashboard`** — Loads search profile + optional credentials status, persists last hunt id in `localStorage` (`wg-hunter.hunt-id`), starts hunts (`createHunt`), attaches `streamHunt`, hydrates listings from periodic `getHunt` polling / SSE merges, hosts `ListingDrawer` + `ConnectWGDialog`, maps backend hunt status to UI pill tones. Top-right `AppTabs` links over to `/profile`.
-- **`Profile`** — Account page for an already-onboarded user. Hydrates `user` + `SearchProfile` from the session, lets the user edit age / gender via `updateUser`, and exposes `Edit` shortcuts that jump back into `/onboarding/requirements` or `/onboarding/preferences` while keeping the shared `AppTabs` navigation visible.
+- **`Dashboard`** — Loads search profile + optional credentials status + `getAgentStatus` on mount, then `getUserListings(username)` + `getUserActions(username)` to hydrate the initial card list and action log. Attaches `streamUser(username)` for live SSE updates and uses `startAgent` / `pauseAgent` for the agent-run toggle. The old hunt concept is gone: there is no `LS_HUNT_ID` in localStorage, no `createHunt`, and the status pill reflects the agent's live running-state instead of a `HuntStatus` enum. Hosts `ListingDrawer` + `ConnectWGDialog`. Top-right `AppTabs` links over to `/profile`.
+- **`Profile`** — Account page for an already-onboarded user. Hydrates `user` + `SearchProfile` from the session, lets the user edit email / age / gender via `updateUser`, and exposes `Edit` shortcuts that jump back into `/onboarding/requirements` or `/onboarding/preferences` while keeping the shared `AppTabs` navigation visible.
 - **`HealthPage`** — Minimal read-only check (useful when verifying proxy + API reachability during dev).
+
+## `types.ts`
+
+CamelCase TypeScript mirrors of the JSON DTOs. Notable fields:
+
+- `User.email: string | null` (renamed from the previous `notificationEmail`) matches `UserDTO.email`.
+- `Listing.username: string | null` (renamed from the previous `huntId`) matches `ListingDTO.username`.
+- The legacy `Hunt` / `HuntStatusBackend` types are gone; the dashboard shape is driven by `Listing[]` + `Action[]` + `{ running: boolean }`.
 
 ## Build & dev
 
