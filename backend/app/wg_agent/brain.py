@@ -24,6 +24,7 @@ from pydantic import BaseModel, Field, ValidationError
 from .models import (
     ContactInfo,
     Listing,
+    NearbyPlace,
     ReplyAnalysis,
     ReplyIntent,
     SearchProfile,
@@ -100,11 +101,42 @@ def _commute_block(
     return "\n".join(["Commute times (one-way):", *lines])
 
 
+def _nearby_places_block(
+    nearby_places: dict[str, NearbyPlace],
+    preferences: list,
+) -> str:
+    """Render nearby place facts in the same order as the user's preferences."""
+    if not nearby_places or not preferences:
+        return ""
+    lines: list[str] = []
+    seen: set[str] = set()
+    for pref in preferences:
+        if pref.key in seen:
+            continue
+        seen.add(pref.key)
+        item = nearby_places.get(pref.key)
+        if item is None:
+            continue
+        if not item.searched:
+            lines.append(f"- {item.label}: lookup unavailable")
+            continue
+        if item.distance_m is None:
+            lines.append(f"- {item.label}: none found within 2 km")
+            continue
+        place_name = item.place_name or "nearest match"
+        lines.append(f"- {item.label}: {place_name}, {item.distance_m} m away")
+    if not lines:
+        return ""
+    return "\n".join(["Nearby preference places:", *lines])
+
+
 def _listing_summary(
     listing: Listing,
     *,
     travel_times: Optional[dict[tuple[str, str], int]] = None,
     main_locations: Optional[list] = None,
+    nearby_places: Optional[dict[str, NearbyPlace]] = None,
+    preferences: Optional[list] = None,
 ) -> str:
     parts = [
         f"ID: {listing.id}",
@@ -120,6 +152,10 @@ def _listing_summary(
     ]
     if travel_times:
         block = _commute_block(travel_times, list(main_locations or []))
+        if block:
+            parts.append(block)
+    if nearby_places:
+        block = _nearby_places_block(nearby_places, list(preferences or []))
         if block:
             parts.append(block)
     if listing.description:
@@ -228,6 +264,7 @@ def score_listing(
     requirements: SearchProfile,
     *,
     travel_times: Optional[dict[tuple[str, str], int]] = None,
+    nearby_places: Optional[dict[str, NearbyPlace]] = None,
 ) -> Listing:
     """Ask the LLM to rate `listing` against `requirements`. Mutates + returns listing.
 
@@ -246,6 +283,8 @@ def score_listing(
             listing,
             travel_times=travel_times,
             main_locations=requirements.main_locations,
+            nearby_places=nearby_places,
+            preferences=requirements.preferences,
         ),
     )
     response = client.chat.completions.create(
@@ -291,8 +330,10 @@ class VibeScore(BaseModel):
 
 VIBE_SYSTEM = (
     "You judge the vibe of a WG-Gesucht listing against a student's free-form "
-    "notes and district preferences. Do NOT judge price, size, WG size, or "
-    "commute times — those are handled by other components. Output strict JSON."
+    "notes, district preferences, and lifestyle preferences. Nearby place facts "
+    "can inform lifestyle fit when they clearly matter to the student. Do NOT "
+    "judge price, size, WG size, or commute times — those are handled by other "
+    "components. Output strict JSON."
 )
 
 VIBE_USER_TEMPLATE = """
@@ -304,6 +345,9 @@ STUDENT NOTES:
 
 PREFERRED DISTRICTS: {preferred_districts}
 AVOID DISTRICTS: {avoid_districts}
+WEIGHTED PREFERENCES: {preferences}
+NEARBY PREFERENCE PLACES:
+{nearby_places}
 
 LISTING DISTRICT: {district}
 LISTING DESCRIPTION:
@@ -316,27 +360,40 @@ Return JSON:
   evidence (list of 1..4 short strings: concrete phrases you relied on).
 
 Rules:
-  * If the student has no notes and no district preferences, return score 0.5
-    with evidence ["no vibe signal"].
+  * If the student has no notes, no district preferences, and no nearby-place
+    context, return score 0.5 with evidence ["no vibe signal"].
   * If the listing is in an avoid-district, score <= 0.3 and mention the
     district in evidence.
+  * Nearby place facts can support lifestyle fit, especially for place-based
+    preferences such as gym, park, supermarket, cafe, or nightlife.
   * Do NOT mention rent, size, or commute in the evidence.
 
 Only return valid JSON, no prose.
 """
 
 
-def vibe_score(listing: Listing, requirements: SearchProfile) -> VibeScore:
+def vibe_score(
+    listing: Listing,
+    requirements: SearchProfile,
+    *,
+    nearby_places: Optional[dict[str, NearbyPlace]] = None,
+) -> VibeScore:
     """Return a narrow vibe score for the evaluator's `vibe_fit` component.
 
     Raises on HTTP / JSON / ValidationError failure. The evaluator catches
     these and sets `missing_data=True` on the component.
     """
     client = _client()
+    nearby_block = _nearby_places_block(
+        nearby_places or {},
+        list(requirements.preferences),
+    )
     user_msg = VIBE_USER_TEMPLATE.format(
         notes=(requirements.notes or "(none)").strip()[:1200],
         preferred_districts=", ".join(requirements.preferred_districts) or "—",
         avoid_districts=", ".join(requirements.avoid_districts) or "—",
+        preferences=", ".join(f"{p.key} ({p.weight})" for p in requirements.preferences) or "—",
+        nearby_places=nearby_block.replace("Nearby preference places:\n", "") or "—",
         district=listing.district or "?",
         description=(listing.description or "").strip()[:1800],
     )

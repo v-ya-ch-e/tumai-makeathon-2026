@@ -19,7 +19,8 @@ Step-by-step guide to deploy the FastAPI backend on an AWS EC2 instance using Do
    - **Key Pair**: select your key pair
 4. Under **Network Settings** > **Security Group**, add these inbound rules:
    - **SSH** (port 22) -- from `My IP` (recommended) or `Anywhere`
-   - **Custom TCP** (port 8000) -- from `Anywhere` (0.0.0.0/0) so the API is accessible
+   - **HTTP** (port 80) -- from `Anywhere` (0.0.0.0/0); used only to 301-redirect to HTTPS
+   - **HTTPS** (port 443) -- from `Anywhere` (0.0.0.0/0) so the frontend + API are accessible
 5. Click **Launch Instance**
 
 > Save your instance's **Public IPv4 address** -- you'll need it throughout this guide.
@@ -101,64 +102,73 @@ Replace `<YOUR_USERNAME>/<YOUR_REPO>` with your actual GitHub path.
 > - [Personal Access Token (PAT)](https://docs.github.com/en/authentication/keeping-your-account-and-data-secure/creating-a-personal-access-token) -- use as the password when cloning over HTTPS
 > - [SSH keys](https://docs.github.com/en/authentication/connecting-to-github-with-ssh) -- generate a key pair on the instance and add the public key to your GitHub account
 
-## Step 5: Provide secrets to the backend
+## Step 5: Provide secrets
 
-The WG Hunter agent needs `OPENAI_API_KEY`, and (optionally) `GOOGLE_MAPS_SERVER_KEY` for listing geocoding + Routes API commute times. The checked-in `backend/docker-compose.yml` does **not** currently pass `.env` through to the container — add it yourself.
+The WG Hunter agent needs `OPENAI_API_KEY`, the Places Autocomplete widget in the frontend needs `VITE_GOOGLE_MAPS_API_KEY` (baked into the built SPA at build time), and `GOOGLE_MAPS_SERVER_KEY` enables backend geocoding fallback, commute routing, and nearby-place enrichment.
 
 From the repo root, create `.env` (copy from [`.env.example`](./.env.example)) with at minimum:
 
 ```bash
 OPENAI_API_KEY=sk-...
-GOOGLE_MAPS_SERVER_KEY=AIza...    # optional but required for commute scoring
+VITE_GOOGLE_MAPS_API_KEY=AIza...  # required for the onboarding map
+GOOGLE_MAPS_SERVER_KEY=AIza...    # optional but required for commute / nearby-place scoring
 ```
 
-Edit `backend/docker-compose.yml` to load it:
+The root [`docker-compose.yml`](./docker-compose.yml) already wires `.env` into the backend via `env_file:` and passes `VITE_GOOGLE_MAPS_API_KEY` as a build arg to the frontend image, so nothing else to edit.
 
-```yaml
-services:
-  backend:
-    build: .
-    ports:
-      - "8000:8000"
-    volumes:
-      - .:/app
-    env_file:
-      - ../.env
-    environment:
-      - PYTHONUNBUFFERED=1
+### SSL certificate
+
+The nginx container terminates TLS for `doubleu.team` (and `www.doubleu.team`) and needs two files mounted from the repo root:
+
+| File | What it is |
+|------|------------|
+| `fullchain.crt` | Leaf certificate + intermediates concatenated (leaf first, then the Sectigo CA bundle). |
+| `doubleu_team.key` | Private key that pairs with the certificate. |
+
+Upload both files to the repo root on the EC2 host (e.g. `~/tumai-makeathon-2026/`) with permissions readable by the `docker` user. They are mounted read-only at `/etc/nginx/certs/` inside the frontend container by [`docker-compose.yml`](./docker-compose.yml) and are git-ignored (`*.crt`, `*.key`).
+
+```bash
+# from your local machine, assuming you already have the cert + key locally
+scp -i /path/to/your-key-pair.pem fullchain.crt doubleu_team.key <USERNAME>@<EC2_PUBLIC_IP>:~/tumai-makeathon-2026/
 ```
+
+If your private key file is named differently, either rename it to `doubleu_team.key` or update the volume mount in `docker-compose.yml` to match.
 
 ## Step 6: Run the Application
 
+From the repo root:
+
 ```bash
-cd backend
 docker compose up -d --build
 ```
 
 - `-d` runs containers in the background (detached mode)
-- `--build` rebuilds the image from the Dockerfile
+- `--build` rebuilds the images from the Dockerfiles
+
+This starts two services:
+- `frontend` -- nginx serving the built Vite SPA on port 443 (TLS) and reverse-proxying `/api/*` to the backend; port 80 only 301-redirects to HTTPS
+- `backend` -- FastAPI / uvicorn on the internal compose network, with SQLite persisted to the `wg_data` named volume at `/root/.wg_hunter`
 
 ## Step 7: Verify the Deployment
 
 From your local machine or browser:
 
 ```bash
-curl http://<EC2_PUBLIC_IP>:8000/api/health
+curl https://doubleu.team/api/health
 # Expected: {"status":"ok"}
+```
+
+Open the app:
+
+```
+https://doubleu.team/
 ```
 
 Interactive API docs:
 
 ```
-http://<EC2_PUBLIC_IP>:8000/docs
+https://doubleu.team/docs
 ```
-
-> **Frontend served from the backend**: `app/main.py` serves `frontend/dist/` as a SPA fallback for non-`/api/*` paths. The current `backend/Dockerfile` only copies the `backend/` directory, so the SPA is **not** included in the container image. To serve the UI from port 8000, either:
->
-> 1. Run `npm install && npm run build` inside `frontend/` **on the host** next to the repo and `bind-mount` it into the container (edit `backend/docker-compose.yml` to add `- ../frontend/dist:/frontend/dist:ro` under `volumes`), or
-> 2. Update `backend/Dockerfile` to do a multi-stage build that runs Node + `npm run build` and copies the resulting `frontend/dist/` to `/frontend/dist` alongside the backend.
->
-> If neither is done, the `/api/*` endpoints are reachable but the root path (`/`) returns 503.
 
 ## Updating the Deployment
 
@@ -169,7 +179,6 @@ SSH into the instance and pull the latest changes:
 ```bash
 cd ~/<YOUR_REPO>
 git pull origin <YOUR_BRANCH>
-cd backend
 docker compose up -d --build
 ```
 
@@ -192,10 +201,16 @@ Once configured, the workflow will SSH into your server and run the update comma
 ## Troubleshooting
 
 **Can't connect to the API?**
-- Verify the EC2 Security Group allows inbound TCP on port 8000
+- Verify the EC2 Security Group allows inbound TCP on ports 80 and 443
 - Check that Docker is running: `sudo systemctl status docker`
 - Check container status: `docker compose ps`
-- Check logs: `docker compose logs`
+- Check logs: `docker compose logs` (or `docker compose logs backend` / `docker compose logs frontend`)
+
+**TLS / HTTPS errors?**
+- Make sure `fullchain.crt` and `doubleu_team.key` exist in the repo root on the EC2 host and are readable by Docker
+- `fullchain.crt` must be leaf-first (the leaf certificate, then the Sectigo intermediate chain); if the browser reports an incomplete chain, concatenate the bundle: `cat doubleu_team.crt doubleu_team.ca-bundle > fullchain.crt`
+- Inspect the served chain from your laptop: `openssl s_client -connect doubleu.team:443 -servername doubleu.team -showcerts </dev/null`
+- Check that DNS for `doubleu.team` points at the EC2 public IP (`dig +short doubleu.team`)
 
 **Permission denied when running Docker?**
 - Make sure you ran `sudo usermod -aG docker $USER` and then `newgrp docker` (or log out and back in)

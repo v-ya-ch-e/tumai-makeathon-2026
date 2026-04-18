@@ -29,9 +29,18 @@ jobs:
           git reset --hard origin/main
           git remote set-url origin "https://github.com/${REPO}.git"
 
-          cd backend
+          # Stop the current stack (also removes orphans from this project).
+          docker compose down --remove-orphans
 
-          docker compose down
+          # Tear down any stale containers from previous deploy layouts
+          # (e.g. the old backend/docker-compose.yml project named "backend").
+          for project in backend; do
+            stale=$(docker ps -aq --filter "label=com.docker.compose.project=${project}")
+            if [ -n "$stale" ]; then
+              docker rm -f $stale
+            fi
+          done
+
           docker compose up -d --build
-          
+
           docker image prune -f

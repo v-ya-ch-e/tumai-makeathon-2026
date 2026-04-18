@@ -24,6 +24,7 @@ from .dto import (
     HuntDTO,
     ListingDetailDTO,
     ListingDTO,
+    NearbyPlaceDTO,
     SearchProfileDTO,
     UpdateUserBody,
     UpsertSearchProfileBody,
@@ -116,11 +117,13 @@ def _get_listing_detail(
     travel_minutes_per_location = _travel_minutes_by_label(
         session, hunt_id=hunt_id, score_row=score_row
     )
+    nearby_preference_places = _nearby_places_from_row(score_row)
     return ListingDetailDTO(
         listing=listing_dto,
         photos=photos,
         score=score_val,
         travel_minutes_per_location=travel_minutes_per_location,
+        nearby_preference_places=nearby_preference_places,
     )
 
 
@@ -189,6 +192,20 @@ def _best_commute_minutes(score_row: Optional[ListingScoreRow]) -> Optional[int]
         if best is None or minutes < best:
             best = minutes
     return best
+def _nearby_places_from_row(
+    score_row: Optional[ListingScoreRow],
+) -> list[NearbyPlaceDTO]:
+    if score_row is None or not score_row.nearby_places:
+        return []
+    out: list[NearbyPlaceDTO] = []
+    for raw in score_row.nearby_places:
+        if not isinstance(raw, dict):
+            continue
+        try:
+            out.append(NearbyPlaceDTO.model_validate(raw))
+        except Exception:  # noqa: BLE001
+            continue
+    return out
 
 
 @router.post("/users", status_code=201, response_model=UserDTO)

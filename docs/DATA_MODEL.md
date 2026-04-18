@@ -40,7 +40,7 @@ One-to-one requirements/preferences schedule slice persisted for the wizard. Map
 | `username` | `str` | PK + FK → `userrow.username`. |
 | `price_min_eur` | `int` | Lower rent bound. |
 | `price_max_eur` | `Optional[int]` | Upper bound; `None` triggers defaults in repo when building `SearchProfile`. |
-| `main_locations` | `JSON` / `list[PlaceLocation]` | User-picked places from Google Places Autocomplete. Each element is `{label, place_id, lat, lng, max_commute_minutes}`; the first entry's `label` seeds `SearchProfile.city` for the wg-gesucht search URL builder. `lat`/`lng` feed commute-based scoring. `max_commute_minutes` (5–240, nullable) is a per-location soft upper bound the LLM compares against the fastest mode. |
+| `main_locations` | `JSON` / `list[PlaceLocation]` | User-picked places from Google Places Autocomplete. Each element is `{label, place_id, lat, lng, max_commute_minutes}`; the first entry's `label` seeds `SearchProfile.city` for the wg-gesucht search URL builder. `lat`/`lng` feed commute-based scoring. `max_commute_minutes` (5–240, nullable) is a per-location soft upper bound the scorer compares against the fastest mode. |
 | `has_car` | `bool` | Commute / POI hint. |
 | `has_bike` | `bool` | Same. |
 | `mode` | `str` | `"wg"`, `"flat"`, or `"both"`. |
@@ -122,12 +122,13 @@ Latest LLM score payload per `(listing_id, hunt_id)`. Split from `ListingRow` so
 | `match_reasons` | `JSON` / `list` | |
 | `mismatch_reasons` | `JSON` / `list` | |
 | `travel_minutes` | `Optional[JSON]` | Fastest `{mode, minutes}` per `main_location.place_id` when commute data was available at score time. Shape: `{"<place_id>": {"mode": "BICYCLE", "minutes": 18}}`. Populated by `HuntEngine.run_find_only` from the full `commute.travel_times` matrix; read back by `_get_listing_detail` and re-keyed by label for the drawer. Added in Alembic [`0004_listing_commute.py`](../backend/alembic/versions/0004_listing_commute.py). |
+| `nearby_places` | `Optional[JSON]` | Persisted nearby-place facts for place-like preferences. Shape: `[{key, label, searched, distance_m, place_name, category}]`. Populated by `HuntEngine.run_find_only` from [`places.nearby_places`](../backend/app/wg_agent/places.py); read back by `_get_listing_detail` for the drawer's nearby-preferences section. Added in Alembic [`0007_nearby_places.py`](../backend/alembic/versions/0007_nearby_places.py). |
 | `components` | `Optional[JSON]` | Scorecard breakdown: `list[{key, score, weight, evidence, hard_cap?, missing_data}]`, one entry per `evaluator` component (price, size, wg_size, availability, commute, preferences, vibe). NULL on pre-migration rows and on vetoed listings. Rendered as per-component bars in `ListingDrawer`. Added in Alembic [`0006_scorecard_components.py`](../backend/alembic/versions/0006_scorecard_components.py). |
 | `veto_reason` | `Optional[str]` | Set when `evaluator.hard_filter` short-circuited evaluation (over budget, wrong city, avoid-district, etc.). Mutually exclusive with a populated `components` list; score is pinned at 0.0. Added in Alembic [`0006_scorecard_components.py`](../backend/alembic/versions/0006_scorecard_components.py). |
 | `scored_at` | `datetime` | |
 
 - **SET**: [`repo.save_score`](../backend/app/wg_agent/repo.py) immediately after `evaluator.evaluate` in `HuntEngine.run_find_only`.
-- **READ**: Joined in `repo.list_listings_for_hunt` via `_listing_from_row` (which rehydrates `components` via `_components_from_row`) and in `_get_listing_detail` (the detail endpoint also resolves `place_id` to `main_location.label` for the `travel_minutes_per_location` DTO field and rehydrates `components` via `_components_dto_from_row` for the breakdown bars).
+- **READ**: Joined in `repo.list_listings_for_hunt` via `_listing_from_row` (which rehydrates `components` via `_components_from_row`) and in `_get_listing_detail` (the detail endpoint also resolves `place_id` to `main_location.label` for the `travel_minutes_per_location` DTO field, rehydrates `components` via `_components_dto_from_row`, and returns `nearby_places` as `nearby_preference_places` for the drawer).
 
 ### AgentActionRow
 
@@ -327,6 +328,24 @@ Values below are illustrative; timestamps are ISO-8601 strings as JSON would sho
     "ChIJ2V-Mo_l1nkcRfZixfUq4DAE": { "mode": "BICYCLE", "minutes": 18 },
     "ChIJsendlingPlaceId": { "mode": "TRANSIT", "minutes": 14 }
   },
+  "nearby_places": [
+    {
+      "key": "gym",
+      "label": "Gym",
+      "searched": true,
+      "distance_m": 240,
+      "place_name": "Fit Star",
+      "category": "sport.fitness.fitness_centre"
+    },
+    {
+      "key": "supermarket",
+      "label": "Supermarket",
+      "searched": true,
+      "distance_m": null,
+      "place_name": null,
+      "category": null
+    }
+  ],
   "components": [
     {
       "key": "price",

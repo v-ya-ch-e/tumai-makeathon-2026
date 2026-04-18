@@ -12,6 +12,7 @@ from .models import (
     ComponentScore,
     Hunt,
     Listing,
+    NearbyPlace,
     PlaceLocation,
     PreferenceWeight,
     SearchProfile,
@@ -135,6 +136,15 @@ class ListingDTO(BaseModel):
     veto_reason: Optional[str] = None
 
 
+class NearbyPlaceDTO(BaseModel):
+    key: str
+    label: str
+    searched: bool = True
+    distance_m: Optional[int] = None
+    place_name: Optional[str] = None
+    category: Optional[str] = None
+
+
 class HuntDTO(BaseModel):
     id: str
     username: Optional[str] = None
@@ -151,6 +161,7 @@ class ListingDetailDTO(BaseModel):
     photos: list[str]
     score: Optional[float] = None
     travel_minutes_per_location: Optional[dict[str, int]] = None
+    nearby_preference_places: list[NearbyPlaceDTO] = Field(default_factory=list)
 
 
 def user_to_dto(u: UserProfile) -> UserDTO:
@@ -219,6 +230,17 @@ def component_to_dto(c: ComponentScore) -> ComponentDTO:
         evidence=list(c.evidence),
         hard_cap=c.hard_cap,
         missing_data=c.missing_data,
+    )
+
+
+def nearby_place_to_dto(place: NearbyPlace) -> NearbyPlaceDTO:
+    return NearbyPlaceDTO(
+        key=place.key,
+        label=place.label,
+        searched=place.searched,
+        distance_m=place.distance_m,
+        place_name=place.place_name,
+        category=place.category,
     )
 
 

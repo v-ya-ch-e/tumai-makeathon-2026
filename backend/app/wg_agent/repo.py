@@ -29,6 +29,7 @@ from .models import (
     Hunt,
     HuntStatus,
     Listing,
+    NearbyPlace,
     PlaceLocation,
     PreferenceWeight,
     SearchProfile,
@@ -295,10 +296,16 @@ def save_score(
     match_reasons: list[str],
     mismatch_reasons: list[str],
     travel_minutes: Optional[dict] = None,
+    nearby_places: Optional[dict[str, NearbyPlace]] = None,
     components: Optional[list[ComponentScore]] = None,
     veto_reason: Optional[str] = None,
 ) -> None:
     now = datetime.utcnow()
+    nearby_places_json = (
+        [place.model_dump(mode="json") for place in nearby_places.values()]
+        if nearby_places is not None
+        else None
+    )
     components_json = (
         [c.model_dump(mode="json") for c in components]
         if components is not None
@@ -312,6 +319,7 @@ def save_score(
         match_reasons=list(match_reasons),
         mismatch_reasons=list(mismatch_reasons),
         travel_minutes=travel_minutes,
+        nearby_places=nearby_places_json,
         components=components_json,
         veto_reason=veto_reason,
         scored_at=now,

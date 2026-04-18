@@ -13,7 +13,7 @@ sequenceDiagram
   participant Hunter as Hunter (PeriodicHunter)
   participant Engine as Engine (HuntEngine)
   participant WG as WG (wg-gesucht.de)
-  participant GMAPS as GMAPS (Google Maps)
+  participant MAPS as MAPS (Google Maps)
   participant OAI as OAI (OpenAI)
   participant DB as DB (SQLite)
   participant Q as Event queue
@@ -48,10 +48,14 @@ sequenceDiagram
     Engine->>Q: put_nowait(new_listing)
     API-->>SPA: SSE data: new_listing
     Engine->>WG: anonymous_scrape_listing
-    WG-->>Engine: detail HTML → enriched Listing (lat/lng from map_config.markers, Geocoding fallback)
+    WG-->>Engine: detail HTML → enriched Listing (lat/lng from map_config.markers, Google geocode fallback)
     opt listing.lat is not None and sp.main_locations
-      Engine->>GMAPS: commute.travel_times (computeRouteMatrix, one POST per mode)
-      GMAPS-->>Engine: {(place_id, mode): seconds}
+      Engine->>MAPS: commute.travel_times (Distance Matrix, one request per mode)
+      MAPS-->>Engine: {(place_id, mode): seconds}
+    end
+    opt listing.lat is not None and sp.preferences
+      Engine->>MAPS: places.nearby_places (nearest preference amenities)
+      MAPS-->>Engine: {pref_key: NearbyPlace}
     end
     Engine->>Engine: evaluator.hard_filter
     alt Veto
@@ -64,8 +68,8 @@ sequenceDiagram
       Engine->>OAI: brain.vibe_score (prose-only, ValidationError → missing_data)
       OAI-->>Engine: VibeScore
       Engine->>Engine: evaluator.compose (weighted mean + hard caps + clamp)
-      Engine->>DB: upsert_listing + save_score (components JSON, travel_minutes when present)
-      Engine->>DB: append_action(evaluate, detail="price 0.9 · size 1.0 · commute 0.4 · … | fastest mode-min per location")
+      Engine->>DB: upsert_listing + save_score (components JSON, travel_minutes + nearby_places when present)
+      Engine->>DB: append_action(evaluate, detail="price 0.9 · size 1.0 · commute 0.4 · … | fastest mode-min per location | nearby amenity distances")
       Engine->>Q: put_nowait(evaluate)
       API-->>SPA: SSE data: evaluate (scored)
     end

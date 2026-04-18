@@ -1,4 +1,4 @@
-"""Unit tests for the Routes API client in `app.wg_agent.commute`.
+"""Unit tests for the route-matrix client in `app.wg_agent.commute`.
 
 Monkey-patches `httpx.AsyncClient.post` so no network I/O happens and we
 exercise the happy path, graceful HTTP failure, and the no-key short-circuit.
@@ -34,7 +34,7 @@ def _destinations() -> list[PlaceLocation]:
     ]
 
 
-def _matrix_response(payload: list[dict[str, Any]]) -> MagicMock:
+def _matrix_response(payload: dict[str, Any]) -> MagicMock:
     response = MagicMock()
     response.raise_for_status = MagicMock()
     response.json = MagicMock(return_value=payload)
@@ -44,25 +44,18 @@ def _matrix_response(payload: list[dict[str, Any]]) -> MagicMock:
 def test_travel_times_parses_duration_seconds(monkeypatch) -> None:
     monkeypatch.setenv("GOOGLE_MAPS_SERVER_KEY", "fake-key")
 
-    canned = [
-        {
-            "originIndex": 0,
-            "destinationIndex": 0,
-            "duration": "1080s",
-            "condition": "ROUTE_EXISTS",
-        },
-        {
-            "originIndex": 0,
-            "destinationIndex": 1,
-            "duration": "600s",
-            "condition": "ROUTE_EXISTS",
-        },
-    ]
+    canned = {
+        "status": "OK",
+        "rows": [{"elements": [
+            {"status": "OK", "duration": {"value": 1080}},
+            {"status": "OK", "duration": {"value": 600}},
+        ]}],
+    }
 
-    async def fake_post(self, url, json=None, headers=None):  # noqa: A002
+    async def fake_get(self, url, params=None):  # noqa: A002
         return _matrix_response(canned)
 
-    with patch.object(httpx.AsyncClient, "post", new=fake_post):
+    with patch.object(httpx.AsyncClient, "get", new=fake_get):
         out = asyncio.run(
             commute.travel_times(
                 origin=(48.1, 11.5),
@@ -78,21 +71,14 @@ def test_travel_times_calls_once_per_mode(monkeypatch) -> None:
 
     call_count = 0
 
-    async def fake_post(self, url, json=None, headers=None):  # noqa: A002
+    async def fake_get(self, url, params=None):  # noqa: A002
         nonlocal call_count
         call_count += 1
         return _matrix_response(
-            [
-                {
-                    "originIndex": 0,
-                    "destinationIndex": 0,
-                    "duration": "500s",
-                    "condition": "ROUTE_EXISTS",
-                }
-            ]
+            {"status": "OK", "rows": [{"elements": [{"status": "OK", "duration": {"value": 500}}]}]}
         )
 
-    with patch.object(httpx.AsyncClient, "post", new=fake_post):
+    with patch.object(httpx.AsyncClient, "get", new=fake_get):
         out = asyncio.run(
             commute.travel_times(
                 origin=(48.1, 11.5),
@@ -107,12 +93,37 @@ def test_travel_times_calls_once_per_mode(monkeypatch) -> None:
     }
 
 
+def test_travel_times_waits_for_shared_google_maps_slots(monkeypatch) -> None:
+    monkeypatch.setenv("GOOGLE_MAPS_SERVER_KEY", "fake-key")
+
+    wait_turn = AsyncMock()
+
+    async def fake_get(self, url, params=None):  # noqa: A002
+        return _matrix_response(
+            {"status": "OK", "rows": [{"elements": [{"status": "OK", "duration": {"value": 500}}]}]}
+        )
+
+    with (
+        patch.object(httpx.AsyncClient, "get", new=fake_get),
+        patch.object(commute.google_maps, "wait_turn", new=wait_turn),
+    ):
+        asyncio.run(
+            commute.travel_times(
+                origin=(48.1, 11.5),
+                destinations=[_destinations()[0]],
+                modes=["TRANSIT", "BICYCLE"],
+            )
+        )
+
+    assert wait_turn.await_count == 2
+
+
 def test_travel_times_http_error_returns_empty(monkeypatch) -> None:
     monkeypatch.setenv("GOOGLE_MAPS_SERVER_KEY", "fake-key")
 
-    fake_post = AsyncMock(side_effect=httpx.ConnectError("boom"))
+    fake_get = AsyncMock(side_effect=httpx.ConnectError("boom"))
 
-    with patch.object(httpx.AsyncClient, "post", new=fake_post):
+    with patch.object(httpx.AsyncClient, "get", new=fake_get):
         out = asyncio.run(
             commute.travel_times(
                 origin=(48.1, 11.5),
@@ -126,9 +137,9 @@ def test_travel_times_http_error_returns_empty(monkeypatch) -> None:
 def test_travel_times_without_api_key_skips_network(monkeypatch) -> None:
     monkeypatch.delenv("GOOGLE_MAPS_SERVER_KEY", raising=False)
 
-    fake_post = AsyncMock()
+    fake_get = AsyncMock()
 
-    with patch.object(httpx.AsyncClient, "post", new=fake_post):
+    with patch.object(httpx.AsyncClient, "get", new=fake_get):
         out = asyncio.run(
             commute.travel_times(
                 origin=(48.1, 11.5),
@@ -137,30 +148,24 @@ def test_travel_times_without_api_key_skips_network(monkeypatch) -> None:
             )
         )
     assert out == {}
-    fake_post.assert_not_called()
+    fake_get.assert_not_called()
 
 
 def test_travel_times_skips_unreachable_pairs(monkeypatch) -> None:
     monkeypatch.setenv("GOOGLE_MAPS_SERVER_KEY", "fake-key")
 
-    canned = [
-        {
-            "originIndex": 0,
-            "destinationIndex": 0,
-            "duration": "900s",
-            "condition": "ROUTE_EXISTS",
-        },
-        {
-            "originIndex": 0,
-            "destinationIndex": 1,
-            "condition": "ROUTE_NOT_FOUND",
-        },
-    ]
+    canned = {
+        "status": "OK",
+        "rows": [{"elements": [
+            {"status": "OK", "duration": {"value": 900}},
+            {"status": "ZERO_RESULTS"},
+        ]}],
+    }
 
-    async def fake_post(self, url, json=None, headers=None):  # noqa: A002
+    async def fake_get(self, url, params=None):  # noqa: A002
         return _matrix_response(canned)
 
-    with patch.object(httpx.AsyncClient, "post", new=fake_post):
+    with patch.object(httpx.AsyncClient, "get", new=fake_get):
         out = asyncio.run(
             commute.travel_times(
                 origin=(48.1, 11.5),

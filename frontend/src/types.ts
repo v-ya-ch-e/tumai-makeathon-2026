@@ -67,6 +67,15 @@ export type Component = {
   missingData: boolean
 }
 
+export type NearbyPlace = {
+  key: string
+  label: string
+  searched: boolean
+  distanceM: number | null
+  placeName: string | null
+  category: string | null
+}
+
 export type Listing = {
   id: string
   huntId: string
@@ -108,4 +117,5 @@ export type ListingDetail = {
   photos: string[]
   score: number | null
   travelMinutesPerLocation: Record<string, number> | null
+  nearbyPreferencePlaces: NearbyPlace[]
 }

@@ -8,6 +8,7 @@ import sys
 from typing import Any
 
 import httpx
+from unittest.mock import AsyncMock
 
 sys.path.insert(0, str(pathlib.Path(__file__).resolve().parent.parent))
 
@@ -55,9 +56,7 @@ def test_geocode_returns_coords_and_caches(monkeypatch) -> None:
 
     payload = {
         "status": "OK",
-        "results": [
-            {"geometry": {"location": {"lat": 48.149, "lng": 11.568}}}
-        ],
+        "results": [{"geometry": {"location": {"lat": 48.149, "lng": 11.568}}}],
     }
     counter = {"calls": 0}
 
@@ -88,7 +87,7 @@ def test_geocode_returns_none_on_zero_results(monkeypatch) -> None:
     assert asyncio.run(geocoder.geocode("nowhere-xyz")) is None
 
 
-def test_geocode_returns_none_on_request_denied(monkeypatch) -> None:
+def test_geocode_waits_for_shared_google_maps_slot(monkeypatch) -> None:
     _reset_cache()
     monkeypatch.setenv("GOOGLE_MAPS_SERVER_KEY", "test-key")
 
@@ -96,7 +95,27 @@ def test_geocode_returns_none_on_request_denied(monkeypatch) -> None:
 
     def fake_async_client(*_args: Any, **_kwargs: Any) -> _FakeClient:
         return _FakeClient(
-            {"status": "REQUEST_DENIED", "results": [], "error_message": "bad key"},
+            {"status": "OK", "results": [{"geometry": {"location": {"lat": 48.149, "lng": 11.568}}}]},
+            counter,
+        )
+
+    wait_turn = AsyncMock()
+    monkeypatch.setattr(geocoder.httpx, "AsyncClient", fake_async_client)
+    monkeypatch.setattr(geocoder.google_maps, "wait_turn", wait_turn)
+
+    assert asyncio.run(geocoder.geocode("TUM")) == (48.149, 11.568)
+    wait_turn.assert_awaited_once()
+
+
+def test_geocode_returns_none_on_bad_payload(monkeypatch) -> None:
+    _reset_cache()
+    monkeypatch.setenv("GOOGLE_MAPS_SERVER_KEY", "test-key")
+
+    counter = {"calls": 0}
+
+    def fake_async_client(*_args: Any, **_kwargs: Any) -> _FakeClient:
+        return _FakeClient(
+            {"status": "OK", "bad": "shape"},
             counter,
         )
 

@@ -20,6 +20,7 @@ from app.wg_agent import brain  # noqa: E402
 from app.wg_agent.brain import _listing_summary, _requirements_summary  # noqa: E402
 from app.wg_agent.models import (  # noqa: E402
     Listing,
+    NearbyPlace,
     PlaceLocation,
     PreferenceWeight,
     SearchProfile,
@@ -102,6 +103,25 @@ def test_commute_block_renders_max_budget() -> None:
     )
     assert "max 25 min" in out
     assert "TUM" in out
+
+
+def test_listing_summary_includes_nearby_places_block() -> None:
+    out = _listing_summary(
+        _listing(),
+        nearby_places={
+            "gym": NearbyPlace(
+                key="gym",
+                label="Gym",
+                searched=True,
+                distance_m=320,
+                place_name="Fit Star",
+            )
+        },
+        preferences=[PreferenceWeight(key="gym", weight=5)],
+    )
+    assert "Nearby preference places:" in out
+    assert "Fit Star" in out
+    assert "320 m away" in out
 
 
 def _sp(preferences: list[PreferenceWeight]) -> SearchProfile:
