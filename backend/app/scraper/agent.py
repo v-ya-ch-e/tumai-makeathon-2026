@@ -68,6 +68,8 @@ class ScraperAgent:
             if refresh_hours is not None
             else _env_int("SCRAPER_REFRESH_HOURS", 24)
         )
+        self._deletion_passes = _env_int("SCRAPER_DELETION_PASSES", 2)
+        self._missing_passes: dict[str, int] = {}
 
     def _search_profile(self) -> SearchProfile:
         return SearchProfile(city=self._city, max_rent_eur=self._max_rent)
@@ -138,7 +140,38 @@ class ScraperAgent:
             await self._scrape_and_save(stub)
             scraped += 1
         logger.info("Scraper: scraped %d listings this pass", scraped)
+
+        self._sweep_deletions({stub.id for stub in found})
         return scraped
+
+    def _sweep_deletions(self, seen_ids: set[str]) -> None:
+        """Diff current search ids against the active pool and tombstone listings
+        that have been missing for `self._deletion_passes` consecutive passes."""
+        with Session(db_module.engine) as session:
+            active_ids = repo.list_active_listing_ids(session)
+
+        # Reset counters for anything that reappeared in the search.
+        for lid in list(self._missing_passes.keys()):
+            if lid in seen_ids:
+                del self._missing_passes[lid]
+
+        missing = active_ids - seen_ids
+        tombstoned: list[str] = []
+        for lid in missing:
+            count = self._missing_passes.get(lid, 0) + 1
+            if count >= self._deletion_passes:
+                with Session(db_module.engine) as session:
+                    repo.mark_listing_deleted(session, listing_id=lid)
+                tombstoned.append(lid)
+                self._missing_passes.pop(lid, None)
+            else:
+                self._missing_passes[lid] = count
+
+        logger.info(
+            "Scraper: deletion sweep found %d missing, tombstoned %d",
+            len(missing),
+            len(tombstoned),
+        )
 
     async def run_forever(self) -> None:
         logger.info(

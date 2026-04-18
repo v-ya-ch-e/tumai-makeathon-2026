@@ -1,6 +1,7 @@
 import clsx from 'clsx'
 import { useEffect, useState, type ReactNode } from 'react'
 import { getListingDetail } from '../lib/api'
+import { useSession } from '../lib/session'
 import type { Component, Listing, ListingDetail } from '../types'
 import { Button, Drawer, StatusPill, type StatusPillTone } from './ui'
 
@@ -112,19 +113,20 @@ function nearbyCheckSummary(place: ListingDetail['nearbyPreferencePlaces'][numbe
 }
 
 export function ListingDrawer({ open, listing, onClose }: ListingDrawerProps) {
+  const { username } = useSession()
   const [detail, setDetail] = useState<ListingDetail | null>(null)
   const [loading, setLoading] = useState(false)
   const [error, setError] = useState<string | null>(null)
 
   useEffect(() => {
-    if (!open || !listing) return
+    if (!open || !listing || !username) return
     setDetail(null)
     setError(null)
     setLoading(true)
     let cancelled = false
     void (async () => {
       try {
-        const nextDetail = await getListingDetail(listing.id, listing.huntId)
+        const nextDetail = await getListingDetail(listing.id, username)
         if (!cancelled) setDetail(nextDetail)
       } catch (nextError) {
         if (!cancelled) setError(nextError instanceof Error ? nextError.message : String(nextError))
@@ -135,7 +137,7 @@ export function ListingDrawer({ open, listing, onClose }: ListingDrawerProps) {
     return () => {
       cancelled = true
     }
-  }, [open, listing?.id, listing?.huntId])
+  }, [open, listing?.id, username])
 
   const activeListing: Listing | null = detail?.listing ?? listing
 

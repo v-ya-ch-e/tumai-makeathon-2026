@@ -86,6 +86,56 @@
             }
           }
         }
+      },
+      "put": {
+        "tags": [
+          "wg-hunter"
+        ],
+        "summary": "Update User",
+        "operationId": "update_user_api_users__username__put",
+        "parameters": [
+          {
+            "name": "username",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Username"
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/UpdateUserBody"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/UserDTO"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
       }
     },
     "/api/users/{username}/search-profile": {
@@ -298,13 +348,13 @@
         }
       }
     },
-    "/api/users/{username}/hunts": {
+    "/api/users/{username}/agent/start": {
       "post": {
         "tags": [
           "wg-hunter"
         ],
-        "summary": "Create Hunt",
-        "operationId": "create_hunt_api_users__username__hunts_post",
+        "summary": "Start Agent",
+        "operationId": "start_agent_api_users__username__agent_start_post",
         "parameters": [
           {
             "name": "username",
@@ -316,26 +366,9 @@
             }
           }
         ],
-        "requestBody": {
-          "required": true,
-          "content": {
-            "application/json": {
-              "schema": {
-                "$ref": "#/components/schemas/CreateHuntBody"
-              }
-            }
-          }
-        },
         "responses": {
-          "201": {
-            "description": "Successful Response",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/HuntDTO"
-                }
-              }
-            }
+          "204": {
+            "description": "Successful Response"
           },
           "422": {
             "description": "Validation Error",
@@ -350,21 +383,56 @@
         }
       }
     },
-    "/api/hunts/{hunt_id}/stop": {
+    "/api/users/{username}/agent/pause": {
       "post": {
         "tags": [
           "wg-hunter"
         ],
-        "summary": "Stop Hunt",
-        "operationId": "stop_hunt_api_hunts__hunt_id__stop_post",
+        "summary": "Pause Agent",
+        "operationId": "pause_agent_api_users__username__agent_pause_post",
         "parameters": [
           {
-            "name": "hunt_id",
+            "name": "username",
             "in": "path",
             "required": true,
             "schema": {
               "type": "string",
-              "title": "Hunt Id"
+              "title": "Username"
+            }
+          }
+        ],
+        "responses": {
+          "204": {
+            "description": "Successful Response"
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/users/{username}/agent": {
+      "get": {
+        "tags": [
+          "wg-hunter"
+        ],
+        "summary": "Get Agent Status",
+        "operationId": "get_agent_status_api_users__username__agent_get",
+        "parameters": [
+          {
+            "name": "username",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Username"
             }
           }
         ],
@@ -374,7 +442,9 @@
             "content": {
               "application/json": {
                 "schema": {
-                  "$ref": "#/components/schemas/HuntDTO"
+                  "type": "object",
+                  "additionalProperties": true,
+                  "title": "Response Get Agent Status Api Users  Username  Agent Get"
                 }
               }
             }
@@ -392,21 +462,21 @@
         }
       }
     },
-    "/api/hunts/{hunt_id}": {
+    "/api/users/{username}/listings": {
       "get": {
         "tags": [
           "wg-hunter"
         ],
-        "summary": "Get Hunt By Id",
-        "operationId": "get_hunt_by_id_api_hunts__hunt_id__get",
+        "summary": "List User Listings Endpoint",
+        "operationId": "list_user_listings_endpoint_api_users__username__listings_get",
         "parameters": [
           {
-            "name": "hunt_id",
+            "name": "username",
             "in": "path",
             "required": true,
             "schema": {
               "type": "string",
-              "title": "Hunt Id"
+              "title": "Username"
             }
           }
         ],
@@ -416,7 +486,11 @@
             "content": {
               "application/json": {
                 "schema": {
-                  "$ref": "#/components/schemas/HuntDTO"
+                  "type": "array",
+                  "items": {
+                    "$ref": "#/components/schemas/ListingDTO"
+                  },
+                  "title": "Response List User Listings Endpoint Api Users  Username  Listings Get"
                 }
               }
             }
@@ -434,21 +508,85 @@
         }
       }
     },
-    "/api/hunts/{hunt_id}/stream": {
+    "/api/users/{username}/actions": {
       "get": {
         "tags": [
           "wg-hunter"
         ],
-        "summary": "Stream Hunt",
-        "operationId": "stream_hunt_api_hunts__hunt_id__stream_get",
+        "summary": "List User Actions Endpoint",
+        "operationId": "list_user_actions_endpoint_api_users__username__actions_get",
         "parameters": [
           {
-            "name": "hunt_id",
+            "name": "username",
             "in": "path",
             "required": true,
             "schema": {
               "type": "string",
-              "title": "Hunt Id"
+              "title": "Username"
+            }
+          },
+          {
+            "name": "limit",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "integer",
+                  "maximum": 10000,
+                  "minimum": 1
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Limit"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "array",
+                  "items": {
+                    "$ref": "#/components/schemas/ActionDTO"
+                  },
+                  "title": "Response List User Actions Endpoint Api Users  Username  Actions Get"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/users/{username}/stream": {
+      "get": {
+        "tags": [
+          "wg-hunter"
+        ],
+        "summary": "Stream User Events",
+        "operationId": "stream_user_events_api_users__username__stream_get",
+        "parameters": [
+          {
+            "name": "username",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Username"
             }
           }
         ],
@@ -492,15 +630,15 @@
             }
           },
           {
-            "name": "hunt_id",
+            "name": "username",
             "in": "query",
             "required": true,
             "schema": {
               "type": "string",
-              "description": "Hunt scope for composite listing key",
-              "title": "Hunt Id"
+              "description": "User scope for the listing match",
+              "title": "Username"
             },
-            "description": "Hunt scope for composite listing key"
+            "description": "User scope for the listing match"
           }
         ],
         "responses": {
@@ -520,6 +658,105 @@
               "application/json": {
                 "schema": {
                   "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/deadline/summary": {
+      "get": {
+        "tags": [
+          "deadline"
+        ],
+        "summary": "Deadline Summary",
+        "operationId": "deadline_summary_api_deadline_summary_get",
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "items": {
+                    "$ref": "#/components/schemas/TimelineItem"
+                  },
+                  "type": "array",
+                  "title": "Response Deadline Summary Api Deadline Summary Get"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/deadline/timeline": {
+      "get": {
+        "tags": [
+          "deadline"
+        ],
+        "summary": "Deadline Timeline",
+        "operationId": "deadline_timeline_api_deadline_timeline_get",
+        "parameters": [
+          {
+            "name": "category",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "$ref": "#/components/schemas/TimelineCategory"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Category"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "array",
+                  "items": {
+                    "$ref": "#/components/schemas/TimelineItem"
+                  },
+                  "title": "Response Deadline Timeline Api Deadline Timeline Get"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/deadline/digest": {
+      "get": {
+        "tags": [
+          "deadline"
+        ],
+        "summary": "Deadline Digest",
+        "operationId": "deadline_digest_api_deadline_digest_get",
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/TimelineDigest"
                 }
               }
             }
@@ -667,34 +904,6 @@
         "title": "ComponentDTO",
         "description": "One row of the scorecard breakdown exposed to the UI."
       },
-      "CreateHuntBody": {
-        "properties": {
-          "schedule": {
-            "type": "string",
-            "enum": [
-              "one_shot",
-              "periodic"
-            ],
-            "title": "Schedule",
-            "default": "one_shot"
-          },
-          "rescan_interval_minutes": {
-            "anyOf": [
-              {
-                "type": "integer",
-                "maximum": 1440.0,
-                "minimum": 5.0
-              },
-              {
-                "type": "null"
-              }
-            ],
-            "title": "Rescan Interval Minutes"
-          }
-        },
-        "type": "object",
-        "title": "CreateHuntBody"
-      },
       "CreateUserBody": {
         "properties": {
           "username": {
@@ -702,6 +911,18 @@
             "maxLength": 40,
             "minLength": 1,
             "title": "Username"
+          },
+          "email": {
+            "anyOf": [
+              {
+                "type": "string",
+                "format": "email"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Email"
           },
           "age": {
             "type": "integer",
@@ -802,7 +1023,7 @@
         "type": "object",
         "title": "HTTPValidationError"
       },
-      "HuntDTO": {
+      "ListingDTO": {
         "properties": {
           "id": {
             "type": "string",
@@ -818,65 +1039,6 @@
               }
             ],
             "title": "Username"
-          },
-          "status": {
-            "type": "string",
-            "title": "Status"
-          },
-          "schedule": {
-            "type": "string",
-            "title": "Schedule"
-          },
-          "started_at": {
-            "type": "string",
-            "format": "date-time",
-            "title": "Started At"
-          },
-          "stopped_at": {
-            "anyOf": [
-              {
-                "type": "string",
-                "format": "date-time"
-              },
-              {
-                "type": "null"
-              }
-            ],
-            "title": "Stopped At"
-          },
-          "listings": {
-            "items": {
-              "$ref": "#/components/schemas/ListingDTO"
-            },
-            "type": "array",
-            "title": "Listings"
-          },
-          "actions": {
-            "items": {
-              "$ref": "#/components/schemas/ActionDTO"
-            },
-            "type": "array",
-            "title": "Actions"
-          }
-        },
-        "type": "object",
-        "required": [
-          "id",
-          "status",
-          "schedule",
-          "started_at"
-        ],
-        "title": "HuntDTO"
-      },
-      "ListingDTO": {
-        "properties": {
-          "id": {
-            "type": "string",
-            "title": "Id"
-          },
-          "hunt_id": {
-            "type": "string",
-            "title": "Hunt Id"
           },
           "url": {
             "type": "string",
@@ -994,6 +1156,28 @@
             ],
             "title": "Description"
           },
+          "cover_photo_url": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Cover Photo Url"
+          },
+          "best_commute_minutes": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Best Commute Minutes"
+          },
           "score": {
             "anyOf": [
               {
@@ -1052,7 +1236,6 @@
         "type": "object",
         "required": [
           "id",
-          "hunt_id",
           "url"
         ],
         "title": "ListingDTO"
@@ -1332,6 +1515,115 @@
         ],
         "title": "SearchProfileDTO"
       },
+      "TimelineCategory": {
+        "type": "string",
+        "enum": [
+          "deadline",
+          "course",
+          "sport",
+          "event"
+        ],
+        "title": "TimelineCategory"
+      },
+      "TimelineDigest": {
+        "properties": {
+          "urgent_count": {
+            "type": "integer",
+            "title": "Urgent Count"
+          },
+          "this_week_count": {
+            "type": "integer",
+            "title": "This Week Count"
+          },
+          "next_important_item": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/TimelineItem"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "short_summary": {
+            "type": "string",
+            "title": "Short Summary"
+          }
+        },
+        "type": "object",
+        "required": [
+          "urgent_count",
+          "this_week_count",
+          "next_important_item",
+          "short_summary"
+        ],
+        "title": "TimelineDigest"
+      },
+      "TimelineItem": {
+        "properties": {
+          "title": {
+            "type": "string",
+            "title": "Title"
+          },
+          "date": {
+            "type": "string",
+            "format": "date",
+            "title": "Date"
+          },
+          "source": {
+            "type": "string",
+            "title": "Source"
+          },
+          "category": {
+            "$ref": "#/components/schemas/TimelineCategory"
+          },
+          "urgency": {
+            "$ref": "#/components/schemas/UrgencyLevel"
+          }
+        },
+        "type": "object",
+        "required": [
+          "title",
+          "date",
+          "source",
+          "category",
+          "urgency"
+        ],
+        "title": "TimelineItem"
+      },
+      "UpdateUserBody": {
+        "properties": {
+          "email": {
+            "anyOf": [
+              {
+                "type": "string",
+                "format": "email"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Email"
+          },
+          "age": {
+            "type": "integer",
+            "maximum": 99.0,
+            "minimum": 16.0,
+            "title": "Age"
+          },
+          "gender": {
+            "type": "string",
+            "pattern": "^(female|male|diverse|prefer_not_to_say)$",
+            "title": "Gender"
+          }
+        },
+        "type": "object",
+        "required": [
+          "age",
+          "gender"
+        ],
+        "title": "UpdateUserBody"
+      },
       "UpsertSearchProfileBody": {
         "properties": {
           "price_min_eur": {
@@ -1432,11 +1724,32 @@
         "type": "object",
         "title": "UpsertSearchProfileBody"
       },
+      "UrgencyLevel": {
+        "type": "string",
+        "enum": [
+          "high",
+          "medium",
+          "low"
+        ],
+        "title": "UrgencyLevel"
+      },
       "UserDTO": {
         "properties": {
           "username": {
             "type": "string",
             "title": "Username"
+          },
+          "email": {
+            "anyOf": [
+              {
+                "type": "string",
+                "format": "email"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Email"
           },
           "age": {
             "type": "integer",
@@ -1484,6 +1797,13 @@
           "type": {
             "type": "string",
             "title": "Error Type"
+          },
+          "input": {
+            "title": "Input"
+          },
+          "ctx": {
+            "type": "object",
+            "title": "Context"
           }
         },
         "type": "object",

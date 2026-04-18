@@ -10,7 +10,6 @@ from pydantic import BaseModel, EmailStr, Field, model_validator
 from .models import (
     AgentAction,
     ComponentScore,
-    Hunt,
     Listing,
     NearbyPlace,
     PlaceLocation,
@@ -22,6 +21,7 @@ from .models import (
 
 class UserDTO(BaseModel):
     username: str
+    email: Optional[EmailStr] = None
     age: int
     gender: str
     created_at: datetime
@@ -29,11 +29,13 @@ class UserDTO(BaseModel):
 
 class CreateUserBody(BaseModel):
     username: str = Field(..., min_length=1, max_length=40)
+    email: Optional[EmailStr] = None
     age: int = Field(..., ge=16, le=99)
     gender: str = Field(..., pattern=r"^(female|male|diverse|prefer_not_to_say)$")
 
 
 class UpdateUserBody(BaseModel):
+    email: Optional[EmailStr] = None
     age: int = Field(..., ge=16, le=99)
     gender: str = Field(..., pattern=r"^(female|male|diverse|prefer_not_to_say)$")
 
@@ -88,11 +90,6 @@ class CredentialsStatusDTO(BaseModel):
     saved_at: Optional[datetime] = None
 
 
-class CreateHuntBody(BaseModel):
-    schedule: Literal["one_shot", "periodic"] = "one_shot"
-    rescan_interval_minutes: Optional[int] = Field(None, ge=5, le=1440)
-
-
 class ActionDTO(BaseModel):
     at: datetime
     kind: str
@@ -114,7 +111,7 @@ class ComponentDTO(BaseModel):
 
 class ListingDTO(BaseModel):
     id: str
-    hunt_id: str
+    username: Optional[str] = None
     url: str
     title: Optional[str] = None
     district: Optional[str] = None
@@ -145,13 +142,7 @@ class NearbyPlaceDTO(BaseModel):
     category: Optional[str] = None
 
 
-class HuntDTO(BaseModel):
-    id: str
-    username: Optional[str] = None
-    status: str
-    schedule: str
-    started_at: datetime
-    stopped_at: Optional[datetime] = None
+class UserMatchesDTO(BaseModel):
     listings: list[ListingDTO] = Field(default_factory=list)
     actions: list[ActionDTO] = Field(default_factory=list)
 
@@ -167,6 +158,7 @@ class ListingDetailDTO(BaseModel):
 def user_to_dto(u: UserProfile) -> UserDTO:
     return UserDTO(
         username=u.username,
+        email=u.email,
         age=u.age,
         gender=u.gender.value,
         created_at=u.created_at,
@@ -244,11 +236,11 @@ def nearby_place_to_dto(place: NearbyPlace) -> NearbyPlaceDTO:
     )
 
 
-def listing_to_dto(l: Listing, hunt_id: str) -> ListingDTO:
+def listing_to_dto(l: Listing, *, username: Optional[str] = None) -> ListingDTO:
     title = l.title if l.title else None
     return ListingDTO(
         id=l.id,
-        hunt_id=hunt_id,
+        username=username,
         url=str(l.url),
         title=title,
         district=l.district,
@@ -271,20 +263,3 @@ def listing_to_dto(l: Listing, hunt_id: str) -> ListingDTO:
     )
 
 
-def hunt_to_dto(
-    h: Hunt,
-    *,
-    username: Optional[str] = None,
-    schedule: Optional[str] = None,
-) -> HuntDTO:
-    sched = schedule if schedule is not None else h.requirements.schedule
-    return HuntDTO(
-        id=h.id,
-        username=username,
-        status=h.status.value,
-        schedule=sched,
-        started_at=h.started_at,
-        stopped_at=h.finished_at,
-        listings=[listing_to_dto(l, h.id) for l in h.listings],
-        actions=[action_to_dto(a) for a in h.actions],
-    )

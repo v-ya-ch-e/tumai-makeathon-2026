@@ -1,8 +1,8 @@
-"""HuntEngine / PeriodicHunter behavior (in-memory DB, mocked network + LLM).
+"""UserAgent / PeriodicUserMatcher behavior (in-memory DB, mocked network + LLM).
 
-Post-ADR-018 the matcher reads the global ListingRow pool and never calls
-`browser.anonymous_search`. Tests pre-seed the pool via `upsert_global_listing`
-before the matcher runs.
+Post-refactor the matcher is keyed by username and reads the shared
+`ListingRow` pool; it never calls `browser.anonymous_search`. Tests pre-seed
+the pool via `upsert_global_listing` before the matcher runs.
 """
 
 from __future__ import annotations
@@ -22,14 +22,12 @@ os.environ.setdefault("WG_SECRET_KEY", Fernet.generate_key().decode())
 sys.path.insert(0, str(pathlib.Path(__file__).resolve().parent.parent))
 
 from app.wg_agent import db as db_module, repo  # noqa: E402
-from app.wg_agent.db_models import HuntRow  # noqa: E402
-from app.wg_agent.db_models import ListingScoreRow  # noqa: E402
+from app.wg_agent.db_models import UserListingRow  # noqa: E402
 from app.wg_agent.evaluator import EvaluationResult  # noqa: E402
 from app.wg_agent.models import (  # noqa: E402
     ActionKind,
     ComponentScore,
     Gender,
-    HuntStatus,
     Listing,
     NearbyPlace,
     PlaceLocation,
@@ -37,7 +35,12 @@ from app.wg_agent.models import (  # noqa: E402
     SearchProfile,
     UserProfile,
 )
-from app.wg_agent.periodic import HuntEngine, PeriodicHunter  # noqa: E402
+from app.wg_agent.periodic import (  # noqa: E402
+    PeriodicUserMatcher,
+    UserAgent,
+    _ACTIVE_AGENTS,
+    _EVENT_QUEUES,
+)
 
 
 def _stub_result(score: float, summary: str = "ok") -> EvaluationResult:
@@ -79,7 +82,7 @@ def _seed_listings(
         )
 
 
-def _make_engine() -> tuple:
+def _make_engine():
     engine = create_engine(
         "sqlite://",
         connect_args={"check_same_thread": False},
@@ -88,7 +91,15 @@ def _make_engine() -> tuple:
     return engine
 
 
-def test_hunt_engine_scores_every_pool_listing_once(monkeypatch) -> None:
+def _seed_user(session: Session, username: str, sp: SearchProfile) -> None:
+    repo.create_user(
+        session,
+        profile=UserProfile(username=username, age=22, gender=Gender.female),
+    )
+    repo.upsert_search_profile(session, username=username, sp=sp)
+
+
+def test_user_agent_scores_every_pool_listing_once(monkeypatch) -> None:
     """Matcher scores each pool listing once; second pass adds no score rows."""
     engine = _make_engine()
     monkeypatch.setattr(db_module, "engine", engine)
@@ -101,22 +112,20 @@ def test_hunt_engine_scores_every_pool_listing_once(monkeypatch) -> None:
     search_spy = AsyncMock()
 
     with Session(engine) as session:
-        repo.create_user(
+        _seed_user(
             session,
-            profile=UserProfile(username="u1", age=22, gender=Gender.female),
+            "u1",
+            SearchProfile(
+                city="München",
+                max_rent_eur=900,
+                rescan_interval_minutes=30,
+                schedule="one_shot",
+            ),
         )
-        sp = SearchProfile(
-            city="München",
-            max_rent_eur=900,
-            rescan_interval_minutes=30,
-            schedule="one_shot",
-        )
-        repo.upsert_search_profile(session, username="u1", sp=sp)
-        hunt = repo.create_hunt(session, username="u1", schedule="one_shot")
         _seed_listings(session, ("a", "b", "c"))
 
     q: asyncio.Queue = asyncio.Queue()
-    he = HuntEngine(hunt.id, "u1", q)
+    agent = UserAgent("u1", q)
 
     with (
         patch(
@@ -131,17 +140,17 @@ def test_hunt_engine_scores_every_pool_listing_once(monkeypatch) -> None:
     ):
 
         async def run() -> None:
-            await he.run_find_only()
+            await agent.run_match_pass()
             # Second pass: no new listings since the last scrape, so no new scores.
-            await he.run_find_only()
+            await agent.run_match_pass()
 
         asyncio.run(run())
 
     search_spy.assert_not_called()
 
     with Session(engine) as session:
-        actions = repo.list_actions_for_hunt(session, hunt_id=hunt.id)
-        listings = repo.list_listings_for_hunt(session, hunt_id=hunt.id)
+        actions = repo.list_actions_for_user(session, username="u1")
+        listings = repo.list_user_listings(session, username="u1")
 
     new_listing_actions = [a for a in actions if a.kind == ActionKind.new_listing]
     assert len([a for a in actions if a.kind == ActionKind.search]) >= 2
@@ -150,7 +159,7 @@ def test_hunt_engine_scores_every_pool_listing_once(monkeypatch) -> None:
     assert len(listings) == 3
 
 
-def test_hunt_engine_sees_listings_added_between_passes(monkeypatch) -> None:
+def test_user_agent_sees_listings_added_between_passes(monkeypatch) -> None:
     """The rescan path picks up new global listings added between passes."""
     engine = _make_engine()
     monkeypatch.setattr(db_module, "engine", engine)
@@ -161,22 +170,20 @@ def test_hunt_engine_sees_listings_added_between_passes(monkeypatch) -> None:
         return _stub_result(0.6)
 
     with Session(engine) as session:
-        repo.create_user(
+        _seed_user(
             session,
-            profile=UserProfile(username="u1b", age=22, gender=Gender.female),
+            "u1b",
+            SearchProfile(
+                city="München",
+                max_rent_eur=900,
+                rescan_interval_minutes=30,
+                schedule="one_shot",
+            ),
         )
-        sp = SearchProfile(
-            city="München",
-            max_rent_eur=900,
-            rescan_interval_minutes=30,
-            schedule="one_shot",
-        )
-        repo.upsert_search_profile(session, username="u1b", sp=sp)
-        hunt = repo.create_hunt(session, username="u1b", schedule="one_shot")
         _seed_listings(session, ("a", "b"))
 
     q: asyncio.Queue = asyncio.Queue()
-    he = HuntEngine(hunt.id, "u1b", q)
+    agent = UserAgent("u1b", q)
 
     with patch(
         "app.wg_agent.periodic.evaluator.evaluate",
@@ -184,59 +191,76 @@ def test_hunt_engine_sees_listings_added_between_passes(monkeypatch) -> None:
     ):
 
         async def run() -> None:
-            await he.run_find_only()
+            await agent.run_match_pass()
             with Session(engine) as s:
                 _seed_listings(s, ("c", "d"))
-            await he.run_find_only()
+            await agent.run_match_pass()
 
         asyncio.run(run())
 
     with Session(engine) as session:
-        listings = repo.list_listings_for_hunt(session, hunt_id=hunt.id)
+        listings = repo.list_user_listings(session, username="u1b")
     assert {l.id for l in listings} == {"a", "b", "c", "d"}
 
 
-def test_periodic_hunter_runs_stop_correctly(monkeypatch) -> None:
-    """Empty pool → matcher runs, hunt finishes as done (one_shot)."""
+def test_periodic_user_matcher_cancels_cleanly(monkeypatch) -> None:
+    """Starting a `PeriodicUserMatcher` + cancelling must not bubble an
+    exception, and the registry entry must be cleared."""
     engine = _make_engine()
     monkeypatch.setattr(db_module, "engine", engine)
 
     with Session(engine) as session:
-        repo.create_user(
+        _seed_user(
             session,
-            profile=UserProfile(username="u2", age=24, gender=Gender.male),
+            "u-cancel",
+            SearchProfile(
+                city="München",
+                max_rent_eur=800,
+                rescan_interval_minutes=5,
+                schedule="periodic",
+            ),
         )
-        sp = SearchProfile(
-            city="München",
-            max_rent_eur=800,
-            rescan_interval_minutes=30,
-            schedule="one_shot",
+        _seed_listings(session, ("solo",))
+
+    started_event = asyncio.Event()
+
+    async def evaluate_stub(
+        _lst: Listing, _sp: SearchProfile, *, travel_times=None, nearby_places=None
+    ) -> EvaluationResult:
+        started_event.set()
+        return _stub_result(0.5)
+
+    async def scenario() -> None:
+        q: asyncio.Queue = asyncio.Queue()
+        matcher = PeriodicUserMatcher(
+            username="u-cancel",
+            event_queue=q,
+            interval_minutes=1,
         )
-        repo.upsert_search_profile(session, username="u2", sp=sp)
-        hunt = repo.create_hunt(session, username="u2", schedule="one_shot")
-        repo.update_hunt_status(session, hunt_id=hunt.id, status=HuntStatus.running)
+        task = asyncio.create_task(matcher.start())
+        _ACTIVE_AGENTS["u-cancel"] = task
+        _EVENT_QUEUES["u-cancel"] = q
+        try:
+            await asyncio.wait_for(started_event.wait(), timeout=2.0)
+            # Give the task a moment to finish the first pass and enter sleep.
+            await asyncio.sleep(0.05)
+            task.cancel()
+            try:
+                await task
+            except asyncio.CancelledError:
+                pass
+        finally:
+            _ACTIVE_AGENTS.pop("u-cancel", None)
+            _EVENT_QUEUES.pop("u-cancel", None)
 
-    q: asyncio.Queue = asyncio.Queue()
-    hunter = PeriodicHunter(
-        hunt.id,
-        "u2",
-        interval_minutes=0,
-        event_queue=q,
-        schedule="one_shot",
-    )
+    with patch(
+        "app.wg_agent.periodic.evaluator.evaluate",
+        new=AsyncMock(side_effect=evaluate_stub),
+    ):
+        asyncio.run(scenario())
 
-    async def run() -> None:
-        await hunter.start()
-
-    asyncio.run(run())
-
-    with Session(engine) as session:
-        hrow = session.get(HuntRow, hunt.id)
-        actions = repo.list_actions_for_hunt(session, hunt_id=hunt.id)
-
-    assert hrow is not None
-    assert hrow.status == HuntStatus.done.value
-    assert any(a.kind == ActionKind.done for a in actions)
+    assert "u-cancel" not in _ACTIVE_AGENTS
+    assert "u-cancel" not in _EVENT_QUEUES
 
 
 def test_commute_times_reach_evaluator_and_persist(monkeypatch) -> None:
@@ -258,25 +282,23 @@ def test_commute_times_reach_evaluator_and_persist(monkeypatch) -> None:
         return _stub_result(0.8)
 
     with Session(engine) as session:
-        repo.create_user(
+        _seed_user(
             session,
-            profile=UserProfile(username="u3", age=22, gender=Gender.female),
+            "u3",
+            SearchProfile(
+                city="München",
+                max_rent_eur=900,
+                main_locations=[tum],
+                has_bike=False,
+                has_car=False,
+                rescan_interval_minutes=30,
+                schedule="one_shot",
+            ),
         )
-        sp = SearchProfile(
-            city="München",
-            max_rent_eur=900,
-            main_locations=[tum],
-            has_bike=False,
-            has_car=False,
-            rescan_interval_minutes=30,
-            schedule="one_shot",
-        )
-        repo.upsert_search_profile(session, username="u3", sp=sp)
-        hunt = repo.create_hunt(session, username="u3", schedule="one_shot")
         _seed_listings(session, ("lst1",), lat=48.13, lng=11.50)
 
     q: asyncio.Queue = asyncio.Queue()
-    he = HuntEngine(hunt.id, "u3", q)
+    agent = UserAgent("u3", q)
 
     with (
         patch(
@@ -288,18 +310,18 @@ def test_commute_times_reach_evaluator_and_persist(monkeypatch) -> None:
             new=AsyncMock(side_effect=evaluate_capture),
         ),
     ):
-        asyncio.run(he.run_find_only())
+        asyncio.run(agent.run_match_pass())
 
     assert captured["travel_times"] == fake_matrix
 
     with Session(engine) as session:
-        score_row = session.get(ListingScoreRow, ("lst1", hunt.id))
-    assert score_row is not None
-    assert score_row.travel_minutes == {
+        match_row = session.get(UserListingRow, ("u3", "lst1"))
+    assert match_row is not None
+    assert match_row.travel_minutes == {
         "ChIJ_TUM": {"mode": "TRANSIT", "minutes": 18}
     }
     # The matcher stamps scored_against_scraped_at with the listing's scraped_at.
-    assert score_row.scored_against_scraped_at is not None
+    assert match_row.scored_against_scraped_at is not None
 
 
 def test_nearby_places_reach_evaluator_and_persist(monkeypatch) -> None:
@@ -326,23 +348,21 @@ def test_nearby_places_reach_evaluator_and_persist(monkeypatch) -> None:
         return _stub_result(0.7)
 
     with Session(engine) as session:
-        repo.create_user(
+        _seed_user(
             session,
-            profile=UserProfile(username="u-nearby", age=22, gender=Gender.female),
+            "u-nearby",
+            SearchProfile(
+                city="München",
+                max_rent_eur=900,
+                preferences=[PreferenceWeight(key="gym", weight=5)],
+                rescan_interval_minutes=30,
+                schedule="one_shot",
+            ),
         )
-        sp = SearchProfile(
-            city="München",
-            max_rent_eur=900,
-            preferences=[PreferenceWeight(key="gym", weight=5)],
-            rescan_interval_minutes=30,
-            schedule="one_shot",
-        )
-        repo.upsert_search_profile(session, username="u-nearby", sp=sp)
-        hunt = repo.create_hunt(session, username="u-nearby", schedule="one_shot")
         _seed_listings(session, ("lst-nearby",), lat=48.13, lng=11.50)
 
     q: asyncio.Queue = asyncio.Queue()
-    he = HuntEngine(hunt.id, "u-nearby", q)
+    agent = UserAgent("u-nearby", q)
 
     with (
         patch(
@@ -354,14 +374,14 @@ def test_nearby_places_reach_evaluator_and_persist(monkeypatch) -> None:
             new=AsyncMock(side_effect=evaluate_capture),
         ),
     ):
-        asyncio.run(he.run_find_only())
+        asyncio.run(agent.run_match_pass())
 
     assert captured["nearby_places"] == fake_nearby
 
     with Session(engine) as session:
-        score_row = session.get(ListingScoreRow, ("lst-nearby", hunt.id))
-    assert score_row is not None
-    assert score_row.nearby_places == [fake_nearby["gym"].model_dump(mode="json")]
+        match_row = session.get(UserListingRow, ("u-nearby", "lst-nearby"))
+    assert match_row is not None
+    assert match_row.nearby_places == [fake_nearby["gym"].model_dump(mode="json")]
 
 
 def test_commute_skipped_when_listing_lacks_coords(monkeypatch) -> None:
@@ -378,23 +398,21 @@ def test_commute_skipped_when_listing_lacks_coords(monkeypatch) -> None:
         return _stub_result(0.5, summary="no commute")
 
     with Session(engine) as session:
-        repo.create_user(
+        _seed_user(
             session,
-            profile=UserProfile(username="u4", age=22, gender=Gender.female),
+            "u4",
+            SearchProfile(
+                city="München",
+                max_rent_eur=900,
+                main_locations=[tum],
+                rescan_interval_minutes=30,
+                schedule="one_shot",
+            ),
         )
-        sp = SearchProfile(
-            city="München",
-            max_rent_eur=900,
-            main_locations=[tum],
-            rescan_interval_minutes=30,
-            schedule="one_shot",
-        )
-        repo.upsert_search_profile(session, username="u4", sp=sp)
-        hunt = repo.create_hunt(session, username="u4", schedule="one_shot")
         _seed_listings(session, ("lst2",))  # lat/lng default None
 
     q: asyncio.Queue = asyncio.Queue()
-    he = HuntEngine(hunt.id, "u4", q)
+    agent = UserAgent("u4", q)
     travel_mock = AsyncMock(return_value={})
 
     with (
@@ -404,11 +422,11 @@ def test_commute_skipped_when_listing_lacks_coords(monkeypatch) -> None:
             new=AsyncMock(side_effect=evaluate_stub),
         ),
     ):
-        asyncio.run(he.run_find_only())
+        asyncio.run(agent.run_match_pass())
 
     travel_mock.assert_not_called()
 
     with Session(engine) as session:
-        score_row = session.get(ListingScoreRow, ("lst2", hunt.id))
-    assert score_row is not None
-    assert score_row.travel_minutes is None
+        match_row = session.get(UserListingRow, ("u4", "lst2"))
+    assert match_row is not None
+    assert match_row.travel_minutes is None

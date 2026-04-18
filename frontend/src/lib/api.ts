@@ -2,10 +2,11 @@ import type {
   Action,
   CredentialsStatus,
   Gender,
-  Hunt,
+  Listing,
   ListingDetail,
-  Schedule,
   SearchProfile,
+  TimelineCategory,
+  TimelineItem,
   UpsertSearchProfileBody,
   User,
 } from '../types'
@@ -140,7 +141,7 @@ export async function createUser(body: {
   username: string
   age: number
   gender: Gender
-  notificationEmail: string | null
+  email: string | null
 }): Promise<User> {
   const data = await requestJson('/api/users', {
     method: 'POST',
@@ -164,7 +165,7 @@ export async function getUser(username: string): Promise<User | null> {
 
 export async function updateUser(
   username: string,
-  body: { age: number; gender: Gender; notificationEmail: string | null },
+  body: { age: number; gender: Gender; email: string | null },
 ): Promise<User> {
   const data = await requestJson(`/api/users/${encodeURIComponent(username)}`, {
     method: 'PUT',
@@ -250,45 +251,54 @@ export async function deleteCredentials(username: string): Promise<void> {
   }
 }
 
-export async function createHunt(
-  username: string,
-  body: { schedule: Schedule; rescanIntervalMinutes?: number },
-): Promise<Hunt> {
+export async function getUserListings(username: string): Promise<Listing[]> {
   const data = await requestJson(
-    `/api/users/${encodeURIComponent(username)}/hunts`,
-    {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify(toSnake(body)),
-    },
+    `/api/users/${encodeURIComponent(username)}/listings`,
   )
-  return data as Hunt
+  return data as Listing[]
 }
 
-export async function stopHunt(huntId: string): Promise<Hunt> {
-  const data = await requestJson(`/api/hunts/${encodeURIComponent(huntId)}/stop`, {
-    method: 'POST',
-  })
-  return data as Hunt
+export async function getUserActions(
+  username: string,
+  limit?: number,
+): Promise<Action[]> {
+  const q = new URLSearchParams()
+  if (limit !== undefined) {
+    q.set('limit', String(limit))
+  }
+  const suffix = q.toString() ? `?${q.toString()}` : ''
+  const data = await requestJson(
+    `/api/users/${encodeURIComponent(username)}/actions${suffix}`,
+  )
+  return data as Action[]
 }
 
-export async function getHunt(huntId: string): Promise<Hunt | null> {
-  const res = await fetch(`/api/hunts/${encodeURIComponent(huntId)}`, fetchDefaults)
-  const body = await readBody(res)
-  if (res.status === 404) {
-    return null
-  }
-  if (!res.ok) {
-    throw new ApiError(res.status, body, errorMessage(body))
-  }
-  return toCamel(body) as Hunt
+export async function getAgentStatus(username: string): Promise<{ running: boolean }> {
+  const data = await requestJson(
+    `/api/users/${encodeURIComponent(username)}/agent`,
+  )
+  return data as { running: boolean }
+}
+
+export async function startAgent(username: string): Promise<void> {
+  await requestJson(
+    `/api/users/${encodeURIComponent(username)}/agent/start`,
+    { method: 'POST' },
+  )
+}
+
+export async function pauseAgent(username: string): Promise<void> {
+  await requestJson(
+    `/api/users/${encodeURIComponent(username)}/agent/pause`,
+    { method: 'POST' },
+  )
 }
 
 export async function getListingDetail(
   listingId: string,
-  huntId: string,
+  username: string,
 ): Promise<ListingDetail | null> {
-  const q = new URLSearchParams({ hunt_id: huntId })
+  const q = new URLSearchParams({ username })
   const res = await fetch(
     `/api/listings/${encodeURIComponent(listingId)}?${q.toString()}`,
     fetchDefaults,
@@ -303,20 +313,30 @@ export async function getListingDetail(
   return toCamel(body) as ListingDetail
 }
 
-export function streamHunt(
-  huntId: string,
-  onEvent: (
-    a:
-      | Action
-      | { kind: 'stream-end'; status: string; at: string; summary?: string },
-  ) => void,
+export async function getTimelineItems(
+  category?: TimelineCategory,
+): Promise<TimelineItem[]> {
+  const q = new URLSearchParams()
+  if (category) {
+    q.set('category', category)
+  }
+  const suffix = q.toString() ? `?${q.toString()}` : ''
+  const data = await requestJson(`/api/deadline/timeline${suffix}`)
+  return data as TimelineItem[]
+}
+
+export function streamUser(
+  username: string,
+  onEvent: (action: Action) => void,
   onError?: (err: unknown) => void,
 ): () => void {
-  const es = new EventSource(`/api/hunts/${encodeURIComponent(huntId)}/stream`)
+  const es = new EventSource(
+    `/api/users/${encodeURIComponent(username)}/stream`,
+  )
   es.onmessage = (e) => {
     try {
       const raw = JSON.parse(e.data) as unknown
-      onEvent(toCamel(raw) as Action | { kind: 'stream-end'; status: string; at: string })
+      onEvent(toCamel(raw) as Action)
     } catch (err) {
       onError?.(err)
     }

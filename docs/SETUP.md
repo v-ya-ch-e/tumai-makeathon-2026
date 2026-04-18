@@ -39,7 +39,7 @@ Clone the repo and run the WG Hunter stack locally: FastAPI backend + background
    python -m playwright install chromium
    ```
 
-   Playwright is only required if you use cookie-based browser flows elsewhere; the v1 periodic hunter uses **httpx** only.
+   Playwright is only required if you use cookie-based browser flows elsewhere; the v1 scraper + per-user matcher loop uses **httpx** only.
 
 4. **Frontend**
 
@@ -57,7 +57,7 @@ Clone the repo and run the WG Hunter stack locally: FastAPI backend + background
    venv/bin/uvicorn app.main:app --reload
    ```
 
-   Open [http://127.0.0.1:8000/](http://127.0.0.1:8000/). On startup the app calls `db.init_db()` (which bootstraps any missing tables via `SQLModel.metadata.create_all`) and resumes hunts still marked `running` ([`main.py`](../backend/app/main.py), [`periodic.resume_running_hunts`](../backend/app/wg_agent/periodic.py)).
+   Open [http://127.0.0.1:8000/](http://127.0.0.1:8000/). On startup the app calls `db.init_db()` (which bootstraps any missing tables via `SQLModel.metadata.create_all`) and resumes per-user matcher agents for every user with a saved search profile ([`main.py`](../backend/app/main.py), [`periodic.resume_user_agents`](../backend/app/wg_agent/periodic.py)).
 
 6. **Run the scraper** — in a second terminal, from `backend/` (same `.env`):
 
@@ -101,7 +101,7 @@ The backend stores `SearchProfile.preferences` as `list[PreferenceWeight]` ([`Se
 2. Append one tile object to the relevant section in the `GROUPS` array: a unique snake_case `key`, a short `label`, and an SVG `path` inside the existing `Icon` wrapper (copy an existing tile's structure).
 3. Save, run `npm run dev` (or `npm run build` if you test against production-like static files).
 4. Walk through onboarding again; select the new tile and adjust its importance on the 1–5 slider. The `{key, weight}` pair is persisted via `PUT /api/users/{username}/search-profile`.
-5. Start a hunt from the dashboard. The evaluator's [`preference_fit`](../backend/app/wg_agent/evaluator.py) will see the new tile. If the `key` matches one of the structured booleans in `STRUCTURED_PREFERENCES` (e.g. `furnished`), it's resolved directly against the listing row. If it matches one of the Google Places-backed nearby-place categories in [`places.py`](../backend/app/wg_agent/places.py), the scorer uses the nearest real nearby place and its distance. Otherwise the evaluator substring-scans the listing description for the key plus any synonyms in `PREFERENCE_KEYWORDS`.
+5. Save the profile and the matcher agent will pick it up on its next pass. The evaluator's [`preference_fit`](../backend/app/wg_agent/evaluator.py) will see the new tile. If the `key` matches one of the structured booleans in `STRUCTURED_PREFERENCES` (e.g. `furnished`), it's resolved directly against the listing row. If it matches one of the Google Places-backed nearby-place categories in [`places.py`](../backend/app/wg_agent/places.py), the scorer uses the nearest real nearby place and its distance. Otherwise the evaluator substring-scans the listing description for the key plus any synonyms in `PREFERENCE_KEYWORDS`.
 6. **Optional polish**: if your new tile has German/English synonyms worth matching (e.g. `garden` → `garten`), add an entry to `PREFERENCE_KEYWORDS` in [`evaluator.py`](../backend/app/wg_agent/evaluator.py). Without it, only the bare key is matched.
 
 ### B. Tune a component curve (30 min, backend + test)
@@ -111,7 +111,7 @@ Every component in [`evaluator.py`](../backend/app/wg_agent/evaluator.py) is pur
 1. Edit the relevant component function in [`evaluator.py`](../backend/app/wg_agent/evaluator.py). Keep it pure — no I/O, no state.
 2. Run `cd backend && venv/bin/pytest tests/test_evaluator.py -k your_component` to see which boundary assertions break, and either update the curve or the test (match the existing table-driven style).
 3. Run the full suite: `venv/bin/pytest tests` — the targeted backend suite should stay green; parser fixture tests need the checked-in `backend/tests/fixtures/` HTML snapshots.
-4. Start a hunt and open the listing drawer — your change shows up immediately as a different bar height and updated `evidence` string.
+4. Open the listing drawer on the dashboard — your change shows up immediately as a different bar height and updated `evidence` string once the matcher has rescored the listing.
 
 ## Troubleshooting
 
@@ -127,7 +127,7 @@ Every component in [`evaluator.py`](../backend/app/wg_agent/evaluator.py) is pur
 
 - **503 on `/` with “frontend/dist/index.html not found”** — Run `npm run build` in `frontend/` so [`main.py`](../backend/app/main.py) can serve the SPA.
 
-- **Empty listing photos in the drawer** — [`repo.save_photos`](../backend/app/wg_agent/repo.py) exists but the v1 `HuntEngine` path does not populate `PhotoRow` yet; detail still returns listing fields and score from SQLite.
+- **Empty listing photos in the drawer** — [`repo.save_photos`](../backend/app/wg_agent/repo.py) is populated by the scraper container; when the scraper is offline or a listing hasn't been deep-scraped yet, the drawer still returns listing fields and the per-user match score from the DB with an empty photo list.
 
 - **"Vibe check skipped" in a component bar** — The vibe component degrades to `missing_data=True` when `brain.vibe_score` raises (no `OPENAI_API_KEY`, HTTP error, model returns invalid JSON). The rest of the scorecard still runs and the composite score is computed from the remaining components. Check the backend logs for `vibe_fit:` warnings to see the exact cause.
 

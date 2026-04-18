@@ -9,19 +9,17 @@ from typing import Optional
 
 from fastapi import APIRouter, Depends, HTTPException, Query, Response
 from fastapi.responses import StreamingResponse
-from pydantic import BaseModel, Field
 from sqlmodel import Session, select
 
 from . import periodic, repo
 from .db import engine, get_session
-from .db_models import HuntRow, ListingRow, ListingScoreRow, PhotoRow
+from .db_models import ListingRow, PhotoRow, UserListingRow
 from .dto import (
+    ActionDTO,
     ComponentDTO,
-    CreateHuntBody,
     CreateUserBody,
     CredentialsBody,
     CredentialsStatusDTO,
-    HuntDTO,
     ListingDetailDTO,
     ListingDTO,
     NearbyPlaceDTO,
@@ -30,190 +28,26 @@ from .dto import (
     UpsertSearchProfileBody,
     UserDTO,
     action_to_dto,
-    hunt_to_dto,
+    listing_to_dto,
     search_profile_to_dto,
     upsert_body_to_search_profile,
     user_to_dto,
 )
 from .models import (
-    ActionKind,
     AgentAction,
-    ContactInfo,
     Gender,
-    HuntStatus,
-    SearchProfile,
-    WGCredentials,
     UserProfile,
+    WGCredentials,
 )
 
 router = APIRouter(prefix="/api", tags=["wg-hunter"])
-
-CITY_CENTER_PLACE_ID = "munich_city_center"
-CITY_CENTER_LABEL = "City center"
-
-
-class HuntRequest(BaseModel):
-    """Top-level POST body that kicks off a hunt run."""
-
-    requirements: SearchProfile
-    credentials: WGCredentials
-    profile: ContactInfo
-    dry_run: bool = Field(
-        default=True,
-        description=(
-            "If True, the agent searches + scores + drafts messages but never actually "
-            "sends anything on wg-gesucht. Great for demos and safe by default."
-        ),
-    )
-    headless: bool = Field(
-        default=False,
-        description="If False, Playwright browser is visible — best for demos.",
-    )
 
 
 def _sse(data: dict) -> str:
     return f"data: {json.dumps(data)}\n\n"
 
 
-def _get_listing_detail(
-    session: Session, *, listing_id: str, hunt_id: str
-) -> Optional[ListingDetailDTO]:
-    row = session.get(ListingRow, listing_id)
-    if row is None:
-        return None
-    score_row = session.get(ListingScoreRow, (listing_id, hunt_id))
-    photo_rows = session.exec(
-        select(PhotoRow)
-        .where(PhotoRow.listing_id == listing_id)
-        .order_by(PhotoRow.ordinal)
-    ).all()
-    photos = [p.url for p in photo_rows]
-    score_val = score_row.score if score_row else None
-    reason = score_row.reason if score_row else None
-    match_reasons = list(score_row.match_reasons or []) if score_row else []
-    mismatch_reasons = list(score_row.mismatch_reasons or []) if score_row else []
-    components_dto = _components_dto_from_row(score_row)
-    veto_reason = score_row.veto_reason if score_row else None
-    listing_dto = ListingDTO(
-        id=row.id,
-        hunt_id=hunt_id,
-        url=row.url,
-        title=row.title,
-        district=row.district,
-        lat=row.lat,
-        lng=row.lng,
-        price_eur=row.price_eur,
-        size_m2=row.size_m2,
-        wg_size=row.wg_size,
-        available_from=row.available_from,
-        available_to=row.available_to,
-        description=row.description,
-        cover_photo_url=photos[0] if photos else None,
-        best_commute_minutes=_best_commute_minutes(score_row),
-        score=score_val,
-        score_reason=reason,
-        match_reasons=match_reasons,
-        mismatch_reasons=mismatch_reasons,
-        components=components_dto,
-        veto_reason=veto_reason,
-    )
-    travel_minutes_per_location = _travel_minutes_by_label(
-        session, hunt_id=hunt_id, score_row=score_row
-    )
-    nearby_preference_places = _nearby_places_from_row(score_row)
-    return ListingDetailDTO(
-        listing=listing_dto,
-        photos=photos,
-        score=score_val,
-        travel_minutes_per_location=travel_minutes_per_location,
-        nearby_preference_places=nearby_preference_places,
-    )
-
-
-def _components_dto_from_row(
-    score_row: Optional[ListingScoreRow],
-) -> list[ComponentDTO]:
-    """Rehydrate `components` JSON into DTOs for the listing drawer.
-
-    Pre-migration rows (no `components`) return []; the drawer then
-    falls back to the `score_reason` block.
-    """
-    if score_row is None or not score_row.components:
-        return []
-    out: list[ComponentDTO] = []
-    for raw in score_row.components:
-        if not isinstance(raw, dict):
-            continue
-        try:
-            out.append(ComponentDTO.model_validate(raw))
-        except Exception:  # noqa: BLE001
-            continue
-    return out
-
-
-def _travel_minutes_by_label(
-    session: Session,
-    *,
-    hunt_id: str,
-    score_row: Optional[ListingScoreRow],
-) -> Optional[dict[str, int]]:
-    """Convert the persisted `{place_id: {mode, minutes}}` blob into
-    `{label: minutes}` by looking up each place_id in the hunt's
-    SearchProfile.main_locations."""
-    if score_row is None or not score_row.travel_minutes:
-        return None
-    hunt_row = session.get(HuntRow, hunt_id)
-    if hunt_row is None:
-        return None
-    sp = repo.get_search_profile(session, username=hunt_row.username)
-    if sp is None:
-        return None
-    label_by_pid = {loc.place_id: loc.label for loc in sp.main_locations}
-    label_by_pid[CITY_CENTER_PLACE_ID] = CITY_CENTER_LABEL
-    out: dict[str, int] = {}
-    for place_id, entry in score_row.travel_minutes.items():
-        if not isinstance(entry, dict):
-            continue
-        minutes = entry.get("minutes")
-        if not isinstance(minutes, int):
-            continue
-        label = label_by_pid.get(place_id)
-        if label:
-            out[label] = minutes
-    return out or None
-
-
-def _best_commute_minutes(score_row: Optional[ListingScoreRow]) -> Optional[int]:
-    if score_row is None or not score_row.travel_minutes:
-        return None
-    best: Optional[int] = None
-    for place_id, entry in score_row.travel_minutes.items():
-        if place_id == CITY_CENTER_PLACE_ID:
-            continue
-        if not isinstance(entry, dict):
-            continue
-        minutes = entry.get("minutes")
-        if not isinstance(minutes, int):
-            continue
-        if best is None or minutes < best:
-            best = minutes
-    return best
-
-
-def _nearby_places_from_row(
-    score_row: Optional[ListingScoreRow],
-) -> list[NearbyPlaceDTO]:
-    if score_row is None or not score_row.nearby_places:
-        return []
-    out: list[NearbyPlaceDTO] = []
-    for raw in score_row.nearby_places:
-        if not isinstance(raw, dict):
-            continue
-        try:
-            out.append(NearbyPlaceDTO.model_validate(raw))
-        except Exception:  # noqa: BLE001
-            continue
-    return out
+# --- Users ------------------------------------------------------------------
 
 
 @router.post("/users", status_code=201, response_model=UserDTO)
@@ -223,10 +57,15 @@ def create_user(
 ) -> UserDTO:
     if repo.get_user(session, username=body.username) is not None:
         raise HTTPException(status_code=409, detail="Username already taken")
+    if body.email is not None:
+        existing_by_email = repo.get_user_by_email(session, email=str(body.email))
+        if existing_by_email is not None:
+            raise HTTPException(status_code=409, detail="Email already in use")
     profile = UserProfile(
         username=body.username,
         age=body.age,
         gender=Gender(body.gender),
+        email=body.email,
     )
     repo.create_user(session, profile=profile)
     return user_to_dto(profile)
@@ -249,11 +88,16 @@ def update_user(
     existing = repo.get_user(session, username=username)
     if existing is None:
         raise HTTPException(status_code=404, detail="User not found")
+    if body.email is not None:
+        conflict = repo.get_user_by_email(session, email=str(body.email))
+        if conflict is not None and conflict.username != username:
+            raise HTTPException(status_code=409, detail="Email already in use")
     updated = repo.update_user(
         session,
         username=username,
         profile=UserProfile(
             username=existing.username,
+            email=body.email,
             age=body.age,
             gender=Gender(body.gender),
             created_at=existing.created_at,
@@ -272,6 +116,10 @@ def put_search_profile(
         raise HTTPException(status_code=404, detail="User not found")
     sp = upsert_body_to_search_profile(body)
     out = repo.upsert_search_profile(session, username=username, sp=sp)
+    # Boot (or refresh) the per-user agent. spawn_user_agent is idempotent.
+    periodic.spawn_user_agent(
+        username, interval_minutes=body.rescan_interval_minutes
+    )
     return search_profile_to_dto(out)
 
 
@@ -331,100 +179,86 @@ def get_credentials_status(
     return CredentialsStatusDTO(connected=connected, saved_at=saved_at)
 
 
-@router.post("/users/{username}/hunts", status_code=201, response_model=HuntDTO)
-async def create_hunt(
-    username: str,
-    body: CreateHuntBody,
-    session: Session = Depends(get_session),
-) -> HuntDTO:
-    user = repo.get_user(session, username=username)
-    if user is None:
+# --- Agent control ---------------------------------------------------------
+
+
+@router.post("/users/{username}/agent/start", status_code=204)
+def start_agent(
+    username: str, session: Session = Depends(get_session)
+) -> Response:
+    if repo.get_user(session, username=username) is None:
         raise HTTPException(status_code=404, detail="User not found")
     sp = repo.get_search_profile(session, username=username)
     if sp is None:
         raise HTTPException(status_code=400, detail="User has no search profile yet")
-
-    hunt = repo.create_hunt(session, username=username, schedule=body.schedule)
-    repo.update_hunt_status(
-        session, hunt_id=hunt.id, status=HuntStatus.running
+    periodic.spawn_user_agent(
+        username, interval_minutes=sp.rescan_interval_minutes
     )
-    rescan = (
-        body.rescan_interval_minutes
-        if body.rescan_interval_minutes is not None
-        else sp.rescan_interval_minutes
-    )
-    boot = AgentAction(
-        kind=ActionKind.boot,
-        summary=f"Hunt queued ({body.schedule}).",
-    )
-    repo.append_action(session, hunt_id=hunt.id, action=boot)
-    periodic.spawn_hunter(
-        hunt.id,
-        username,
-        body.schedule,
-        rescan,
-    )
-    q = periodic.event_queue_for(hunt.id)
-    if q is not None:
-        try:
-            q.put_nowait(boot)
-        except asyncio.QueueFull:
-            pass
-    fresh = repo.get_hunt(session, hunt_id=hunt.id)
-    assert fresh is not None
-    return hunt_to_dto(fresh, username=username, schedule=body.schedule)
+    return Response(status_code=204)
 
 
-@router.post("/hunts/{hunt_id}/stop", response_model=HuntDTO)
-async def stop_hunt(hunt_id: str, session: Session = Depends(get_session)) -> HuntDTO:
-    row = session.get(HuntRow, hunt_id)
-    if row is None:
-        raise HTTPException(status_code=404, detail="Hunt not found")
-    periodic.cancel_hunter(hunt_id)
-    repo.update_hunt_status(
-        session,
-        hunt_id=hunt_id,
-        status=HuntStatus.done,
-        stopped_at=datetime.utcnow(),
-    )
-    repo.append_action(
-        session,
-        hunt_id=hunt_id,
-        action=AgentAction(kind=ActionKind.done, summary="Stopped by user"),
-    )
-    fresh = repo.get_hunt(session, hunt_id=hunt_id)
-    assert fresh is not None
-    return hunt_to_dto(fresh, username=row.username, schedule=row.schedule)
+@router.post("/users/{username}/agent/pause", status_code=204)
+def pause_agent(
+    username: str, session: Session = Depends(get_session)
+) -> Response:
+    if repo.get_user(session, username=username) is None:
+        raise HTTPException(status_code=404, detail="User not found")
+    periodic.cancel_user_agent(username)
+    return Response(status_code=204)
 
 
-@router.get("/hunts/{hunt_id}", response_model=HuntDTO)
-def get_hunt_by_id(hunt_id: str, session: Session = Depends(get_session)) -> HuntDTO:
-    row = session.get(HuntRow, hunt_id)
-    if row is None:
-        raise HTTPException(status_code=404, detail="Hunt not found")
-    h = repo.get_hunt(session, hunt_id=hunt_id)
-    if h is None:
-        raise HTTPException(status_code=404, detail="Hunt not found")
-    return hunt_to_dto(h, username=row.username, schedule=row.schedule)
+@router.get("/users/{username}/agent")
+def get_agent_status(
+    username: str, session: Session = Depends(get_session)
+) -> dict:
+    if repo.get_user(session, username=username) is None:
+        raise HTTPException(status_code=404, detail="User not found")
+    return {"running": periodic.is_agent_running(username)}
 
 
-@router.get("/hunts/{hunt_id}/stream")
-async def stream_hunt(
-    hunt_id: str, session: Session = Depends(get_session)
+# --- Listings, actions, stream --------------------------------------------
+
+
+@router.get("/users/{username}/listings", response_model=list[ListingDTO])
+def list_user_listings_endpoint(
+    username: str, session: Session = Depends(get_session)
+) -> list[ListingDTO]:
+    if repo.get_user(session, username=username) is None:
+        raise HTTPException(status_code=404, detail="User not found")
+    listings = repo.list_user_listings(session, username=username)
+    return [listing_to_dto(l, username=username) for l in listings]
+
+
+@router.get("/users/{username}/actions", response_model=list[ActionDTO])
+def list_user_actions_endpoint(
+    username: str,
+    limit: Optional[int] = Query(default=None, ge=1, le=10_000),
+    session: Session = Depends(get_session),
+) -> list[ActionDTO]:
+    if repo.get_user(session, username=username) is None:
+        raise HTTPException(status_code=404, detail="User not found")
+    actions = repo.list_actions_for_user(session, username=username, limit=limit)
+    return [action_to_dto(a) for a in actions]
+
+
+@router.get("/users/{username}/stream")
+async def stream_user_events(
+    username: str, session: Session = Depends(get_session)
 ) -> StreamingResponse:
-    hunt = repo.get_hunt(session, hunt_id=hunt_id)
-    if hunt is None:
-        raise HTTPException(status_code=404, detail="Hunt not found")
+    if repo.get_user(session, username=username) is None:
+        raise HTTPException(status_code=404, detail="User not found")
 
     async def event_source():
         seen: set[tuple[datetime, str, str]] = set()
-        for a in hunt.actions:
+        with Session(engine) as s:
+            initial = repo.list_actions_for_user(s, username=username)
+        for a in initial:
             seen.add((a.at, a.kind.value, a.summary))
             yield _sse(action_to_dto(a).model_dump(mode="json"))
 
         while True:
             action: AgentAction | None = None
-            queue = periodic.event_queue_for(hunt_id)
+            queue = periodic.event_queue_for(username)
             if queue is not None:
                 try:
                     action = await asyncio.wait_for(queue.get(), timeout=1.0)
@@ -440,36 +274,167 @@ async def stream_hunt(
                     yield _sse(action_to_dto(action).model_dump(mode="json"))
 
             with Session(engine) as s:
-                fresh = repo.get_hunt(s, hunt_id=hunt_id)
-            if fresh is None:
-                return
-            for a in fresh.actions:
+                fresh = repo.list_actions_for_user(s, username=username)
+            for a in fresh:
                 key = (a.at, a.kind.value, a.summary)
                 if key not in seen:
                     seen.add(key)
                     yield _sse(action_to_dto(a).model_dump(mode="json"))
-            if fresh.status in (HuntStatus.done, HuntStatus.failed):
-                yield _sse(
-                    {
-                        "kind": "stream-end",
-                        "status": fresh.status.value,
-                        "summary": "done",
-                        "at": datetime.utcnow().isoformat(),
-                    }
-                )
-                return
             yield ": keep-alive\n\n"
 
     return StreamingResponse(event_source(), media_type="text/event-stream")
 
 
+# --- Listing detail --------------------------------------------------------
+
+
 @router.get("/listings/{listing_id}", response_model=ListingDetailDTO)
 def get_listing_detail(
     listing_id: str,
-    hunt_id: str = Query(..., description="Hunt scope for composite listing key"),
+    username: str = Query(..., description="User scope for the listing match"),
     session: Session = Depends(get_session),
 ) -> ListingDetailDTO:
-    detail = _get_listing_detail(session, listing_id=listing_id, hunt_id=hunt_id)
+    detail = _get_listing_detail(session, listing_id=listing_id, username=username)
     if detail is None:
         raise HTTPException(status_code=404, detail="Listing not found")
     return detail
+
+
+# --- Helpers ---------------------------------------------------------------
+
+
+def _get_listing_detail(
+    session: Session, *, listing_id: str, username: str
+) -> Optional[ListingDetailDTO]:
+    row = session.get(ListingRow, listing_id)
+    if row is None:
+        return None
+    match_row = session.get(UserListingRow, (username, listing_id))
+    if match_row is None:
+        return None
+    photo_rows = session.exec(
+        select(PhotoRow)
+        .where(PhotoRow.listing_id == listing_id)
+        .order_by(PhotoRow.ordinal)
+    ).all()
+    photos = [p.url for p in photo_rows]
+    score_val = match_row.score
+    reason = match_row.reason
+    match_reasons = list(match_row.match_reasons or [])
+    mismatch_reasons = list(match_row.mismatch_reasons or [])
+    components_dto = _components_dto_from_row(match_row)
+    veto_reason = match_row.veto_reason
+    listing_dto = ListingDTO(
+        id=row.id,
+        username=username,
+        url=row.url,
+        title=row.title,
+        district=row.district,
+        lat=row.lat,
+        lng=row.lng,
+        price_eur=row.price_eur,
+        size_m2=row.size_m2,
+        wg_size=row.wg_size,
+        available_from=row.available_from,
+        available_to=row.available_to,
+        description=row.description,
+        cover_photo_url=photos[0] if photos else None,
+        best_commute_minutes=_best_commute_minutes(match_row),
+        score=score_val,
+        score_reason=reason,
+        match_reasons=match_reasons,
+        mismatch_reasons=mismatch_reasons,
+        components=components_dto,
+        veto_reason=veto_reason,
+    )
+    travel_minutes_per_location = _travel_minutes_by_label(
+        session, username=username, match_row=match_row
+    )
+    nearby_preference_places = _nearby_places_from_row(match_row)
+    return ListingDetailDTO(
+        listing=listing_dto,
+        photos=photos,
+        score=score_val,
+        travel_minutes_per_location=travel_minutes_per_location,
+        nearby_preference_places=nearby_preference_places,
+    )
+
+
+def _components_dto_from_row(
+    match_row: Optional[UserListingRow],
+) -> list[ComponentDTO]:
+    """Rehydrate `components` JSON into DTOs for the listing drawer.
+
+    Pre-migration rows (no `components`) return []; the drawer then
+    falls back to the `score_reason` block.
+    """
+    if match_row is None or not match_row.components:
+        return []
+    out: list[ComponentDTO] = []
+    for raw in match_row.components:
+        if not isinstance(raw, dict):
+            continue
+        try:
+            out.append(ComponentDTO.model_validate(raw))
+        except Exception:  # noqa: BLE001
+            continue
+    return out
+
+
+def _travel_minutes_by_label(
+    session: Session,
+    *,
+    username: str,
+    match_row: Optional[UserListingRow],
+) -> Optional[dict[str, int]]:
+    """Convert the persisted `{place_id: {mode, minutes}}` blob into
+    `{label: minutes}` by looking up each place_id in the user's
+    SearchProfile.main_locations."""
+    if match_row is None or not match_row.travel_minutes:
+        return None
+    sp = repo.get_search_profile(session, username=username)
+    if sp is None or not sp.main_locations:
+        return None
+    label_by_pid = {loc.place_id: loc.label for loc in sp.main_locations}
+    out: dict[str, int] = {}
+    for place_id, entry in match_row.travel_minutes.items():
+        if not isinstance(entry, dict):
+            continue
+        minutes = entry.get("minutes")
+        if not isinstance(minutes, int):
+            continue
+        label = label_by_pid.get(place_id)
+        if label:
+            out[label] = minutes
+    return out or None
+
+
+def _best_commute_minutes(match_row: Optional[UserListingRow]) -> Optional[int]:
+    if match_row is None or not match_row.travel_minutes:
+        return None
+    best: Optional[int] = None
+    for entry in match_row.travel_minutes.values():
+        if not isinstance(entry, dict):
+            continue
+        minutes = entry.get("minutes")
+        if not isinstance(minutes, int):
+            continue
+        if best is None or minutes < best:
+            best = minutes
+    return best
+
+
+def _nearby_places_from_row(
+    match_row: Optional[UserListingRow],
+) -> list[NearbyPlaceDTO]:
+    if match_row is None or not match_row.nearby_places:
+        return []
+    out: list[NearbyPlaceDTO] = []
+    for raw in match_row.nearby_places:
+        if not isinstance(raw, dict):
+            continue
+        try:
+            out.append(NearbyPlaceDTO.model_validate(raw))
+        except Exception:  # noqa: BLE001
+            continue
+    return out

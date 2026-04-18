@@ -3,12 +3,14 @@ export type Gender = 'female' | 'male' | 'diverse' | 'prefer_not_to_say'
 export type Mode = 'wg' | 'flat' | 'both'
 
 export type Schedule = 'one_shot' | 'periodic'
+export type TimelineCategory = 'deadline' | 'course' | 'sport' | 'event'
+export type UrgencyLevel = 'high' | 'medium' | 'low'
 
 export type User = {
   username: string
   age: number
   gender: Gender
-  notificationEmail: string | null
+  email: string | null
   createdAt: string
 }
 
@@ -49,8 +51,6 @@ export type CredentialsStatus = {
 
 export type AgentStatus = 'idle' | 'running' | 'rescanning' | 'error'
 
-export type HuntStatusBackend = 'pending' | 'running' | 'done' | 'failed'
-
 export type Action = {
   at: string
   kind: string
@@ -79,7 +79,7 @@ export type NearbyPlace = {
 
 export type Listing = {
   id: string
-  huntId: string
+  username: string | null
   url: string
   title: string | null
   district: string | null
@@ -102,21 +102,18 @@ export type Listing = {
   vetoReason: string | null
 }
 
-export type Hunt = {
-  id: string
-  username: string | null
-  status: HuntStatusBackend
-  schedule: Schedule
-  startedAt: string
-  stoppedAt: string | null
-  listings: Listing[]
-  actions: Action[]
-}
-
 export type ListingDetail = {
   listing: Listing
   photos: string[]
   score: number | null
   travelMinutesPerLocation: Record<string, number> | null
   nearbyPreferencePlaces: NearbyPlace[]
+}
+
+export type TimelineItem = {
+  title: string
+  date: string
+  source: string
+  category: TimelineCategory
+  urgency: UrgencyLevel
 }

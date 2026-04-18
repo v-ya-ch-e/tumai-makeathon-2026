@@ -24,19 +24,19 @@ type FieldErrors = {
   username?: string
   gender?: string
   age?: string
-  notificationEmail?: string
+  email?: string
   signInUsername?: string
 }
 
 export default function OnboardingProfile() {
   const navigate = useNavigate()
-  const { setUsername } = useSession()
+  const { setSession } = useSession()
 
   const [mode, setMode] = useState<Mode>('create')
   const [usernameInput, setUsernameInput] = useState('')
   const [gender, setGender] = useState<Gender | ''>('')
   const [ageInput, setAgeInput] = useState('')
-  const [notificationEmailInput, setNotificationEmailInput] = useState('')
+  const [emailInput, setEmailInput] = useState('')
   const [signInUsername, setSignInUsername] = useState('')
   const [busy, setBusy] = useState(false)
   const [footer, setFooter] = useState<ReactNode>(null)
@@ -71,9 +71,9 @@ export default function OnboardingProfile() {
       nextErrors.age = 'Age must be a whole number between 16 and 99.'
     }
 
-    const notificationEmail = notificationEmailInput.trim()
-    if (notificationEmail && !EMAIL_RE.test(notificationEmail)) {
-      nextErrors.notificationEmail = 'Enter a valid email address or leave it blank.'
+    const email = emailInput.trim()
+    if (email && !EMAIL_RE.test(email)) {
+      nextErrors.email = 'Enter a valid email address or leave it blank.'
     }
 
     setErrors(nextErrors)
@@ -81,13 +81,13 @@ export default function OnboardingProfile() {
 
     setBusy(true)
     try {
-      await createUser({
+      const user = await createUser({
         username,
         age,
         gender: gender as Gender,
-        notificationEmail: notificationEmail || null,
+        email: email || null,
       })
-      setUsername(username)
+      setSession(username, user)
       navigate('/onboarding/requirements', { replace: false })
     } catch (error) {
       if (error instanceof ApiError && error.status === 409) {
@@ -117,7 +117,7 @@ export default function OnboardingProfile() {
         setFooter(<p className="text-[15px] text-bad">No saved profile with that username exists yet.</p>)
         return
       }
-      setUsername(username)
+      setSession(username, user)
       navigate('/', { replace: true })
     } catch (error) {
       if (error instanceof ApiError) {
@@ -234,21 +234,21 @@ export default function OnboardingProfile() {
               <FieldRow
                 label="Notification email"
                 hint="Optional for now. It becomes useful once alerting is wired up."
-                error={errors.notificationEmail}
+                error={errors.email}
               >
                 <Input
                   id="onboarding-notification-email"
                   type="email"
-                  value={notificationEmailInput}
+                  value={emailInput}
                   onChange={(event) => {
-                    setNotificationEmailInput(event.target.value)
-                    if (errors.notificationEmail) {
-                      setErrors((prev) => ({ ...prev, notificationEmail: undefined }))
+                    setEmailInput(event.target.value)
+                    if (errors.email) {
+                      setErrors((prev) => ({ ...prev, email: undefined }))
                     }
                   }}
                   autoComplete="email"
-                  aria-invalid={Boolean(errors.notificationEmail)}
-                  placeholder="Enter your email here"
+                  aria-invalid={Boolean(errors.email)}
+                  placeholder="you@example.com"
                 />
               </FieldRow>
 
