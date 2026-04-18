@@ -1,16 +1,13 @@
-"""FastAPI router: endpoints + minimal HTML dashboard for the WG hunter agent."""
+"""FastAPI router: JSON + SSE endpoints for the WG hunter agent."""
 
 from __future__ import annotations
 
 import asyncio
 import json
 import logging
-from pathlib import Path
 
-from fastapi import APIRouter, HTTPException, Request
-from fastapi.responses import HTMLResponse, StreamingResponse
-from fastapi.staticfiles import StaticFiles
-from fastapi.templating import Jinja2Templates
+from fastapi import APIRouter, HTTPException
+from fastapi.responses import StreamingResponse
 from pydantic import BaseModel, Field
 
 from .models import ContactInfo, Hunt, HuntStatus, SearchProfile, WGCredentials
@@ -39,34 +36,12 @@ logger = logging.getLogger(__name__)
 
 router = APIRouter(prefix="/wg", tags=["wg-gesucht-agent"])
 
-HERE = Path(__file__).resolve().parent
-templates = Jinja2Templates(directory=str(HERE / "templates"))
-
 # In-memory registry of running hunts. For a real deployment this would be a
 # DB / Redis; for a hackathon demo a process-local dict is fine.
 RUNS: dict[str, Hunt] = {}
 ORCHESTRATORS: dict[str, HuntOrchestrator] = {}
 TASKS: dict[str, asyncio.Task] = {}
 
-
-# --- UI -----------------------------------------------------------------------
-
-@router.get("/", response_class=HTMLResponse)
-async def home(request: Request) -> HTMLResponse:
-    return templates.TemplateResponse(
-        request, "home.html", {"runs": list(RUNS.values())[-10:]}
-    )
-
-
-@router.get("/runs/{run_id}", response_class=HTMLResponse)
-async def run_page(request: Request, run_id: str) -> HTMLResponse:
-    run = RUNS.get(run_id)
-    if run is None:
-        raise HTTPException(status_code=404, detail="Run not found")
-    return templates.TemplateResponse(request, "run.html", {"run": run})
-
-
-# --- REST ---------------------------------------------------------------------
 
 @router.post("/hunt", response_model=Hunt)
 async def start_hunt(payload: HuntRequest) -> Hunt:
@@ -126,10 +101,3 @@ async def stream_hunt(run_id: str) -> StreamingResponse:
 
 def _sse(data: dict) -> str:
     return f"data: {json.dumps(data)}\n\n"
-
-
-def mount_static(app) -> None:
-    """Mount /wg/static to serve the (tiny) CSS/JS bundle."""
-    static_dir = HERE / "static"
-    static_dir.mkdir(exist_ok=True)
-    app.mount("/wg/static", StaticFiles(directory=str(static_dir)), name="wg-static")

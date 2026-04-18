@@ -1,13 +1,20 @@
-from fastapi import FastAPI
-from fastapi.responses import RedirectResponse
-from pydantic import BaseModel
+from pathlib import Path
 from typing import Optional
 
-from .wg_agent.api import mount_static, router as wg_router
+from fastapi import FastAPI, HTTPException
+from fastapi.responses import FileResponse
+from fastapi.staticfiles import StaticFiles
+from pydantic import BaseModel
+
+from .wg_agent.api import router as wg_router
+
+# frontend/dist/ is built by `npm run build` in the frontend/ directory.
+# Path resolution: backend/app/main.py -> repo-root/frontend/dist
+REPO_ROOT = Path(__file__).resolve().parents[2]
+FRONTEND_DIST = REPO_ROOT / "frontend" / "dist"
 
 app = FastAPI(title="TUM.ai Campus Co-Pilot · WG Hunter")
 app.include_router(wg_router)
-mount_static(app)
 
 
 class Item(BaseModel):
@@ -16,18 +23,13 @@ class Item(BaseModel):
     is_offer: Optional[bool] = None
 
 
-@app.get("/")
-def read_root():
-    return RedirectResponse(url="/wg/")
-
-
 @app.get("/health")
-def healthz():
+def healthz() -> dict[str, str]:
     return {"status": "ok"}
 
 
 @app.get("/api/health")
-def api_healthz():
+def api_healthz() -> dict[str, str]:
     return {"status": "ok"}
 
 
@@ -39,3 +41,29 @@ def read_item(item_id: int, q: Optional[str] = None):
 @app.put("/items/{item_id}")
 def update_item(item_id: int, item: Item):
     return {"item_name": item.name, "item_id": item_id}
+
+
+# --- SPA serving -------------------------------------------------------------
+# Vite's `npm run build` emits `frontend/dist/{index.html, assets/…}`.
+# /assets/ is served verbatim; every non-/api/* path falls back to
+# index.html so client-side React Router can handle it.
+
+if (FRONTEND_DIST / "assets").is_dir():
+    app.mount(
+        "/assets",
+        StaticFiles(directory=str(FRONTEND_DIST / "assets")),
+        name="frontend-assets",
+    )
+
+
+@app.get("/{full_path:path}", include_in_schema=False)
+def spa_fallback(full_path: str) -> FileResponse:
+    if full_path.startswith(("api/", "wg/", "assets/")):
+        raise HTTPException(status_code=404, detail="Not Found")
+    index_file = FRONTEND_DIST / "index.html"
+    if not index_file.is_file():
+        raise HTTPException(
+            status_code=503,
+            detail="frontend/dist/index.html not found — run `npm run build` in frontend/",
+        )
+    return FileResponse(str(index_file))

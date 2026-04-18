@@ -13,7 +13,7 @@ The agent:
    - confirms the viewing slot when the landlord proposes one, or
    - answers any questions the landlord asks, or
    - drops already-rented listings.
-6. Streams every action to a live dashboard at `/wg/`.
+6. Streams every action to the React dashboard served from `frontend/dist/`.
 
 See [`app/wg_agent/WG_GESUCHT.md`](app/wg_agent/WG_GESUCHT.md) for the playbook
 that grounds the scraper/selector choices.
@@ -31,10 +31,16 @@ python -m playwright install chromium
 cp ../.env.example .env
 #  → edit .env and fill in OPENAI_API_KEY (and optionally WG_STATE_FILE)
 
-# 3. Run the server
+# 3. Build the frontend (once; re-run after UI changes)
+(cd ../frontend && npm install && npm run build)
+
+# 4. Run the server
 uvicorn app.main:app --reload
-# open http://127.0.0.1:8000/wg/
+# open http://127.0.0.1:8000/
 ```
+
+For active frontend development, run `npm run dev` in `frontend/` alongside
+the backend — Vite proxies `/api` to `127.0.0.1:8000`.
 
 ## Environment variables
 
@@ -74,14 +80,13 @@ field on the home page.
 
 ## API endpoints
 
-| Method | Path                     | Description                                              |
-| ------ | ------------------------ | -------------------------------------------------------- |
-| `GET`  | `/wg/`                   | Dashboard: form to start a new hunt + list of recent runs. |
-| `POST` | `/wg/hunt`               | Kick off a new hunt. Body: `HuntRequest` (see `api.py`). |
-| `GET`  | `/wg/hunt/{run_id}`      | JSON state of a hunt (listings, messages, action log).  |
-| `GET`  | `/wg/hunt/{run_id}/stream` | Server-Sent Events stream of live agent actions.        |
-| `GET`  | `/wg/runs/{run_id}`      | Rendered HTML view of a hunt.                           |
-| `GET`  | `/health`                | Readiness check.                                        |
+| Method | Path                       | Description                                                    |
+| ------ | -------------------------- | -------------------------------------------------------------- |
+| `POST` | `/wg/hunt`                 | Kick off a new hunt. Body: `HuntRequest` (see `api.py`).       |
+| `GET`  | `/wg/hunt/{run_id}`        | JSON state of a hunt (listings, messages, action log).         |
+| `GET`  | `/wg/hunt/{run_id}/stream` | Server-Sent Events stream of live agent actions.               |
+| `GET`  | `/health`, `/api/health`   | Readiness check.                                               |
+| `GET`  | `/`, `/<anything>`         | Serves `frontend/dist/index.html` (SPA fallback).              |
 
 ## Tests
 
@@ -102,7 +107,7 @@ so the agent is configured for safe, low-volume demonstration use only:
 - At most `max_messages_to_send=5` per run.
 - 35-second pace between outbound messages.
 - Inbox polled every 45 s for max 8 minutes.
-- Every action is logged and streamed to the dashboard.
+- Every action is logged and streamed to the React dashboard.
 
 ## File layout
 
@@ -116,9 +121,7 @@ backend/
 │       ├── browser.py           # Playwright driver + BeautifulSoup parsers
 │       ├── brain.py             # OpenAI: score / draft / classify / reply
 │       ├── orchestrator.py      # The agent loop + action log
-│       ├── api.py               # FastAPI router + SSE stream
-│       ├── templates/           # Jinja2 (home + run)
-│       └── static/              # CSS + tiny JS
+│       └── api.py               # FastAPI router + SSE stream
 └── tests/
     ├── test_wg_parser.py
     └── test_orchestrator.py
