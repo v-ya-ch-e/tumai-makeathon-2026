@@ -30,6 +30,7 @@ _cache: dict[str, Optional[NearbyPlace]] = {}
 
 # Maps UI preference keys to Google Places types. These are the
 # preferences that can be grounded in real nearby places.
+# a
 PREFERENCE_PLACE_CATEGORIES: dict[str, tuple[str, tuple[str, ...], Optional[str]]] = {
     "supermarket": ("Supermarket", ("supermarket"), None),
     "gym": ("Gym", ("gym"), None),
