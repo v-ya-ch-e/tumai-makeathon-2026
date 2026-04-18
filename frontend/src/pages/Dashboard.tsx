@@ -296,6 +296,7 @@ export default function Dashboard() {
             current="/dashboard"
             tabs={[
               { label: 'Dashboard', href: '/dashboard' },
+              { label: 'Timeline', href: '/timeline' },
               { label: 'Profile', href: '/profile' },
             ]}
           />
