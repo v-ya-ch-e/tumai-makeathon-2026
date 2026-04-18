@@ -24,26 +24,32 @@ logger = logging.getLogger(__name__)
 NEARBY_URL = "https://places.googleapis.com/v1/places:searchNearby"
 TEXT_URL = "https://places.googleapis.com/v1/places:searchText"
 SEARCH_RADIUS_M = 2000
+PARK_RADIUS_M = 5000  # parks can be large; wider radius to catch Englischer Garten etc.
 _TIMEOUT = httpx.Timeout(4.0, connect=3.0)
 _CACHE_LIMIT = 4096
 _cache: dict[str, Optional[NearbyPlace]] = {}
 
-# Maps UI preference keys to Google Places types. These are the
-# preferences that can be grounded in real nearby places.
-# a
-PREFERENCE_PLACE_CATEGORIES: dict[str, tuple[str, tuple[str, ...], Optional[str]]] = {
-    "supermarket": ("Supermarket", ("supermarket"), None),
-    "gym": ("Gym", ("gym"), None),
-    "park": ("Park", ("park",), None),
-    "cafe": ("Cafe", ("cafe", "coffee_shop"), None),
-    "bars": ("Bars", ("bar", "pub"), None),
-    "library": ("Library", ("library",), None),
-    "coworking": ("Coworking", tuple(), "coworking space"),
-    "nightlife": ("Nightlife", ("night_club", "bar", "pub"), None),
-    "green_space": ("Green space", ("park", "garden", "national_park"), None),
+# Maps UI preference keys to (label, primary_types, text_query, radius_override).
+# - primary_types: used with searchNearby as `includedPrimaryTypes` — only places
+#   whose *primary* Google type matches are returned. This prevents false positives
+#   (e.g. gas stations that carry "supermarket" as a secondary type, or indoor
+#   atriums tagged as secondary "park"). Empty tuple → use text_query instead.
+# - text_query: for searchText when type-based search is insufficient.
+# - radius_override: search radius in metres; None → SEARCH_RADIUS_M.
+PREFERENCE_PLACE_CATEGORIES: dict[str, tuple[str, tuple[str, ...], Optional[str], Optional[int]]] = {
+    "supermarket": ("Supermarket", ("supermarket", "grocery_store"), None, None),
+    "gym": ("Gym", ("gym",), None, None),
+    "park": ("Park", ("park", "national_park"), None, PARK_RADIUS_M),
+    "cafe": ("Cafe", ("cafe", "coffee_shop"), None, None),
+    "bars": ("Bars", ("bar", "pub"), None, None),
+    "library": ("Library", ("library",), None, None),
+    "coworking": ("Coworking", tuple(), "coworking space", None),
+    "nightlife": ("Nightlife", ("night_club", "bar", "pub"), None, None),
+    "green_space": ("Green space", ("park", "national_park"), None, PARK_RADIUS_M),
     "public_transport": (
         "Public transport",
         ("transit_station", "subway_station", "train_station", "bus_station"),
+        None,
         None,
     ),
 }
@@ -57,7 +63,7 @@ def _placeholder(key: str, *, searched: bool) -> Optional[NearbyPlace]:
     spec = PREFERENCE_PLACE_CATEGORIES.get(key)
     if spec is None:
         return None
-    label, _categories, _text_query = spec
+    label, _primary_types, _text_query, _radius = spec
     return NearbyPlace(key=key, label=label, searched=searched)
 
 
@@ -86,7 +92,8 @@ async def _fetch_one(
     spec = PREFERENCE_PLACE_CATEGORIES.get(key)
     if spec is None:
         return None
-    label, categories, text_query = spec
+    label, primary_types, text_query, radius_override = spec
+    radius = radius_override if radius_override is not None else SEARCH_RADIUS_M
     lat, lng = origin
     headers = {
         "Content-Type": "application/json",
@@ -102,20 +109,23 @@ async def _fetch_one(
             "locationBias": {
                 "circle": {
                     "center": {"latitude": lat, "longitude": lng},
-                    "radius": float(SEARCH_RADIUS_M),
+                    "radius": float(radius),
                 }
             },
         }
     else:
         url = NEARBY_URL
+        # includedPrimaryTypes (not includedTypes) restricts to places whose
+        # *primary* Google type matches — this prevents secondary-type false
+        # positives such as gas stations tagged as secondary "supermarket".
         body = {
-            "includedTypes": list(categories),
+            "includedPrimaryTypes": list(primary_types),
             "maxResultCount": 1,
             "rankPreference": "DISTANCE",
             "locationRestriction": {
                 "circle": {
                     "center": {"latitude": lat, "longitude": lng},
-                    "radius": float(SEARCH_RADIUS_M),
+                    "radius": float(radius),
                 }
             },
         }
@@ -141,6 +151,7 @@ async def _fetch_one(
     place = results[0]
     if not isinstance(place, dict):
         return NearbyPlace(key=key, label=label, searched=True)
+
     display_name = place.get("displayName") or {}
     location = place.get("location") or {}
     category = place.get("primaryType")
@@ -151,7 +162,7 @@ async def _fetch_one(
         location.get("latitude"),
         location.get("longitude"),
     )
-    if distance_m is not None and distance_m > SEARCH_RADIUS_M:
+    if distance_m is not None and distance_m > radius:
         return NearbyPlace(key=key, label=label, searched=True)
     return NearbyPlace(
         key=key,

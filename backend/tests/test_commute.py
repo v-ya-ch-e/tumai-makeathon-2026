@@ -176,6 +176,79 @@ def test_travel_times_skips_unreachable_pairs(monkeypatch) -> None:
     assert out == {("ChIJ_TUM", "DRIVE"): 900}
 
 
+def test_next_9am_weekday_ts_is_future_weekday_at_9am() -> None:
+    import datetime, zoneinfo
+
+    ts = commute._next_9am_weekday_ts()
+    dt = datetime.datetime.fromtimestamp(ts, tz=zoneinfo.ZoneInfo("Europe/Berlin"))
+    now = datetime.datetime.now(tz=zoneinfo.ZoneInfo("Europe/Berlin"))
+
+    assert dt > now, "departure_time must be in the future"
+    assert dt.hour == 9 and dt.minute == 0 and dt.second == 0, "must be at 09:00:00"
+    assert dt.weekday() < 5, "must be a weekday (Mon–Fri)"
+
+
+def test_departure_time_set_for_drive_and_transit(monkeypatch) -> None:
+    monkeypatch.setenv("GOOGLE_MAPS_SERVER_KEY", "fake-key")
+    # Grasmaierstraße 25d, 80805 München — used as the listing origin
+    origin = (48.1769, 11.5838)
+
+    captured_params: list[dict] = []
+
+    async def fake_get(self, url, params=None):  # noqa: A002
+        captured_params.append(dict(params or {}))
+        return _matrix_response(
+            {"status": "OK", "rows": [{"elements": [{"status": "OK", "duration": {"value": 900}}]}]}
+        )
+
+    with patch.object(httpx.AsyncClient, "get", new=fake_get):
+        asyncio.run(
+            commute.travel_times(
+                origin=origin,
+                destinations=[_destinations()[0]],
+                modes=["DRIVE", "TRANSIT", "BICYCLE"],
+            )
+        )
+
+    by_mode = {p["mode"]: p for p in captured_params}
+    assert "departure_time" in by_mode["driving"], "DRIVE must send departure_time"
+    assert "departure_time" in by_mode["transit"], "TRANSIT must send departure_time"
+    assert "departure_time" not in by_mode["bicycling"], "BICYCLE must NOT send departure_time"
+
+    # departure_time must be an integer Unix timestamp, not the string "now"
+    assert isinstance(by_mode["driving"]["departure_time"], int)
+    assert isinstance(by_mode["transit"]["departure_time"], int)
+
+
+def test_departure_time_is_future_9am(monkeypatch) -> None:
+    import datetime, zoneinfo
+
+    monkeypatch.setenv("GOOGLE_MAPS_SERVER_KEY", "fake-key")
+    origin = (48.1769, 11.5838)
+
+    captured_params: list[dict] = []
+
+    async def fake_get(self, url, params=None):  # noqa: A002
+        captured_params.append(dict(params or {}))
+        return _matrix_response(
+            {"status": "OK", "rows": [{"elements": [{"status": "OK", "duration": {"value": 600}}]}]}
+        )
+
+    with patch.object(httpx.AsyncClient, "get", new=fake_get):
+        asyncio.run(
+            commute.travel_times(
+                origin=origin,
+                destinations=[_destinations()[0]],
+                modes=["TRANSIT"],
+            )
+        )
+
+    ts = captured_params[0]["departure_time"]
+    dt = datetime.datetime.fromtimestamp(ts, tz=zoneinfo.ZoneInfo("Europe/Berlin"))
+    assert dt.hour == 9
+    assert dt.weekday() < 5
+
+
 def test_modes_for_always_includes_transit() -> None:
     sp = SearchProfile(city="München", max_rent_eur=900, has_bike=False, has_car=False)
     assert commute.modes_for(sp) == ["TRANSIT"]

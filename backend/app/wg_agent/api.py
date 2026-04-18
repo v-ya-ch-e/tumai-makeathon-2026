@@ -362,6 +362,10 @@ def _get_listing_detail(
     mismatch_reasons = [normalize_score_text(item) or "" for item in (match_row.mismatch_reasons or [])]
     components_dto = _components_dto_from_row(match_row)
     veto_reason = match_row.veto_reason
+    travel_minutes_per_location = _travel_minutes_by_label(
+        session, username=username, match_row=match_row
+    )
+    best_minutes, best_label, best_mode = _best_from_per_location(travel_minutes_per_location)
     listing_dto = ListingDTO(
         id=row.id,
         username=username,
@@ -378,16 +382,15 @@ def _get_listing_detail(
         available_to=row.available_to,
         description=row.description,
         cover_photo_url=photos[0] if photos else None,
-        best_commute_minutes=_best_commute_minutes(match_row),
+        best_commute_minutes=best_minutes,
+        best_commute_label=best_label,
+        best_commute_mode=best_mode,
         score=score_val,
         score_reason=reason,
         match_reasons=match_reasons,
         mismatch_reasons=mismatch_reasons,
         components=components_dto,
         veto_reason=veto_reason,
-    )
-    travel_minutes_per_location = _travel_minutes_by_label(
-        session, username=username, match_row=match_row
     )
     nearby_preference_places = _nearby_places_from_row(match_row)
     return ListingDetailDTO(
@@ -427,43 +430,54 @@ def _travel_minutes_by_label(
     *,
     username: str,
     match_row: Optional[UserListingRow],
-) -> Optional[dict[str, dict[str, str | int]]]:
-    """Convert the persisted `{place_id: {mode, minutes}}` blob into
-    `{label: {mode, minutes}}` by looking up each place_id in the user's
-    SearchProfile.main_locations."""
+) -> Optional[dict[str, dict[str, int]]]:
+    """Convert the persisted per-location blob into `{label: {mode: minutes}}`.
+
+    Handles two storage formats:
+    - new: {place_id: {transit: 27, bicycle: 16, drive: 13}}
+    - old: {place_id: {mode: "transit", minutes: 27}}
+    """
     if match_row is None or not match_row.travel_minutes:
         return None
     sp = repo.get_search_profile(session, username=username)
     if sp is None or not sp.main_locations:
         return None
     label_by_pid = {loc.place_id: loc.label for loc in sp.main_locations}
-    out: dict[str, dict[str, str | int]] = {}
+    out: dict[str, dict[str, int]] = {}
     for place_id, entry in match_row.travel_minutes.items():
         if not isinstance(entry, dict):
             continue
-        minutes = entry.get("minutes")
-        mode = entry.get("mode")
-        if not isinstance(minutes, int) or not isinstance(mode, str):
-            continue
         label = label_by_pid.get(place_id)
-        if label:
-            out[label] = {"minutes": minutes, "mode": mode}
+        if not label:
+            continue
+        if "minutes" in entry:
+            # old format: {mode: "transit", minutes: 27}
+            minutes = entry.get("minutes")
+            mode = entry.get("mode")
+            if isinstance(minutes, int) and isinstance(mode, str):
+                out[label] = {mode.lower(): minutes}
+        else:
+            # new format: {transit: 27, bicycle: 16, drive: 13}
+            modes = {k: v for k, v in entry.items() if isinstance(v, int)}
+            if modes:
+                out[label] = modes
     return out or None
 
 
-def _best_commute_minutes(match_row: Optional[UserListingRow]) -> Optional[int]:
-    if match_row is None or not match_row.travel_minutes:
-        return None
-    best: Optional[int] = None
-    for entry in match_row.travel_minutes.values():
-        if not isinstance(entry, dict):
-            continue
-        minutes = entry.get("minutes")
-        if not isinstance(minutes, int):
-            continue
-        if best is None or minutes < best:
-            best = minutes
-    return best
+def _best_from_per_location(
+    per_location: Optional[dict[str, dict[str, int]]],
+) -> tuple[Optional[int], Optional[str], Optional[str]]:
+    """Return (best_minutes, best_label, best_mode) across all locations."""
+    if not per_location:
+        return None, None, None
+    best_minutes: Optional[int] = None
+    best_label: Optional[str] = None
+    best_mode: Optional[str] = None
+    for label, modes in per_location.items():
+        for mode, minutes in modes.items():
+            if best_minutes is None or minutes < best_minutes:
+                best_minutes, best_label, best_mode = minutes, label, mode
+    return best_minutes, best_label, best_mode
 
 
 def _nearby_places_from_row(

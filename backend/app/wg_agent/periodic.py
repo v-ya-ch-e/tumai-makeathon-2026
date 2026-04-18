@@ -99,21 +99,22 @@ def _try_flush_digest(username: str, to_email: Optional[str]) -> int:
     return 0
 
 
-def _shortest_mode_min_per_location(
+def _all_modes_min_per_location(
     travel_times: dict[tuple[str, str], int],
-) -> dict[str, dict[str, object]]:
-    """Pick the fastest `(mode, minutes)` per place_id for drawer display."""
-    best: dict[str, tuple[str, int]] = {}
+) -> dict[str, dict[str, int]]:
+    """Collect all computed travel modes per place_id for drawer display.
+
+    Returns {place_id: {mode_lower: minutes, ...}} so the drawer can show
+    transit, bicycle, and drive side-by-side instead of only the fastest.
+    """
+    out: dict[str, dict[str, int]] = {}
     for (place_id, mode), seconds in travel_times.items():
-        minutes = round(seconds / 60)
-        current = best.get(place_id)
-        if current is None or minutes < current[1]:
-            best[place_id] = (mode, minutes)
-    return {pid: {"mode": mode, "minutes": minutes} for pid, (mode, minutes) in best.items()}
+        out.setdefault(place_id, {})[mode.lower()] = round(seconds / 60)
+    return out
 
 
 def _evaluate_detail(
-    travel_minutes: dict[str, dict[str, object]],
+    travel_minutes: dict[str, dict[str, int | object]],
     main_locations: list,
 ) -> Optional[str]:
     """Human-readable fastest-mode summary for the evaluate action's `detail`."""
@@ -122,13 +123,22 @@ def _evaluate_detail(
     parts: list[str] = []
     for loc in main_locations:
         entry = travel_minutes.get(loc.place_id)
-        if not entry:
+        if not entry or not isinstance(entry, dict):
             continue
-        mode = str(entry.get("mode", "")).lower() or "?"
-        minutes = entry.get("minutes")
-        if not isinstance(minutes, int):
-            continue
-        parts.append(f"{loc.label}: {minutes} min ({mode})")
+        if "minutes" in entry:
+            # old format: {mode: "transit", minutes: 27}
+            minutes = entry.get("minutes")
+            mode = str(entry.get("mode", "?")).lower()
+            if not isinstance(minutes, int):
+                continue
+            parts.append(f"{loc.label}: {minutes} min ({mode})")
+        else:
+            # new format: {transit: 27, bicycle: 16, drive: 13}
+            int_vals = {k: v for k, v in entry.items() if isinstance(v, int)}
+            if not int_vals:
+                continue
+            best_mode = min(int_vals, key=lambda k: int_vals[k])
+            parts.append(f"{loc.label}: {int_vals[best_mode]} min ({best_mode})")
     return "; ".join(parts) or None
 
 
@@ -299,7 +309,7 @@ class UserAgent:
                 continue
 
             travel_minutes = (
-                _shortest_mode_min_per_location(travel_times) if travel_times else None
+                _all_modes_min_per_location(travel_times) if travel_times else None
             )
             with Session(db_module.engine) as session:
                 repo.save_user_match(

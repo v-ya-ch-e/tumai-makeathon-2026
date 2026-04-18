@@ -13,8 +13,10 @@ the dict as authoritative ("if it's not in here, we don't know").
 
 from __future__ import annotations
 
+import datetime
 import logging
 import os
+import zoneinfo
 from typing import Optional, Sequence
 
 import httpx
@@ -29,6 +31,22 @@ _TIMEOUT = httpx.Timeout(4.0, connect=3.0)
 
 ALLOWED_MODES = ("DRIVE", "BICYCLE", "TRANSIT")
 _MODE_MAP = {"DRIVE": "driving", "BICYCLE": "bicycling", "TRANSIT": "transit"}
+_MUNICH_TZ = zoneinfo.ZoneInfo("Europe/Berlin")
+
+
+def _next_9am_weekday_ts() -> int:
+    """Return Unix timestamp for the next 9 AM weekday in Munich (CET/CEST).
+
+    Used as departure_time so Distance Matrix always estimates rush-hour
+    conditions regardless of when the matcher loop runs.
+    """
+    now = datetime.datetime.now(tz=_MUNICH_TZ)
+    candidate = now.replace(hour=9, minute=0, second=0, microsecond=0)
+    if candidate <= now:
+        candidate += datetime.timedelta(days=1)
+    while candidate.weekday() >= 5:  # Saturday=5, Sunday=6
+        candidate += datetime.timedelta(days=1)
+    return int(candidate.timestamp())
 
 
 def modes_for(sp: SearchProfile) -> list[str]:
@@ -85,8 +103,8 @@ async def _fetch_mode(
         "units": "metric",
         "key": api_key,
     }
-    if mode == "DRIVE":
-        params["departure_time"] = "now"
+    if mode in ("DRIVE", "TRANSIT"):
+        params["departure_time"] = _next_9am_weekday_ts()
 
     try:
         await google_maps.wait_turn()
