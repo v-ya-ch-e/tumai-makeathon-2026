@@ -109,8 +109,8 @@ def get_search_profile(session: Session, *, username: str) -> Optional[SearchPro
     main = [PlaceLocation.model_validate(d) for d in (row.main_locations or [])]
     prefs_raw = row.preferences or []
     prefs = [p for p in (_parse_preference(x) for x in prefs_raw) if p is not None]
-    # transitional: browser.py still reads these
-    city = main[0].label if main else "München"
+    # Main locations are commute anchors, not the search city itself.
+    city = "München"
     max_rent_eur = row.price_max_eur if row.price_max_eur is not None else 2000
     min_rent_eur = row.price_min_eur
     return SearchProfile(

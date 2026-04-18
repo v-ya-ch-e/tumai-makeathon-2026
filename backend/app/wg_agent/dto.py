@@ -173,16 +173,14 @@ def search_profile_to_dto(sp: SearchProfile) -> SearchProfileDTO:
 
 
 def upsert_body_to_search_profile(b: UpsertSearchProfileBody) -> SearchProfile:
-    # Transitional defaults so browser.py / brain.py keep working during API migration.
+    # Main locations are commute anchors, not the search city itself.
     max_eur = b.price_max_eur if b.price_max_eur is not None else 2000
-    main = list(b.main_locations)
-    city = main[0].label if main else "München"
     return SearchProfile(
-        city=city,
+        city="München",
         max_rent_eur=max_eur,
         price_min_eur=b.price_min_eur,
         price_max_eur=b.price_max_eur,
-        main_locations=main,
+        main_locations=list(b.main_locations),
         has_car=b.has_car,
         has_bike=b.has_bike,
         mode=b.mode,

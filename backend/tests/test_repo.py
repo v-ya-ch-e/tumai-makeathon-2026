@@ -79,6 +79,7 @@ def test_repo_round_trip() -> None:
         assert out.main_locations[0].max_commute_minutes == 25
         assert out.main_locations[1].lng == 11.503
         assert out.main_locations[1].max_commute_minutes is None
+        assert out.city == "München"
         assert out.has_car is True
         assert out.has_bike is False
         assert out.mode == "flat"
