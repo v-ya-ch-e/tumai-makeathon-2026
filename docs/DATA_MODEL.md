@@ -121,10 +121,11 @@ Latest LLM score payload per `(listing_id, hunt_id)`. Split from `ListingRow` so
 | `reason` | `Optional[str]` | Human-readable explanation. |
 | `match_reasons` | `JSON` / `list` | |
 | `mismatch_reasons` | `JSON` / `list` | |
+| `travel_minutes` | `Optional[JSON]` | Fastest `{mode, minutes}` per `main_location.place_id` when commute data was available at score time. Shape: `{"<place_id>": {"mode": "BICYCLE", "minutes": 18}}`. Populated by `HuntEngine.run_find_only` from the full `commute.travel_times` matrix; read back by `_get_listing_detail` and re-keyed by label for the drawer. Added in Alembic [`0004_listing_commute.py`](../backend/alembic/versions/0004_listing_commute.py). |
 | `scored_at` | `datetime` | |
 
 - **SET**: [`repo.save_score`](../backend/app/wg_agent/repo.py) immediately after `brain.score_listing` in `HuntEngine.run_find_only`.
-- **READ**: Joined in `repo.list_listings_for_hunt` via `_listing_from_row` and in `_get_listing_detail`.
+- **READ**: Joined in `repo.list_listings_for_hunt` via `_listing_from_row` and in `_get_listing_detail` (the detail endpoint also resolves `place_id` to `main_location.label` for the `travel_minutes_per_location` DTO field).
 
 ### AgentActionRow
 
@@ -315,6 +316,10 @@ Values below are illustrative; timestamps are ISO-8601 strings as JSON would sho
   "reason": "Good transit match; preferences mention gym nearby.",
   "match_reasons": ["public_transport"],
   "mismatch_reasons": [],
+  "travel_minutes": {
+    "ChIJ2V-Mo_l1nkcRfZixfUq4DAE": { "mode": "BICYCLE", "minutes": 18 },
+    "ChIJsendlingPlaceId": { "mode": "TRANSIT", "minutes": 14 }
+  },
   "scored_at": "2024-01-02T05:02:15"
 }
 ```

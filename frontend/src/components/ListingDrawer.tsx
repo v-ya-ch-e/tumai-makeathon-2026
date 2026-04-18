@@ -112,6 +112,21 @@ export function ListingDrawer({ open, listing, onClose }: ListingDrawerProps) {
             </section>
           ) : null}
 
+          {detail?.travelMinutesPerLocation &&
+          Object.keys(detail.travelMinutesPerLocation).length > 0 ? (
+            <section className="space-y-2">
+              <h3 className="text-[15px] font-semibold text-ink">Commute</h3>
+              <ul className="text-[13px] text-ink">
+                {Object.entries(detail.travelMinutesPerLocation).map(([label, minutes]) => (
+                  <li key={label}>
+                    <span className="text-ink-muted">{label}</span>
+                    <span> — {minutes} min</span>
+                  </li>
+                ))}
+              </ul>
+            </section>
+          ) : null}
+
           {active.description ? (
             <section className="space-y-2">
               <h3 className="text-[15px] font-semibold text-ink">Description</h3>

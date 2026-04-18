@@ -105,7 +105,46 @@ def _get_listing_detail(
         match_reasons=match_reasons,
         mismatch_reasons=mismatch_reasons,
     )
-    return ListingDetailDTO(listing=listing_dto, photos=photos, score=score_val)
+    travel_minutes_per_location = _travel_minutes_by_label(
+        session, hunt_id=hunt_id, score_row=score_row
+    )
+    return ListingDetailDTO(
+        listing=listing_dto,
+        photos=photos,
+        score=score_val,
+        travel_minutes_per_location=travel_minutes_per_location,
+    )
+
+
+def _travel_minutes_by_label(
+    session: Session,
+    *,
+    hunt_id: str,
+    score_row: Optional[ListingScoreRow],
+) -> Optional[dict[str, int]]:
+    """Convert the persisted `{place_id: {mode, minutes}}` blob into
+    `{label: minutes}` by looking up each place_id in the hunt's
+    SearchProfile.main_locations."""
+    if score_row is None or not score_row.travel_minutes:
+        return None
+    hunt_row = session.get(HuntRow, hunt_id)
+    if hunt_row is None:
+        return None
+    sp = repo.get_search_profile(session, username=hunt_row.username)
+    if sp is None or not sp.main_locations:
+        return None
+    label_by_pid = {loc.place_id: loc.label for loc in sp.main_locations}
+    out: dict[str, int] = {}
+    for place_id, entry in score_row.travel_minutes.items():
+        if not isinstance(entry, dict):
+            continue
+        minutes = entry.get("minutes")
+        if not isinstance(minutes, int):
+            continue
+        label = label_by_pid.get(place_id)
+        if label:
+            out[label] = minutes
+    return out or None
 
 
 @router.post("/users", status_code=201, response_model=UserDTO)

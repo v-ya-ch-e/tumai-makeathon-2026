@@ -121,6 +121,7 @@ class ListingDetailDTO(BaseModel):
     listing: ListingDTO
     photos: list[str]
     score: Optional[float] = None
+    travel_minutes_per_location: Optional[dict[str, int]] = None
 
 
 def user_to_dto(u: UserProfile) -> UserDTO:

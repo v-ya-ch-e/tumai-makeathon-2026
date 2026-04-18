@@ -262,6 +262,7 @@ def save_score(
     reason: Optional[str],
     match_reasons: list[str],
     mismatch_reasons: list[str],
+    travel_minutes: Optional[dict] = None,
 ) -> None:
     now = datetime.utcnow()
     row = ListingScoreRow(
@@ -271,6 +272,7 @@ def save_score(
         reason=reason,
         match_reasons=list(match_reasons),
         mismatch_reasons=list(mismatch_reasons),
+        travel_minutes=travel_minutes,
         scored_at=now,
     )
     session.merge(row)

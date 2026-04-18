@@ -11,6 +11,7 @@ backend/app/wg_agent/
   api.py                         `/api` router: users, search profile, credentials, hunts, SSE stream, listing detail
   brain.py                       OpenAI chat calls: score, draft, classify (v1 loop uses `score_listing` only)
   browser.py                     URL builders, HTML parsers, httpx anonymous path, Playwright `WGBrowser` + factory
+  commute.py                     Google Routes API client (`travel_times`, `modes_for`); called from the hunter before scoring
   crypto.py                      Fernet key resolution + encrypt/decrypt for credential blobs
   db.py                          SQLModel engine, WAL pragma, `init_db`, `get_session` dependency
   db_models.py                   `*Row` SQLModel table classes (see [DATA_MODEL.md](./DATA_MODEL.md))
@@ -126,7 +127,7 @@ Internal helpers: `_listing_from_row`, `_default_requirements`.
 
 ## `periodic.py`
 
-- **`HuntEngine.run_find_only`** — Loads `SearchProfile`, loads existing listing ids, `await browser.anonymous_search`, caps to `max_listings` (default 15), emits `search` / per-id `new_listing` actions, deep-scrapes with `anonymous_scrape_listing`, calls `brain.score_listing`, `repo.upsert_listing` + `save_score`, emits `evaluate`. Each persisted action is also pushed to the per-hunt asyncio queue for SSE (`_safe_put`).
+- **`HuntEngine.run_find_only`** — Loads `SearchProfile`, loads existing listing ids, `await browser.anonymous_search`, caps to `max_listings` (default 15), emits `search` / per-id `new_listing` actions, deep-scrapes with `anonymous_scrape_listing`, calls [`commute.travel_times`](../backend/app/wg_agent/commute.py) with the geocoded `(lat, lng)` against the user's `main_locations` in every profile-applicable mode (guarded: skipped when either coord is `None`), passes the resulting `{(place_id, mode): seconds}` matrix into `brain.score_listing`, collapses it into the fastest `(mode, minutes)` per location for persistence (`repo.save_score(..., travel_minutes=...)`), and emits `evaluate` with the same summary in `detail`. Every persisted action also lands on the per-hunt asyncio queue for SSE (`_safe_put`).
 - **`PeriodicHunter`** — Async loop calling `run_find_only`; for `periodic` schedules sleeps `interval_minutes * 60` seconds, optionally overridden by `WG_RESCAN_INTERVAL_MINUTES` when `schedule == "periodic"` and the interval is positive, emits `rescan` between passes, ends with `_finalize_done` (`HuntStatus.done`) or `_finalize_failed` on unexpected exceptions. `asyncio.CancelledError` triggers `_finalize_done` then re-raises.
 - **Registry** — `_ACTIVE_HUNTERS` maps hunt id → `Task`, `_EVENT_QUEUES` maps hunt id → `Queue`. `spawn_hunter` creates/replaces the queue and task; `cancel_hunter` cancels the task; `event_queue_for` exposes the queue to SSE; `resume_running_hunts` respawns tasks for DB rows still `running`.
 
@@ -140,9 +141,13 @@ Internal helpers: `_listing_from_row`, `_default_requirements`.
 
 Thin async client around the Google Geocoding API. `geocode(address)` returns `(lat, lng)` or `None` and never raises. Reads `GOOGLE_MAPS_SERVER_KEY` from the environment; if unset, returns `None` without touching the network so local dev works without the key. An in-process dict caches results keyed on `address.strip().lower()` (cleared when it passes 1024 entries) so rescans of the same listing don't re-bill the same string.
 
+## `commute.py`
+
+Thin async client around the Google Routes API's `computeRouteMatrix`. `travel_times(origin, destinations, modes)` returns `{(place_id, mode): seconds}` for reachable pairs only — absent entries mean "no route" or "API failed", so callers treat the returned dict as authoritative. Issues one POST per travel mode (the API's `travelMode` field is per-request) with a 4-second timeout and a one-origin/many-destinations shape; non-`ROUTE_EXISTS` elements and malformed durations are skipped silently. Reuses the same `GOOGLE_MAPS_SERVER_KEY` as [`geocoder.py`](../backend/app/wg_agent/geocoder.py); without the key, the function short-circuits to `{}` so dev flows stay offline-friendly. `modes_for(sp)` derives the mode list straight from the search profile: always `TRANSIT`, plus `BICYCLE` when `sp.has_bike`, plus `DRIVE` when `sp.has_car`.
+
 ## `brain.py`
 
-- `score_listing` — Chat Completions JSON object; mutates `Listing` score fields (wired in `HuntEngine`).
+- `score_listing(listing, requirements, *, travel_times=None)` — Chat Completions JSON object; mutates `Listing` score fields (wired in `HuntEngine`). The optional `travel_times` matrix is rendered into a per-location "Commute times" block inside the user prompt (fastest mode first, minutes rounded); the prompt instructs the LLM to treat commutes over 40 minutes as strong negatives and under 20 minutes as positives. There is no deterministic commute score — composition stays LLM-only (see ADR-011).
 - `draft_message` — First outbound message text (orchestrator path).
 - `classify_reply` — `ReplyAnalysis` from landlord text (orchestrator path).
 - `reply_to_landlord` — Follow-up composer (orchestrator path).

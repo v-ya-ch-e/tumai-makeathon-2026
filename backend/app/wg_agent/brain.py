@@ -41,7 +41,43 @@ def _client() -> OpenAI:
     return OpenAI(api_key=api_key)
 
 
-def _listing_summary(listing: Listing) -> str:
+_MODE_LABELS = {"DRIVE": "car", "BICYCLE": "bike", "TRANSIT": "transit"}
+
+
+def _commute_block(
+    travel_times: dict[tuple[str, str], int],
+    main_locations: list,
+) -> str:
+    """Format travel_times into the 'Commute times' block. Empty-string on
+    empty input so the caller can drop the line entirely."""
+    if not travel_times or not main_locations:
+        return ""
+    lines: list[str] = []
+    for loc in main_locations:
+        per_mode = [
+            (mode, secs)
+            for (pid, mode), secs in travel_times.items()
+            if pid == loc.place_id
+        ]
+        if not per_mode:
+            continue
+        per_mode.sort(key=lambda item: item[1])
+        rendered = ", ".join(
+            f"{_MODE_LABELS.get(mode, mode.lower())} {round(secs / 60)} min"
+            for mode, secs in per_mode
+        )
+        lines.append(f"- {loc.label} (place_id {loc.place_id}): {rendered}")
+    if not lines:
+        return ""
+    return "\n".join(["Commute times (one-way):", *lines])
+
+
+def _listing_summary(
+    listing: Listing,
+    *,
+    travel_times: Optional[dict[tuple[str, str], int]] = None,
+    main_locations: Optional[list] = None,
+) -> str:
     parts = [
         f"ID: {listing.id}",
         f"Title: {listing.title}",
@@ -54,6 +90,10 @@ def _listing_summary(listing: Listing) -> str:
         f"Languages: {', '.join(listing.languages)}" if listing.languages else "",
         f"Furnished: {listing.furnished}" if listing.furnished is not None else "",
     ]
+    if travel_times:
+        block = _commute_block(travel_times, list(main_locations or []))
+        if block:
+            parts.append(block)
     if listing.description:
         parts.append("Description (truncated):")
         parts.append(listing.description[:1800])
@@ -112,6 +152,10 @@ REQUIREMENTS:
 LISTING:
 {listing}
 
+If the "Commute times" section is present, treat commutes over 40 minutes as
+strong negatives and under 20 minutes as positives. Do not invent commute
+times that aren't listed.
+
 Return JSON with these keys:
   score (0..1, higher = better match),
   reason (one sentence),
@@ -122,12 +166,26 @@ Only return valid JSON, no prose.
 """
 
 
-def score_listing(listing: Listing, requirements: SearchProfile) -> Listing:
-    """Ask the LLM to rate `listing` against `requirements`. Mutates + returns listing."""
+def score_listing(
+    listing: Listing,
+    requirements: SearchProfile,
+    *,
+    travel_times: Optional[dict[tuple[str, str], int]] = None,
+) -> Listing:
+    """Ask the LLM to rate `listing` against `requirements`. Mutates + returns listing.
+
+    When `travel_times` is provided, the prompt includes a per-main-location
+    commute block keyed by `(place_id, mode) -> seconds`. The LLM is told to
+    treat long commutes as soft negatives.
+    """
     client = _client()
     user_msg = SCORE_USER_TEMPLATE.format(
         requirements=_requirements_summary(requirements),
-        listing=_listing_summary(listing),
+        listing=_listing_summary(
+            listing,
+            travel_times=travel_times,
+            main_locations=requirements.main_locations,
+        ),
     )
     response = client.chat.completions.create(
         model=DEFAULT_MODEL,

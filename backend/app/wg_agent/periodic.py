@@ -6,15 +6,50 @@ import asyncio
 import logging
 import os
 from datetime import datetime
+from typing import Optional
 
 from sqlmodel import Session
 
-from . import brain, browser, repo
+from . import brain, browser, commute, repo
 from . import db as db_module
 from .db_models import HuntRow
 from .models import ActionKind, AgentAction, HuntStatus, Listing, SearchProfile
 
 logger = logging.getLogger(__name__)
+
+
+def _shortest_mode_min_per_location(
+    travel_times: dict[tuple[str, str], int],
+) -> dict[str, dict[str, object]]:
+    """Pick the fastest `(mode, minutes)` per place_id for drawer display."""
+    best: dict[str, tuple[str, int]] = {}
+    for (place_id, mode), seconds in travel_times.items():
+        minutes = round(seconds / 60)
+        current = best.get(place_id)
+        if current is None or minutes < current[1]:
+            best[place_id] = (mode, minutes)
+    return {pid: {"mode": mode, "minutes": minutes} for pid, (mode, minutes) in best.items()}
+
+
+def _evaluate_detail(
+    travel_minutes: dict[str, dict[str, object]],
+    main_locations: list,
+) -> Optional[str]:
+    """Human-readable fastest-mode summary for the evaluate action's `detail`."""
+    if not travel_minutes or not main_locations:
+        return None
+    parts: list[str] = []
+    for loc in main_locations:
+        entry = travel_minutes.get(loc.place_id)
+        if not entry:
+            continue
+        mode = str(entry.get("mode", "")).lower() or "?"
+        minutes = entry.get("minutes")
+        if not isinstance(minutes, int):
+            continue
+        parts.append(f"{loc.label}: {minutes} min ({mode})")
+    return "; ".join(parts) or None
+
 
 _ACTIVE_HUNTERS: dict[str, asyncio.Task[None]] = {}
 _EVENT_QUEUES: dict[str, asyncio.Queue[AgentAction]] = {}
@@ -95,8 +130,21 @@ class HuntEngine:
             _safe_put(self._event_queue, nl)
 
             try:
-                enriched = await browser.anonymous_scrape_listing(listing)
-                brain.score_listing(enriched, sp)
+                enriched = await browser.anonymous_scrape_listing(
+                    listing, req_city=sp.city
+                )
+                travel_times: dict[tuple[str, str], int] = {}
+                if (
+                    enriched.lat is not None
+                    and enriched.lng is not None
+                    and sp.main_locations
+                ):
+                    travel_times = await commute.travel_times(
+                        origin=(enriched.lat, enriched.lng),
+                        destinations=sp.main_locations,
+                        modes=commute.modes_for(sp),
+                    )
+                brain.score_listing(enriched, sp, travel_times=travel_times)
             except Exception as exc:  # noqa: BLE001
                 err = AgentAction(
                     kind=ActionKind.error,
@@ -109,6 +157,9 @@ class HuntEngine:
                 _safe_put(self._event_queue, err)
                 continue
 
+            travel_minutes = (
+                _shortest_mode_min_per_location(travel_times) if travel_times else None
+            )
             with Session(db_module.engine) as session:
                 repo.upsert_listing(session, hunt_id=self._hunt_id, listing=enriched)
                 repo.save_score(
@@ -119,8 +170,14 @@ class HuntEngine:
                     reason=enriched.score_reason,
                     match_reasons=list(enriched.match_reasons),
                     mismatch_reasons=list(enriched.mismatch_reasons),
+                    travel_minutes=travel_minutes,
                 )
 
+            ev_detail = (
+                _evaluate_detail(travel_minutes, list(sp.main_locations))
+                if travel_minutes
+                else None
+            )
             ev = AgentAction(
                 kind=ActionKind.evaluate,
                 summary=(
@@ -128,6 +185,7 @@ class HuntEngine:
                     if enriched.score is not None
                     else f"Scored {enriched.id}"
                 ),
+                detail=ev_detail,
                 listing_id=enriched.id,
             )
             with Session(db_module.engine) as session:

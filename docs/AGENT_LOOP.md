@@ -13,6 +13,7 @@ sequenceDiagram
   participant Hunter as Hunter (PeriodicHunter)
   participant Engine as Engine (HuntEngine)
   participant WG as WG (wg-gesucht.de)
+  participant GMAPS as GMAPS (Google Maps)
   participant OAI as OAI (OpenAI)
   participant DB as DB (SQLite)
   participant Q as Event queue
@@ -48,10 +49,14 @@ sequenceDiagram
     API-->>SPA: SSE data: new_listing
     Engine->>WG: anonymous_scrape_listing
     WG-->>Engine: detail HTML → enriched Listing (lat/lng via Geocoding)
-    Engine->>OAI: brain.score_listing
+    opt listing.lat is not None and sp.main_locations
+      Engine->>GMAPS: commute.travel_times (computeRouteMatrix, one POST per mode)
+      GMAPS-->>Engine: {(place_id, mode): seconds}
+    end
+    Engine->>OAI: brain.score_listing (with optional commute block in prompt)
     OAI-->>Engine: JSON score fields on Listing
-    Engine->>DB: upsert_listing + save_score
-    Engine->>DB: append_action(evaluate)
+    Engine->>DB: upsert_listing + save_score (travel_minutes JSON when present)
+    Engine->>DB: append_action(evaluate, detail=fastest mode-min per location)
     Engine->>Q: put_nowait(evaluate)
     API-->>SPA: SSE data: evaluate
   end

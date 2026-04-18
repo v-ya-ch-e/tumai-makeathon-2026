@@ -165,3 +165,19 @@ ADR index for WG Hunter. Each entry lists context, decision, consequences, and t
 
 **Consequences:** Listings get coordinates exactly once per scrape, cached in-process so rescans of the same string don't re-bill the free-tier quota. Missing key / HTTP errors / `ZERO_RESULTS` all degrade gracefully to `None` instead of raising, so the scrape pipeline keeps working without the key in dev. A second key is one more secret to manage, but keeping the browser and server keys separate lets us restrict each to the smallest-possible API set. No scoring logic changes yet — commute-aware scoring is tracked separately as a follow-up that reads `listing.lat/lng` plus `SearchProfile.main_locations[].lat/lng` to call the Routes API.
 
+**Introduced in:** this commit
+
+---
+
+## ADR-012: Commute-aware scoring via Routes API, LLM-only composition
+
+- **Date:** 2026-04-18  
+- **Status:** Accepted  
+
+**Context:** With listing coordinates (ADR-011) and main-location coordinates (ADR-010) both in hand, we can now measure per-mode commute times and let them influence scoring. The product question was how to combine a deterministic commute term with the existing LLM score — blend them numerically, add a secondary ranking pass, or feed everything through the prompt and let the LLM decide.
+
+**Decision:** Call the Google Routes API's `computeRouteMatrix` from [`commute.py`](../backend/app/wg_agent/commute.py) inside `HuntEngine.run_find_only` (one POST per mode, guarded by `listing.lat is not None`), feed the resulting `{(place_id, mode): seconds}` matrix into `brain.score_listing` as a "Commute times" block in the user prompt, and leave the composition entirely to the LLM. Persist only the collapsed `{place_id: {mode, minutes}}` (fastest mode per location) on [`ListingScoreRow.travel_minutes`](../backend/app/wg_agent/db_models.py) so the listing drawer can render per-location minutes without re-calling Routes. Modes are picked from the user's profile: always `TRANSIT`, plus `BICYCLE` when `has_bike`, plus `DRIVE` when `has_car`. The prompt instructs the LLM to treat commutes over 40 minutes as strong negatives and under 20 minutes as positives.
+
+**Consequences:** Smallest possible diff — scoring stays in one place (the LLM), and the prompt additions are bounded (a few lines per location). No new sliders, weights, or per-location caps in the onboarding UI. Trading off: the LLM's commute reasoning isn't audited by a deterministic check, so edge cases (e.g. a 70-minute transit commute praised because the listing is cheap) depend on prompt discipline rather than hard guardrails; if this turns noisy, a follow-up can add a deterministic commute term that blends with the LLM score. Free-tier economics are comfortable: a typical user with 2 main locations × 2 modes = 4 elements per listing, well inside the Routes API's element quota. The API call is the last network hop before scoring, so listings without coordinates (or users with no `main_locations`) fall straight through to the pre-plan behaviour without an extra branch in the SSE path.
+
+**Introduced in:** this commit

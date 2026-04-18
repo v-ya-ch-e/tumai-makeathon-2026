@@ -86,6 +86,7 @@ class ListingScoreRow(SQLModel, table=True):
     reason: Optional[str] = None
     match_reasons: list = Field(default_factory=list, sa_column=Column(JSON))
     mismatch_reasons: list = Field(default_factory=list, sa_column=Column(JSON))
+    travel_minutes: Optional[dict] = Field(default=None, sa_column=Column(JSON))
     scored_at: datetime
 
 

@@ -1014,6 +1014,20 @@
               }
             ],
             "title": "Score"
+          },
+          "travel_minutes_per_location": {
+            "anyOf": [
+              {
+                "additionalProperties": {
+                  "type": "integer"
+                },
+                "type": "object"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Travel Minutes Per Location"
           }
         },
         "type": "object",

@@ -88,4 +88,5 @@ export type ListingDetail = {
   listing: Listing
   photos: string[]
   score: number | null
+  travelMinutesPerLocation: Record<string, number> | null
 }
