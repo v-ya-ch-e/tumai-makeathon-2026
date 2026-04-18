@@ -10,7 +10,7 @@ export type User = {
   username: string
   age: number
   gender: Gender
-  notificationEmail: string | null
+  email: string | null
   createdAt: string
 }
 
@@ -51,8 +51,6 @@ export type CredentialsStatus = {
 
 export type AgentStatus = 'idle' | 'running' | 'rescanning' | 'error'
 
-export type HuntStatusBackend = 'pending' | 'running' | 'done' | 'failed'
-
 export type Action = {
   at: string
   kind: string
@@ -81,7 +79,7 @@ export type NearbyPlace = {
 
 export type Listing = {
   id: string
-  huntId: string
+  username: string | null
   url: string
   title: string | null
   district: string | null
@@ -102,17 +100,6 @@ export type Listing = {
   mismatchReasons: string[]
   components: Component[]
   vetoReason: string | null
-}
-
-export type Hunt = {
-  id: string
-  username: string | null
-  status: HuntStatusBackend
-  schedule: Schedule
-  startedAt: string
-  stoppedAt: string | null
-  listings: Listing[]
-  actions: Action[]
 }
 
 export type ListingDetail = {

@@ -18,12 +18,12 @@ export default function Profile() {
   const { username, user, isReady, refreshUser } = useSession()
   const [ageInput, setAgeInput] = useState('')
   const [gender, setGender] = useState<Gender | ''>('')
-  const [notificationEmailInput, setNotificationEmailInput] = useState('')
+  const [emailInput, setEmailInput] = useState('')
   const [profile, setProfile] = useState<SearchProfile | null>(null)
   const [busy, setBusy] = useState(false)
   const [hydrated, setHydrated] = useState(false)
   const [footer, setFooter] = useState<ReactNode>(null)
-  const [errors, setErrors] = useState<{ age?: string; gender?: string; notificationEmail?: string }>({})
+  const [errors, setErrors] = useState<{ age?: string; gender?: string; email?: string }>({})
 
   useEffect(() => {
     if (!isReady) return
@@ -49,14 +49,14 @@ export default function Profile() {
     if (!user) return
     setAgeInput(String(user.age))
     setGender(user.gender)
-    setNotificationEmailInput(user.notificationEmail ?? '')
+    setEmailInput(user.email ?? '')
   }, [user])
 
   const handleSave = async () => {
     if (!username || !user) return
     setFooter(null)
 
-    const nextErrors: { age?: string; gender?: string; notificationEmail?: string } = {}
+    const nextErrors: { age?: string; gender?: string; email?: string } = {}
     const age = Number(ageInput)
     if (!Number.isInteger(age) || age < 16 || age > 99) {
       nextErrors.age = 'Age must be a whole number between 16 and 99.'
@@ -64,9 +64,9 @@ export default function Profile() {
     if (!gender) {
       nextErrors.gender = 'Select the current profile value.'
     }
-    const notificationEmail = notificationEmailInput.trim()
-    if (notificationEmail && !/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(notificationEmail)) {
-      nextErrors.notificationEmail = 'Enter a valid email address or leave it blank.'
+    const email = emailInput.trim()
+    if (email && !/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email)) {
+      nextErrors.email = 'Enter a valid email address or leave it blank.'
     }
 
     setErrors(nextErrors)
@@ -77,7 +77,7 @@ export default function Profile() {
       await updateUser(username, {
         age,
         gender: gender as Gender,
-        notificationEmail: notificationEmail || null,
+        email: email || null,
       })
       await refreshUser()
       setFooter(<p className="text-[15px] text-good">Profile updated.</p>)
@@ -152,17 +152,17 @@ export default function Profile() {
 
             <FieldRow
               label="Notification email"
-              hint={errors.notificationEmail ?? 'Optional. Used later once alerting exists.'}
-              error={Boolean(errors.notificationEmail)}
+              hint={errors.email ?? 'Optional. Used later once alerting exists.'}
+              error={Boolean(errors.email)}
             >
               <Input
                 type="email"
-                value={notificationEmailInput}
+                value={emailInput}
                 onChange={(event) => {
-                  setNotificationEmailInput(event.target.value)
-                  if (errors.notificationEmail) setErrors((prev) => ({ ...prev, notificationEmail: undefined }))
+                  setEmailInput(event.target.value)
+                  if (errors.email) setErrors((prev) => ({ ...prev, email: undefined }))
                 }}
-                aria-invalid={Boolean(errors.notificationEmail)}
+                aria-invalid={Boolean(errors.email)}
                 placeholder="you@example.com"
               />
             </FieldRow>

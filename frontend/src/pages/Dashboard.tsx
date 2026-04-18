@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useRef, useState, type ReactNode } from 'react'
-import { useLocation, useNavigate } from 'react-router-dom'
+import { useNavigate } from 'react-router-dom'
 import { ActionLog } from '../components/ActionLog'
 import { AppTabs } from '../components/AppTabs'
 import { ConnectWGDialog } from '../components/ConnectWGDialog'
@@ -8,17 +8,17 @@ import { ListingList } from '../components/ListingList'
 import { Button, Card, StatusPill, type StatusPillTone } from '../components/ui'
 import {
   ApiError,
-  createHunt,
+  getAgentStatus,
   getCredentialsStatus,
-  getHunt,
   getSearchProfile,
-  stopHunt,
-  streamHunt,
+  getUserActions,
+  getUserListings,
+  pauseAgent,
+  startAgent,
+  streamUser,
 } from '../lib/api'
 import { useSession } from '../lib/session'
-import type { Action, CredentialsStatus, Hunt, Listing, SearchProfile } from '../types'
-
-const LS_HUNT_ID = 'wg-hunter.hunt-id'
+import type { Action, CredentialsStatus, Listing, SearchProfile } from '../types'
 
 type UiStatus = 'idle' | 'starting' | 'running' | 'stopping' | 'error'
 
@@ -32,16 +32,9 @@ function statusPillTone(status: UiStatus): StatusPillTone {
 function statusLabel(status: UiStatus): string {
   if (status === 'running') return 'Running'
   if (status === 'starting') return 'Starting'
-  if (status === 'stopping') return 'Stopping'
+  if (status === 'stopping') return 'Pausing'
   if (status === 'error') return 'Error'
   return 'Idle'
-}
-
-function huntToUiStatus(hunt: Hunt | null): UiStatus {
-  if (hunt === null) return 'idle'
-  if (hunt.status === 'running' || hunt.status === 'pending') return 'running'
-  if (hunt.status === 'failed') return 'error'
-  return 'idle'
 }
 
 function formatDate(value: string | null): string {
@@ -85,11 +78,10 @@ function summaryCount(listings: Listing[]): string {
 
 export default function Dashboard() {
   const navigate = useNavigate()
-  const location = useLocation()
   const { username, isReady, setUsername } = useSession()
 
   const [profile, setProfile] = useState<SearchProfile | null>(null)
-  const [hunt, setHunt] = useState<Hunt | null>(null)
+  const [agentRunning, setAgentRunning] = useState(false)
   const [actions, setActions] = useState<Action[]>([])
   const [listings, setListings] = useState<Listing[]>([])
   const [uiStatus, setUiStatus] = useState<UiStatus>('idle')
@@ -98,7 +90,6 @@ export default function Dashboard() {
   const [errorMessage, setErrorMessage] = useState<string | null>(null)
   const [openListing, setOpenListing] = useState<Listing | null>(null)
   const seenActionKeysRef = useRef<Set<string>>(new Set())
-  const autoStartTriggeredRef = useRef(false)
 
   const refreshCredStatus = useCallback(async (name: string) => {
     try {
@@ -109,32 +100,6 @@ export default function Dashboard() {
   }, [])
 
   const actionKey = (action: Action): string => `${action.at}|${action.kind}|${action.summary}`
-
-  const applyHunt = useCallback((nextHunt: Hunt | null) => {
-    if (nextHunt === null) {
-      setHunt(null)
-      setActions([])
-      setListings([])
-      setUiStatus('idle')
-      seenActionKeysRef.current = new Set()
-      return
-    }
-    setHunt(nextHunt)
-    setListings(nextHunt.listings)
-    setActions(nextHunt.actions)
-    seenActionKeysRef.current = new Set(nextHunt.actions.map(actionKey))
-    setUiStatus(huntToUiStatus(nextHunt))
-  }, [])
-
-  const refreshHunt = useCallback(async (id: string | null): Promise<Hunt | null> => {
-    if (!id) return null
-    const nextHunt = await getHunt(id)
-    if (nextHunt === null) {
-      localStorage.removeItem(LS_HUNT_ID)
-      return null
-    }
-    return nextHunt
-  }, [])
 
   useEffect(() => {
     if (!isReady) return
@@ -152,84 +117,79 @@ export default function Dashboard() {
       }
       setProfile(searchProfile)
       await refreshCredStatus(username)
-      const storedId = localStorage.getItem(LS_HUNT_ID)
-      const nextHunt = await refreshHunt(storedId)
-      if (!cancelled) applyHunt(nextHunt)
+      try {
+        const [userListings, userActions, agentStatus] = await Promise.all([
+          getUserListings(username),
+          getUserActions(username),
+          getAgentStatus(username),
+        ])
+        if (cancelled) return
+        setListings(userListings)
+        setActions(userActions)
+        seenActionKeysRef.current = new Set(userActions.map(actionKey))
+        setAgentRunning(agentStatus.running)
+        setUiStatus(agentStatus.running ? 'running' : 'idle')
+      } catch (error) {
+        if (!cancelled) {
+          setErrorMessage(error instanceof ApiError ? error.message : String(error))
+        }
+      }
     })()
     return () => {
       cancelled = true
     }
-  }, [isReady, username, navigate, refreshCredStatus, refreshHunt, applyHunt])
+  }, [isReady, username, navigate, refreshCredStatus])
 
   useEffect(() => {
-    const huntId = hunt?.id
-    if (!huntId) return
-    if (hunt?.status === 'done' || hunt?.status === 'failed') return
+    if (!username || !profile) return
 
     let closed = false
-    let closeFn: (() => void) | null = null
-
-    closeFn = streamHunt(huntId, (event) => {
-      if ('kind' in event && event.kind === 'stream-end') {
-        if (!closed) {
-          closed = true
-          closeFn?.()
-        }
-        void (async () => {
-          const fresh = await refreshHunt(huntId)
-          if (fresh) applyHunt(fresh)
-        })()
-        return
-      }
-      const action = event as Action
+    const close = streamUser(username, (action) => {
+      if (closed) return
       const key = actionKey(action)
       if (seenActionKeysRef.current.has(key)) return
       seenActionKeysRef.current.add(key)
       setActions((prev) => [...prev, action])
       if (action.kind === 'evaluate' || action.kind === 'new_listing') {
         void (async () => {
-          const fresh = await refreshHunt(huntId)
-          if (!fresh) return
-          setListings(fresh.listings)
-          setHunt(fresh)
-          setUiStatus(huntToUiStatus(fresh))
+          try {
+            const fresh = await getUserListings(username)
+            if (!closed) setListings(fresh)
+          } catch {
+            // Ignore transient refresh errors; next event will retry.
+          }
         })()
       }
     })
 
     return () => {
       closed = true
-      closeFn?.()
+      close()
     }
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [hunt?.id])
+  }, [username, profile])
 
   const onStart = async () => {
-    if (!username || !profile) return
+    if (!username) return
     setErrorMessage(null)
     setUiStatus('starting')
     try {
-      const nextHunt = await createHunt(username, { schedule: profile.schedule })
-      localStorage.setItem(LS_HUNT_ID, nextHunt.id)
-      applyHunt(nextHunt)
+      await startAgent(username)
+      setAgentRunning(true)
+      setUiStatus('running')
     } catch (error) {
       setErrorMessage(error instanceof ApiError ? error.message : String(error))
       setUiStatus('error')
     }
   }
 
-  const onRestart = async () => {
-    if (!username || !profile) return
+  const onPause = async () => {
+    if (!username) return
     setErrorMessage(null)
-    setUiStatus('starting')
+    setUiStatus('stopping')
     try {
-      if (hunt && (hunt.status === 'running' || hunt.status === 'pending')) {
-        await stopHunt(hunt.id)
-      }
-      const nextHunt = await createHunt(username, { schedule: profile.schedule })
-      localStorage.setItem(LS_HUNT_ID, nextHunt.id)
-      setOpenListing(null)
-      applyHunt(nextHunt)
+      await pauseAgent(username)
+      setAgentRunning(false)
+      setUiStatus('idle')
     } catch (error) {
       setErrorMessage(error instanceof ApiError ? error.message : String(error))
       setUiStatus('error')
@@ -237,39 +197,15 @@ export default function Dashboard() {
   }
 
   const onStartAsNewUser = () => {
-    localStorage.removeItem(LS_HUNT_ID)
     setOpenListing(null)
     setUsername(null)
     navigate('/onboarding/profile', { replace: true })
-  }
-
-  const onStop = async () => {
-    if (!hunt) return
-    setErrorMessage(null)
-    setUiStatus('stopping')
-    try {
-      const nextHunt = await stopHunt(hunt.id)
-      applyHunt(nextHunt)
-    } catch (error) {
-      setErrorMessage(error instanceof ApiError ? error.message : String(error))
-      setUiStatus('error')
-    }
   }
 
   const onCredentialsSaved = async () => {
     setDialogOpen(false)
     if (username) await refreshCredStatus(username)
   }
-
-  useEffect(() => {
-    if (!profile || !username) return
-    if (!location.state || typeof location.state !== 'object' || !('autoStart' in location.state)) return
-    if ((location.state as { autoStart?: boolean }).autoStart !== true) return
-    if (autoStartTriggeredRef.current) return
-    autoStartTriggeredRef.current = true
-    navigate(location.pathname, { replace: true, state: null })
-    if (hunt === null) void onStart()
-  }, [location.pathname, location.state, navigate, profile, username, hunt])
 
   if (!isReady || profile === null) {
     return (
@@ -280,9 +216,9 @@ export default function Dashboard() {
   }
 
   const connected = credStatus?.connected ?? false
-  const isActive = uiStatus === 'running' || uiStatus === 'starting'
-  const isStopping = uiStatus === 'stopping'
   const isStarting = uiStatus === 'starting'
+  const isStopping = uiStatus === 'stopping'
+  const isEmpty = listings.length === 0 && actions.length === 0
 
   return (
     <div className="min-h-screen bg-canvas">
@@ -338,22 +274,17 @@ export default function Dashboard() {
                 />
 
                 <ControlRow
-                  label="Agent"
-                  value={hunt ? `Hunt ${hunt.id}` : 'Ready to start'}
+                  label="Background agent"
+                  value={agentRunning ? 'Running' : 'Paused'}
                   action={
                     <div className="flex flex-wrap justify-end gap-2">
-                      {hunt ? (
-                        <Button variant="secondary" size="sm" onClick={() => void onRestart()} disabled={isStarting || isStopping}>
-                          Restart
-                        </Button>
-                      ) : null}
-                      {isActive ? (
-                        <Button variant="destructive" size="sm" onClick={() => void onStop()} disabled={isStopping}>
-                          {isStopping ? 'Stopping…' : 'Stop'}
+                      {agentRunning ? (
+                        <Button variant="destructive" size="sm" onClick={() => void onPause()} disabled={isStopping}>
+                          {isStopping ? 'Pausing…' : 'Pause'}
                         </Button>
                       ) : (
                         <Button variant="primary" size="sm" onClick={() => void onStart()} disabled={isStarting}>
-                          {isStarting ? 'Starting…' : hunt ? 'Start again' : 'Start'}
+                          {isStarting ? 'Starting…' : 'Resume'}
                         </Button>
                       )}
                     </div>
@@ -362,7 +293,7 @@ export default function Dashboard() {
 
                 <ControlRow
                   label="Reset"
-                  value="Clear the current local profile and start a new hunt."
+                  value="Clear the current local profile and start as a new user."
                   action={
                     <Button variant="secondary" size="sm" onClick={onStartAsNewUser}>
                       New user
@@ -391,17 +322,17 @@ export default function Dashboard() {
           </div>
         </header>
 
-        {hunt === null ? (
+        {isEmpty ? (
           <section className="grid gap-8 lg:grid-cols-[minmax(0,1fr)_320px]">
             <Card className="panel p-8">
               <p className="section-kicker text-accent">Before the first run</p>
               <h2 className="section-title mt-4">The brief is ready.</h2>
               <p className="body-copy mt-4 max-w-2xl">
-                Start the agent when you want a new sweep. The dashboard will fill with live crawl events on the right and ranked listings on the left as soon as scoring starts.
+                Start the background agent when you want a new sweep. The dashboard will fill with live crawl events on the right and ranked listings on the left as soon as scoring starts.
               </p>
               <div className="mt-6 flex flex-wrap gap-3">
-                <Button variant="primary" onClick={() => void onStart()}>
-                  Start hunt
+                <Button variant="primary" onClick={() => void onStart()} disabled={isStarting || agentRunning}>
+                  {agentRunning ? 'Agent running' : isStarting ? 'Starting…' : 'Start background agent'}
                 </Button>
                 <Button variant="secondary" onClick={() => setDialogOpen(true)}>
                   {connected ? 'Manage WG login' : 'Connect WG-Gesucht'}
@@ -477,7 +408,7 @@ export default function Dashboard() {
                   <p className="section-kicker text-accent">Agent activity</p>
                   <h2 className="section-title mt-2">Live log</h2>
                 </div>
-                <span className="font-mono text-[12px] text-ink-muted">Hunt {hunt.id}</span>
+                <span className="font-mono text-[12px] text-ink-muted">Background agent</span>
               </div>
               <div className="max-h-[820px] overflow-y-auto px-6 py-2">
                 <ActionLog actions={actions} />
