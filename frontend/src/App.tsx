@@ -2,6 +2,7 @@ import { BrowserRouter, Navigate, Route, Routes } from 'react-router-dom'
 import { SessionProvider, useSession } from './lib/session'
 import HealthPage from './pages/Health'
 import OnboardingProfile from './pages/OnboardingProfile'
+import OnboardingRequirements from './pages/OnboardingRequirements'
 
 function HomeRedirect() {
   const { username, user, isReady } = useSession()
@@ -22,10 +23,6 @@ function DashboardPlaceholder() {
   return <div className="min-h-screen bg-canvas" />
 }
 
-function OnboardingRequirementsPlaceholder() {
-  return <div className="min-h-screen bg-canvas" />
-}
-
 export default function App() {
   return (
     <SessionProvider>
@@ -34,10 +31,7 @@ export default function App() {
           <Route path="/" element={<HomeRedirect />} />
           <Route path="/health" element={<HealthPage />} />
           <Route path="/onboarding/profile" element={<OnboardingProfile />} />
-          <Route
-            path="/onboarding/requirements"
-            element={<OnboardingRequirementsPlaceholder />}
-          />
+          <Route path="/onboarding/requirements" element={<OnboardingRequirements />} />
           <Route path="/dashboard" element={<DashboardPlaceholder />} />
         </Routes>
       </BrowserRouter>
