@@ -66,6 +66,22 @@ def get_user(session: Session, *, username: str) -> Optional[UserProfile]:
     )
 
 
+def update_user(session: Session, *, username: str, profile: UserProfile) -> UserProfile:
+    row = session.get(UserRow, username)
+    if row is None:
+        raise KeyError(username)
+    row.age = profile.age
+    row.gender = profile.gender.value
+    session.commit()
+    session.refresh(row)
+    return UserProfile(
+        username=row.username,
+        age=row.age,
+        gender=Gender(row.gender),
+        created_at=row.created_at,
+    )
+
+
 def _parse_preference(raw: object) -> Optional[PreferenceWeight]:
     """Accept both new `{key, weight}` dicts and legacy bare strings."""
     if isinstance(raw, str):

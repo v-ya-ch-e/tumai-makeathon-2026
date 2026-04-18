@@ -4,6 +4,7 @@ import { useNavigate } from 'react-router-dom'
 import { OnboardingShell } from '../components/OnboardingShell'
 import { Card, Input, Select } from '../components/ui'
 import { ApiError, createUser, getUser } from '../lib/api'
+import { onboardingSteps } from '../lib/onboarding'
 import { useSession } from '../lib/session'
 import type { Gender } from '../types'
 
@@ -152,6 +153,11 @@ export default function OnboardingProfile() {
       nextDisabled={false}
       footer={footer}
       showProgress={mode === 'create'}
+      progressSteps={onboardingSteps({
+        canAccessRequirements: false,
+        canAccessPreferences: false,
+        canAccessDashboard: false,
+      })}
       aside={
         mode === 'create' ? (
           <div className="space-y-4">

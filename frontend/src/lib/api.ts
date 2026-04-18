@@ -161,6 +161,18 @@ export async function getUser(username: string): Promise<User | null> {
   return toCamel(body) as User
 }
 
+export async function updateUser(
+  username: string,
+  body: { age: number; gender: Gender },
+): Promise<User> {
+  const data = await requestJson(`/api/users/${encodeURIComponent(username)}`, {
+    method: 'PUT',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify(body),
+  })
+  return data as User
+}
+
 export async function putSearchProfile(
   username: string,
   body: UpsertSearchProfileBody,

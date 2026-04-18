@@ -144,6 +144,37 @@ def test_parse_listing_photo_urls() -> None:
     ]
 
 
+def test_parse_listing_photo_urls_skips_non_gallery_slop() -> None:
+    html = """
+    <html>
+      <body>
+        <section class="gallery">
+          <img data-src="https://img.wg-gesucht.de/room-1.jpg" alt="Zimmer" />
+          <img src="https://img.wg-gesucht.de/room-2.jpg" alt="Zimmer 2" />
+        </section>
+        <section class="flatmate-icons">
+          <img src="https://img.wg-gesucht.de/icons/female.png" alt="female" />
+          <img src="https://img.wg-gesucht.de/icons/male.png" alt="male" />
+          <img src="https://img.wg-gesucht.de/icons/neutral.png" alt="neutral" />
+        </section>
+        <img src="https://img.wg-gesucht.de/images/blank.gif" alt="placeholder" />
+        <div class="gallery-overlay">
+          <img src="https://img.wg-gesucht.de/images/sketch-more-photos.png" alt="Mehr Fotos" />
+        </div>
+      </body>
+    </html>
+    """
+    enriched = parse_listing_page(
+        html, Listing(id="photo-test-2", url="https://www.wg-gesucht.de/2.html", title="stub")
+    )
+
+    assert enriched.photo_urls == [
+        "https://img.wg-gesucht.de/room-1.jpg",
+        "https://img.wg-gesucht.de/room-2.jpg",
+    ]
+    assert enriched.cover_photo_url == "https://img.wg-gesucht.de/room-1.jpg"
+
+
 def test_parse_listing_page_ignores_captcha_interstitial() -> None:
     html = """
     <html>
@@ -173,5 +204,6 @@ if __name__ == "__main__":
     test_parse_listing_structured_fields()
     test_parse_listing_description_is_not_page_chrome()
     test_parse_listing_photo_urls()
+    test_parse_listing_photo_urls_skips_non_gallery_slop()
     test_parse_listing_page_ignores_captcha_interstitial()
     print("parser smoke tests passed")

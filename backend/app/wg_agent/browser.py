@@ -153,10 +153,66 @@ def _normalized_photo_url(raw: Optional[str]) -> Optional[str]:
     lowered = candidate.lower()
     if any(
         token in lowered
-        for token in ("logo", "avatar", "icon", "flag", "tracking", "googleads")
+        for token in (
+            "logo",
+            "avatar",
+            "icon",
+            "flag",
+            "tracking",
+            "googleads",
+            "placeholder",
+            "blank",
+            "dummy",
+            "default",
+            "more_photos",
+            "more-photos",
+            "mehr_fotos",
+            "mehr-fotos",
+        )
     ):
         return None
     return candidate
+
+
+def _photo_context_text(el: Tag) -> str:
+    attrs = [
+        el.get("alt"),
+        el.get("title"),
+        el.get("aria-label"),
+        " ".join(el.get("class", [])),
+        el.get("id"),
+    ]
+    parent = el.parent if isinstance(el.parent, Tag) else None
+    if parent is not None:
+        attrs.extend(
+            [
+                " ".join(parent.get("class", [])),
+                parent.get("id"),
+            ]
+        )
+    return _clean(" ".join(part for part in attrs if part)).lower()
+
+
+def _looks_like_gallery_element(el: Tag) -> bool:
+    if el.has_attr("data-full-image") or el.has_attr("data-src") or el.has_attr("data-lazy"):
+        return True
+    for node in (el, *el.parents):
+        if not isinstance(node, Tag):
+            continue
+        haystack = _clean(
+            " ".join(
+                part
+                for part in (
+                    node.get("id"),
+                    " ".join(node.get("class", [])),
+                    node.get("data-testid"),
+                )
+                if part
+            )
+        ).lower()
+        if re.search(r"gallery|carousel|slider|photo|image|bilder", haystack):
+            return True
+    return False
 
 
 def _parse_photo_urls(soup: BeautifulSoup) -> list[str]:
@@ -173,11 +229,20 @@ def _parse_photo_urls(soup: BeautifulSoup) -> list[str]:
         '[data-full-image]',
         'img[data-src]',
         'img[data-lazy]',
-        'img[src]',
         'source[srcset]',
+        'img[src]',
     )
     for selector in selectors:
         for el in soup.select(selector):
+            if el.name == "img" and not _looks_like_gallery_element(el):
+                continue
+            context = _photo_context_text(el)
+            if re.search(
+                r"male|female|neutral|divers|gender|weiblich|männlich|maennlich|"
+                r"bewohner|icon|placeholder|sketch|mehr fotos|more photos|weitere fotos",
+                context,
+            ):
+                continue
             values: list[str] = []
             for attr in ("data-full-image", "data-src", "data-lazy", "src", "srcset"):
                 raw = el.get(attr)

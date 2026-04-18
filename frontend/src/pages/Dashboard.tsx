@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { useLocation, useNavigate } from 'react-router-dom'
 import { ActionLog } from '../components/ActionLog'
+import { AppTabs } from '../components/AppTabs'
 import { ConnectWGDialog } from '../components/ConnectWGDialog'
 import { ListingDrawer } from '../components/ListingDrawer'
 import { ListingList } from '../components/ListingList'
@@ -355,7 +356,16 @@ export default function Dashboard() {
             </div>
 
             <Card className="rounded-[28px] bg-surface-raised p-6">
-              <p className="font-mono text-[12px] uppercase tracking-[0.24em] text-accent">
+              <div className="flex justify-end">
+                <AppTabs
+                  current="/dashboard"
+                  tabs={[
+                    { label: 'Dashboard', href: '/dashboard' },
+                    { label: 'Profile', href: '/profile' },
+                  ]}
+                />
+              </div>
+              <p className="mt-5 font-mono text-[12px] uppercase tracking-[0.24em] text-accent">
                 Hunt controls
               </p>
               <div className="mt-5 space-y-3">

@@ -5,6 +5,7 @@ import { OnboardingShell } from '../components/OnboardingShell'
 import { PlaceAutocomplete } from '../components/PlaceAutocomplete'
 import { Card, Chip, Input } from '../components/ui'
 import { ApiError, getSearchProfile, putSearchProfile } from '../lib/api'
+import { onboardingSteps } from '../lib/onboarding'
 import { useSession } from '../lib/session'
 import type { Mode, PlaceLocation, Schedule, UpsertSearchProfileBody } from '../types'
 
@@ -54,6 +55,11 @@ export default function OnboardingRequirements() {
   const [footer, setFooter] = useState<ReactNode>(null)
   const [hydrated, setHydrated] = useState(false)
   const [errors, setErrors] = useState<ValidationErrors>({})
+  const progressSteps = onboardingSteps({
+    canAccessRequirements: Boolean(username),
+    canAccessPreferences: hydrated,
+    canAccessDashboard: hydrated,
+  })
 
   useEffect(() => {
     if (!isReady) return
@@ -176,6 +182,7 @@ export default function OnboardingRequirements() {
         title="What are you looking for?"
         onNext={() => undefined}
         busy
+        progressSteps={progressSteps}
       >
         <div />
       </OnboardingShell>
@@ -192,6 +199,7 @@ export default function OnboardingRequirements() {
       onNext={() => void handleNext()}
       busy={busy}
       footer={footer}
+      progressSteps={progressSteps}
       aside={
         <Card className="rounded-[28px] border-hairline/80 bg-surface/92 p-6">
           <p className="font-mono text-[12px] uppercase tracking-[0.24em] text-accent">Search summary</p>

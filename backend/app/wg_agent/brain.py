@@ -194,6 +194,12 @@ REQUIREMENTS:
 LISTING:
 {listing}
 
+Use this scoring shape for numeric fit: cheaper, bigger, and closer are
+better. Scores should stay fairly forgiving up to the user's cutoff, but once
+a listing crosses that cutoff the penalty should accelerate sharply instead of
+dropping linearly. For size, use the mirrored rule: being below the preferred
+size should hurt quickly, while anything at or above it is good.
+
 If the "Commute times" section is present, treat commutes over 40 minutes as
 strong negatives and under 20 minutes as positives. Do not invent commute
 times that aren't listed. When a location shows "(max N min)", treat any

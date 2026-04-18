@@ -1,5 +1,6 @@
 import type { ReactNode } from 'react'
 import { Button, ProgressSteps } from './ui'
+import type { ProgressStepLink } from './ui/ProgressSteps'
 
 export type OnboardingShellProps = {
   step: 1 | 2 | 3
@@ -15,6 +16,7 @@ export type OnboardingShellProps = {
   footer?: ReactNode
   showProgress?: boolean
   aside?: ReactNode
+  progressSteps?: [ProgressStepLink, ProgressStepLink, ProgressStepLink, ProgressStepLink]
 }
 
 export function OnboardingShell({
@@ -31,6 +33,7 @@ export function OnboardingShell({
   footer,
   showProgress = true,
   aside,
+  progressSteps,
 }: OnboardingShellProps) {
   const disabled = busy || nextDisabled
   const primaryLabel = busy ? 'Continuing…' : nextLabel
@@ -40,7 +43,7 @@ export function OnboardingShell({
       <div className="relative mx-auto max-w-7xl px-5 py-5 sm:px-8 lg:px-10">
         {showProgress ? (
           <div className="mb-8 flex items-center justify-between gap-4 rounded-[24px] border border-hairline/80 bg-surface/90 px-5 py-4 shadow-[0_18px_38px_rgba(39,33,29,0.05)]">
-            <ProgressSteps current={step} />
+            <ProgressSteps current={step} steps={progressSteps} />
             <span className="hidden font-mono text-[11px] uppercase tracking-[0.24em] text-ink-muted sm:inline">
               WG Hunter
             </span>

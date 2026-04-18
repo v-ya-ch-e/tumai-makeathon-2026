@@ -4,6 +4,7 @@ import { useNavigate } from 'react-router-dom'
 import { OnboardingShell } from '../components/OnboardingShell'
 import { Card, WeightSlider } from '../components/ui'
 import { ApiError, getSearchProfile, putSearchProfile } from '../lib/api'
+import { onboardingSteps } from '../lib/onboarding'
 import { useSession } from '../lib/session'
 import type { PreferenceWeight, SearchProfile, UpsertSearchProfileBody } from '../types'
 
@@ -196,6 +197,11 @@ export default function OnboardingPreferences() {
   const [hydrated, setHydrated] = useState(false)
   const [busy, setBusy] = useState(false)
   const [footer, setFooter] = useState<ReactNode>(null)
+  const progressSteps = onboardingSteps({
+    canAccessRequirements: Boolean(username),
+    canAccessPreferences: Boolean(username),
+    canAccessDashboard: hydrated && profile !== null,
+  })
 
   useEffect(() => {
     if (!isReady) return
@@ -304,7 +310,14 @@ export default function OnboardingPreferences() {
 
   if (!isReady || !hydrated) {
     return (
-      <OnboardingShell step={3} eyebrow="Preference tuning" title="Nice-to-haves" onNext={() => undefined} busy>
+      <OnboardingShell
+        step={3}
+        eyebrow="Preference tuning"
+        title="Nice-to-haves"
+        onNext={() => undefined}
+        busy
+        progressSteps={progressSteps}
+      >
         <div />
       </OnboardingShell>
     )
@@ -321,6 +334,7 @@ export default function OnboardingPreferences() {
       busy={busy}
       nextLabel="Save and start hunt"
       footer={footer}
+      progressSteps={progressSteps}
       aside={
         <Card className="rounded-[28px] border-hairline/80 bg-surface/92 p-6">
           <p className="font-mono text-[12px] uppercase tracking-[0.24em] text-accent">Selected</p>

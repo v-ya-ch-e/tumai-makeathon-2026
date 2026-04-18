@@ -25,6 +25,7 @@ from .dto import (
     ListingDetailDTO,
     ListingDTO,
     SearchProfileDTO,
+    UpdateUserBody,
     UpsertSearchProfileBody,
     UserDTO,
     action_to_dto,
@@ -212,6 +213,28 @@ def get_user(username: str, session: Session = Depends(get_session)) -> UserDTO:
     if u is None:
         raise HTTPException(status_code=404, detail="User not found")
     return user_to_dto(u)
+
+
+@router.put("/users/{username}", response_model=UserDTO)
+def update_user(
+    username: str,
+    body: UpdateUserBody,
+    session: Session = Depends(get_session),
+) -> UserDTO:
+    existing = repo.get_user(session, username=username)
+    if existing is None:
+        raise HTTPException(status_code=404, detail="User not found")
+    updated = repo.update_user(
+        session,
+        username=username,
+        profile=UserProfile(
+            username=existing.username,
+            age=body.age,
+            gender=Gender(body.gender),
+            created_at=existing.created_at,
+        ),
+    )
+    return user_to_dto(updated)
 
 
 @router.put("/users/{username}/search-profile", response_model=SearchProfileDTO)

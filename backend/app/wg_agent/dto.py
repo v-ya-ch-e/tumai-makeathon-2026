@@ -32,6 +32,11 @@ class CreateUserBody(BaseModel):
     gender: str = Field(..., pattern=r"^(female|male|diverse|prefer_not_to_say)$")
 
 
+class UpdateUserBody(BaseModel):
+    age: int = Field(..., ge=16, le=99)
+    gender: str = Field(..., pattern=r"^(female|male|diverse|prefer_not_to_say)$")
+
+
 class SearchProfileDTO(BaseModel):
     price_min_eur: int
     price_max_eur: Optional[int] = None

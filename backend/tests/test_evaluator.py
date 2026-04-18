@@ -78,11 +78,15 @@ def test_hard_filter_all_clear() -> None:
     assert evaluator.hard_filter(_listing(), _profile()) is None
 
 
-def test_hard_filter_over_budget() -> None:
-    v = evaluator.hard_filter(_listing(price_eur=1200), _profile())
+def test_hard_filter_far_over_budget() -> None:
+    v = evaluator.hard_filter(_listing(price_eur=1400), _profile())
     assert v is not None
-    assert "over budget" in v.reason
-    assert "1200" in v.reason
+    assert "far over budget" in v.reason
+    assert "1400" in v.reason
+
+
+def test_hard_filter_slightly_over_budget_is_not_a_veto() -> None:
+    assert evaluator.hard_filter(_listing(price_eur=980), _profile()) is None
 
 
 def test_hard_filter_missing_price_is_not_a_veto() -> None:
@@ -164,24 +168,31 @@ def test_price_fit_missing_price_is_missing_data() -> None:
     assert c.key == "price"
 
 
-def test_price_fit_comfortable_is_1() -> None:
-    # max_rent_eur=900, comfortable = 0.85 * 900 = 765
+def test_price_fit_under_budget_stays_high() -> None:
     c = evaluator.price_fit(_listing(price_eur=700), _profile())
-    assert c.score == 1.0
+    assert 0.8 < c.score <= 1.0
 
 
-def test_price_fit_over_budget_is_0() -> None:
+def test_price_fit_at_budget_is_still_okay() -> None:
+    c = evaluator.price_fit(_listing(price_eur=900), _profile())
+    assert 0.75 <= c.score <= 0.8
+
+
+def test_price_fit_over_budget_drops_fast() -> None:
     c = evaluator.price_fit(_listing(price_eur=1000), _profile())
-    assert c.score == 0.0
+    assert 0.0 < c.score < 0.7
 
 
-def test_price_fit_ramp_between_comfortable_and_cap() -> None:
-    """At comfortable (€765) score ≈ 1.0, at cap (€900) score ≈ 0.0."""
+def test_price_fit_penalty_accelerates_after_budget() -> None:
     profile = _profile()
-    c_near_cap = evaluator.price_fit(_listing(price_eur=880), profile)
-    c_mid = evaluator.price_fit(_listing(price_eur=820), profile)
-    assert c_near_cap.score < c_mid.score
-    assert 0.0 < c_near_cap.score < 0.3
+    c_at_budget = evaluator.price_fit(_listing(price_eur=900), profile)
+    c_just_over = evaluator.price_fit(_listing(price_eur=950), profile)
+    c_further_over = evaluator.price_fit(_listing(price_eur=1050), profile)
+    assert c_just_over.score < c_at_budget.score
+    assert c_further_over.score < c_just_over.score
+    assert (c_at_budget.score - c_just_over.score) < (
+        c_just_over.score - c_further_over.score
+    )
 
 
 # -----------------------------------------------------------------------------
@@ -189,9 +200,10 @@ def test_price_fit_ramp_between_comfortable_and_cap() -> None:
 # -----------------------------------------------------------------------------
 
 
-def test_size_fit_inside_band() -> None:
-    c = evaluator.size_fit(_listing(size_m2=18.0), _profile())
-    assert c.score == 1.0
+def test_size_fit_grows_with_size() -> None:
+    c_small = evaluator.size_fit(_listing(size_m2=18.0), _profile())
+    c_big = evaluator.size_fit(_listing(size_m2=28.0), _profile())
+    assert c_small.score < c_big.score <= 1.0
 
 
 def test_size_fit_below_min() -> None:
@@ -199,12 +211,11 @@ def test_size_fit_below_min() -> None:
     assert c.score == 0.0
 
 
-def test_size_fit_ramp_above_max() -> None:
-    """max 30 m², ramp ends at 30 * 1.25 = 37.5 m²."""
+def test_size_fit_at_or_above_preferred_size_is_full_score() -> None:
     c_mid = evaluator.size_fit(_listing(size_m2=33.0), _profile())
     c_far = evaluator.size_fit(_listing(size_m2=40.0), _profile())
-    assert 0.0 < c_mid.score < 1.0
-    assert c_far.score == 0.0
+    assert c_mid.score == 1.0
+    assert c_far.score == 1.0
 
 
 def test_size_fit_missing_data() -> None:
@@ -300,13 +311,13 @@ def test_commute_fit_inside_budget_is_high() -> None:
     assert c.hard_cap is None
 
 
-def test_commute_fit_at_budget_is_half() -> None:
+def test_commute_fit_at_budget_is_still_okay() -> None:
     tum = PlaceLocation(
         label="TUM", place_id="p1", lat=48.15, lng=11.57, max_commute_minutes=40
     )
     tt = {("p1", "TRANSIT"): 40 * 60}
     c = evaluator.commute_fit(_listing(), _profile(main_locations=[tum]), tt)
-    assert c.score == 0.5
+    assert 0.75 <= c.score <= 0.8
 
 
 def test_commute_fit_way_over_budget_sets_hard_cap() -> None:
@@ -318,6 +329,26 @@ def test_commute_fit_way_over_budget_sets_hard_cap() -> None:
     c = evaluator.commute_fit(_listing(), _profile(main_locations=[tum]), tt)
     assert c.score == 0.0
     assert c.hard_cap == 0.3
+
+
+def test_commute_fit_penalty_accelerates_after_budget() -> None:
+    tum = PlaceLocation(
+        label="TUM", place_id="p1", lat=48.15, lng=11.57, max_commute_minutes=40
+    )
+    at_budget = evaluator.commute_fit(
+        _listing(), _profile(main_locations=[tum]), {("p1", "TRANSIT"): 40 * 60}
+    )
+    just_over = evaluator.commute_fit(
+        _listing(), _profile(main_locations=[tum]), {("p1", "TRANSIT"): 45 * 60}
+    )
+    further_over = evaluator.commute_fit(
+        _listing(), _profile(main_locations=[tum]), {("p1", "TRANSIT"): 55 * 60}
+    )
+    assert just_over.score < at_budget.score
+    assert further_over.score < just_over.score
+    assert (at_budget.score - just_over.score) < (
+        just_over.score - further_over.score
+    )
 
 
 def test_commute_fit_picks_fastest_mode() -> None:
@@ -337,12 +368,12 @@ def test_commute_fit_averages_across_locations() -> None:
     sendling = PlaceLocation(
         label="Sendling", place_id="p2", lat=48.12, lng=11.55, max_commute_minutes=40
     )
-    # One is 1.0 (10 min), one is 0.5 (40 min) -> average 0.75
+    # One is 1.0 (10 min), one is ~0.8 (40 min) -> average ~0.9
     tt = {("p1", "TRANSIT"): 600, ("p2", "TRANSIT"): 2400}
     c = evaluator.commute_fit(
         _listing(), _profile(main_locations=[tum, sendling]), tt
     )
-    assert c.score == 0.75
+    assert 0.89 <= c.score <= 0.91
 
 
 def test_commute_fit_uses_default_budget_when_none() -> None:
