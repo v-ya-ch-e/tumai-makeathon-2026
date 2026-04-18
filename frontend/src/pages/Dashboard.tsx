@@ -2,6 +2,7 @@ import { useCallback, useEffect, useRef, useState } from 'react'
 import { useNavigate } from 'react-router-dom'
 import { ActionLog } from '../components/ActionLog'
 import { ConnectWGDialog } from '../components/ConnectWGDialog'
+import { ListingDrawer } from '../components/ListingDrawer'
 import { ListingList } from '../components/ListingList'
 import { Button, StatusPill, type StatusPillTone } from '../components/ui'
 import {
@@ -54,6 +55,7 @@ export default function Dashboard() {
   const [credStatus, setCredStatus] = useState<CredentialsStatus | null>(null)
   const [dialogOpen, setDialogOpen] = useState(false)
   const [errorMessage, setErrorMessage] = useState<string | null>(null)
+  const [openListing, setOpenListing] = useState<Listing | null>(null)
   const seenActionKeysRef = useRef<Set<string>>(new Set())
 
   const refreshCredStatus = useCallback(
@@ -268,9 +270,7 @@ export default function Dashboard() {
               </header>
               <ListingList
                 listings={listings}
-                onOpen={() => {
-                  /* listing drawer wires up in the next todo */
-                }}
+                onOpen={(l) => setOpenListing(l)}
               />
             </section>
           </div>
@@ -285,6 +285,12 @@ export default function Dashboard() {
           onSaved={() => void onCredentialsSaved()}
         />
       ) : null}
+
+      <ListingDrawer
+        open={openListing !== null}
+        listing={openListing}
+        onClose={() => setOpenListing(null)}
+      />
     </div>
   )
 }
