@@ -6,6 +6,9 @@ SES_FROM_EMAIL (defaults to noreply@doubleu.team).
 Threshold is read from WG_NOTIFY_THRESHOLD (float, default 0.9). A match triggers
 an email when `score >= WG_NOTIFY_THRESHOLD`.
 All sends are fire-and-forget; failures are logged but never raised.
+
+Batching: the matcher calls `send_digest_email` with every high-scoring listing
+it has queued for the user — one SES send per flush, rate-limited by the caller.
 """
 
 from __future__ import annotations
@@ -13,12 +16,23 @@ from __future__ import annotations
 import html
 import logging
 import os
-from typing import Optional
+from dataclasses import dataclass
+from typing import Iterable, Optional
 
 logger = logging.getLogger(__name__)
 
 _FROM_EMAIL = os.environ.get("SES_FROM_EMAIL", "noreply@doubleu.team")
 _NOTIFY_THRESHOLD = float(os.environ.get("WG_NOTIFY_THRESHOLD", "0.9"))
+
+
+@dataclass(frozen=True)
+class DigestItem:
+    """One listing entry inside a batched notification email."""
+
+    listing_title: str
+    listing_url: str
+    score: float
+    match_reasons: list[str]
 
 
 def _client():
@@ -206,3 +220,152 @@ def send_test_email(to_email: str) -> None:
         match_reasons=["Price within budget", "5 min commute to TUM", "Furnished"],
         username="test-user",
     )
+
+
+def _build_digest_body(
+    items: list[DigestItem], username: str
+) -> tuple[str, str, str]:
+    """Return (subject, plain-text body, HTML body) for a batched digest email."""
+    n = len(items)
+    top_pct = round(max(i.score for i in items) * 100) if items else 0
+    if n == 1:
+        subject = f"WG Hunter: new {top_pct}% match – {items[0].listing_title or items[0].listing_url}"
+    else:
+        subject = f"WG Hunter: {n} new matches (top {top_pct}%)"
+
+    lines: list[str] = [
+        "WG Hunter found new high-scoring listings for you!",
+        "",
+        f"Matches: {n} (top score {top_pct}%)",
+        "",
+    ]
+    for item in items:
+        pct = round(item.score * 100)
+        lines.append(f"• {pct}% {_score_bar(item.score)} – {item.listing_title or '—'}")
+        lines.append(f"  {item.listing_url}")
+        for r in item.match_reasons[:3]:
+            lines.append(f"    ✓ {r}")
+        lines.append("")
+    lines.append("---")
+    lines.append(f"User: {username}")
+    lines.append(
+        f"Sent by WG Hunter via {_FROM_EMAIL} — you are receiving this because "
+        "you set a notification email in your profile."
+    )
+    text_body = "\n".join(lines)
+
+    safe_username = html.escape(username)
+    safe_from = html.escape(_FROM_EMAIL)
+
+    cards: list[str] = []
+    for item in items:
+        pct = round(item.score * 100)
+        bar_width_pct = max(0, min(100, pct))
+        safe_title = html.escape(item.listing_title or "—")
+        safe_url = html.escape(item.listing_url, quote=True)
+        reasons = item.match_reasons[:5]
+        if reasons:
+            reasons_html = "".join(
+                f"<li style=\"margin:3px 0;\">{html.escape(r)}</li>" for r in reasons
+            )
+            reasons_block = (
+                f"<ul style=\"padding-left:18px;margin:6px 0 0 0;color:#374151;font-size:13px;\">{reasons_html}</ul>"
+            )
+        else:
+            reasons_block = ""
+        cards.append(
+            f"""
+            <tr><td style="padding:0 28px 16px 28px;">
+              <div style="border:1px solid #e5e7eb;border-radius:10px;padding:14px 16px;">
+                <div style="display:flex;align-items:center;gap:10px;">
+                  <div style="flex:1;height:8px;background:#e0e7ff;border-radius:999px;overflow:hidden;">
+                    <div style="width:{bar_width_pct}%;height:100%;background:linear-gradient(90deg,#6366f1,#8b5cf6);"></div>
+                  </div>
+                  <div style="font-weight:700;color:#4338ca;font-size:14px;min-width:42px;text-align:right;">{pct}%</div>
+                </div>
+                <div style="font-size:15px;font-weight:600;color:#111827;margin:8px 0 4px 0;">{safe_title}</div>
+                <a href="{safe_url}" style="display:inline-block;color:#4f46e5;text-decoration:none;font-weight:600;font-size:13px;">View on wg-gesucht →</a>
+                {reasons_block}
+              </div>
+            </td></tr>
+            """
+        )
+    cards_html = "".join(cards)
+    heading = (
+        f"{n} new {'match' if n == 1 else 'matches'} for you"
+        if n >= 1
+        else "New matches for you"
+    )
+    html_body = f"""\
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8" />
+<title>{html.escape(subject)}</title>
+</head>
+<body style="margin:0;padding:0;background:#f3f4f6;font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',Roboto,Helvetica,Arial,sans-serif;color:#111827;">
+  <table role="presentation" width="100%" cellpadding="0" cellspacing="0" style="background:#f3f4f6;padding:24px 12px;">
+    <tr>
+      <td align="center">
+        <table role="presentation" width="560" cellpadding="0" cellspacing="0" style="max-width:560px;width:100%;background:#ffffff;border-radius:12px;overflow:hidden;box-shadow:0 1px 3px rgba(0,0,0,0.08);">
+          <tr>
+            <td style="padding:24px 28px 8px 28px;">
+              <div style="font-size:13px;letter-spacing:0.08em;text-transform:uppercase;color:#6366f1;font-weight:600;">WG Hunter</div>
+              <h1 style="margin:8px 0 4px 0;font-size:22px;line-height:1.3;color:#111827;">{heading}</h1>
+              <p style="margin:0 0 16px 0;color:#4b5563;font-size:14px;">Fresh wg-gesucht listings just cleared your match threshold.</p>
+            </td>
+          </tr>
+          {cards_html}
+          <tr>
+            <td style="padding:16px 28px 24px 28px;border-top:1px solid #f3f4f6;">
+              <p style="margin:0;color:#6b7280;font-size:12px;line-height:1.5;">
+                Sent to {safe_username} by WG Hunter via <strong>{safe_from}</strong>.<br/>
+                You are receiving this because you saved a notification email in your profile.
+              </p>
+            </td>
+          </tr>
+        </table>
+      </td>
+    </tr>
+  </table>
+</body>
+</html>
+"""
+    return subject, text_body, html_body
+
+
+def send_digest_email(
+    to_email: str,
+    items: Iterable[DigestItem],
+    username: str,
+) -> bool:
+    """Send a single digest email containing every queued match. Returns True on
+    a successful SES call. Logs and swallows all errors (returns False)."""
+    items_list = list(items)
+    if not items_list:
+        return False
+    subject, text_body, html_body = _build_digest_body(items_list, username)
+    try:
+        client = _client()
+        client.send_email(
+            Source=_FROM_EMAIL,
+            Destination={"ToAddresses": [to_email]},
+            Message={
+                "Subject": {"Data": subject, "Charset": "UTF-8"},
+                "Body": {
+                    "Text": {"Data": text_body, "Charset": "UTF-8"},
+                    "Html": {"Data": html_body, "Charset": "UTF-8"},
+                },
+            },
+        )
+        logger.info(
+            "Sent digest email to %s (n=%d, user=%s, top=%.2f)",
+            to_email,
+            len(items_list),
+            username,
+            max(i.score for i in items_list),
+        )
+        return True
+    except Exception as exc:  # noqa: BLE001
+        logger.warning("Failed to send digest email to %s: %s", to_email, exc)
+        return False

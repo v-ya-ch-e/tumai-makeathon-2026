@@ -11,15 +11,91 @@ import asyncio
 import logging
 import os
 from concurrent.futures import Future
+from datetime import datetime, timedelta
 from typing import Optional
 
 from sqlmodel import Session
 
 from . import commute, evaluator, notifier, places, repo
 from . import db as db_module
+from .db_models import ListingRow, UserRow
 from .models import ActionKind, AgentAction, NearbyPlace, SearchProfile
 
 logger = logging.getLogger(__name__)
+
+
+def _notify_threshold() -> float:
+    raw = os.environ.get("WG_NOTIFY_THRESHOLD", "0.9")
+    try:
+        return float(raw)
+    except ValueError:
+        return 0.9
+
+
+def _notify_cooldown() -> timedelta:
+    raw = os.environ.get("WG_NOTIFY_COOLDOWN_MINUTES", "5")
+    try:
+        minutes = float(raw)
+    except ValueError:
+        minutes = 5.0
+    return timedelta(minutes=max(0.0, minutes))
+
+
+class _NotifyState:
+    """Per-user, in-process digest queue + last-send timestamp.
+
+    Kept in memory only: a backend restart resets everyone's cooldown and
+    drops their pending digest. That is acceptable for a demo — the matcher
+    will rediscover any still-new (`first_seen_at > user.created_at`) listing
+    on its next pass and requeue it.
+    """
+
+    __slots__ = ("pending", "last_sent_at")
+
+    def __init__(self) -> None:
+        self.pending: list[notifier.DigestItem] = []
+        self.last_sent_at: Optional[datetime] = None
+
+
+_NOTIFY_STATE: dict[str, _NotifyState] = {}
+
+
+def _notify_state(username: str) -> _NotifyState:
+    state = _NOTIFY_STATE.get(username)
+    if state is None:
+        state = _NotifyState()
+        _NOTIFY_STATE[username] = state
+    return state
+
+
+def _try_flush_digest(username: str, to_email: Optional[str]) -> int:
+    """Send all queued digest items for `username` if the cooldown has elapsed.
+
+    Returns the number of items sent (0 when skipped). Safe to call when no
+    email is configured or no items are pending — both are no-ops.
+    """
+    state = _notify_state(username)
+    if not state.pending or not to_email:
+        return 0
+    cooldown = _notify_cooldown()
+    now = datetime.utcnow()
+    if state.last_sent_at is not None and now - state.last_sent_at < cooldown:
+        logger.info(
+            "Holding %d pending matches for %s: cooldown %.1fs remaining",
+            len(state.pending),
+            username,
+            (cooldown - (now - state.last_sent_at)).total_seconds(),
+        )
+        return 0
+    items = list(state.pending)
+    sent = notifier.send_digest_email(
+        to_email=to_email, items=items, username=username
+    )
+    if sent:
+        state.pending.clear()
+        state.last_sent_at = now
+        return len(items)
+    return 0
 
 
 def _shortest_mode_min_per_location(
@@ -138,8 +214,11 @@ class UserAgent:
     async def run_match_pass(self, *, max_listings: int = 15) -> int:
         with Session(db_module.engine) as session:
             sp = repo.get_search_profile(session, username=self._username)
+            user_row = session.get(UserRow, self._username)
         if sp is None:
             sp = SearchProfile(city="München", max_rent_eur=2000)
+        user_email = user_row.email if user_row is not None else None
+        user_created_at = user_row.created_at if user_row is not None else None
 
         with Session(db_module.engine) as session:
             candidate_rows = repo.list_scorable_listings_for_user(
@@ -236,16 +315,11 @@ class UserAgent:
                     scored_against_scraped_at=row.scraped_at,
                 )
 
-            with Session(db_module.engine) as session:
-                user = repo.get_user(session, username=self._username)
-                notify_email = user.email if user is not None else None
-            notifier.notify_if_high_score(
-                to_email=notify_email,
-                listing_title=listing.title or "",
-                listing_url=str(listing.url),
-                score=float(listing.score or 0.0),
-                match_reasons=list(listing.match_reasons),
-                username=self._username,
+            self._maybe_queue_digest_item(
+                row=row,
+                listing=listing,
+                user_email=user_email,
+                user_created_at=user_created_at,
             )
 
             if result.veto_reason is not None:
@@ -282,7 +356,45 @@ class UserAgent:
                 _append(session, self._username, ev)
             _safe_put(self._event_queue, ev)
 
+        _try_flush_digest(self._username, user_email)
         return new_count
+
+    def _maybe_queue_digest_item(
+        self,
+        *,
+        row: ListingRow,
+        listing,
+        user_email: Optional[str],
+        user_created_at: Optional[datetime],
+    ) -> None:
+        """Queue a listing for the next digest flush, applying all gates.
+
+        A listing is only queued when:
+        * the user has a notification email configured,
+        * its score passes `WG_NOTIFY_THRESHOLD`,
+        * the scraper first-saw it *after* the user's account was created —
+          this is what excludes the initial-evaluation backlog and is the
+          single source of truth for "is this a new listing?" regardless of
+          whether the scraper runs on the server or on a developer laptop.
+        """
+        if not user_email:
+            return
+        score = float(listing.score or 0.0)
+        if score < _notify_threshold():
+            return
+        if user_created_at is None or row.first_seen_at is None:
+            return
+        if row.first_seen_at <= user_created_at:
+            return
+        state = _notify_state(self._username)
+        state.pending.append(
+            notifier.DigestItem(
+                listing_title=listing.title or "",
+                listing_url=str(listing.url),
+                score=score,
+                match_reasons=list(listing.match_reasons),
+            )
+        )
 
 
 class PeriodicUserMatcher:
