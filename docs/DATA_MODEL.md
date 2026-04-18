@@ -122,10 +122,12 @@ Latest LLM score payload per `(listing_id, hunt_id)`. Split from `ListingRow` so
 | `match_reasons` | `JSON` / `list` | |
 | `mismatch_reasons` | `JSON` / `list` | |
 | `travel_minutes` | `Optional[JSON]` | Fastest `{mode, minutes}` per `main_location.place_id` when commute data was available at score time. Shape: `{"<place_id>": {"mode": "BICYCLE", "minutes": 18}}`. Populated by `HuntEngine.run_find_only` from the full `commute.travel_times` matrix; read back by `_get_listing_detail` and re-keyed by label for the drawer. Added in Alembic [`0004_listing_commute.py`](../backend/alembic/versions/0004_listing_commute.py). |
+| `components` | `Optional[JSON]` | Scorecard breakdown: `list[{key, score, weight, evidence, hard_cap?, missing_data}]`, one entry per `evaluator` component (price, size, wg_size, availability, commute, preferences, vibe). NULL on pre-migration rows and on vetoed listings. Rendered as per-component bars in `ListingDrawer`. Added in Alembic [`0006_scorecard_components.py`](../backend/alembic/versions/0006_scorecard_components.py). |
+| `veto_reason` | `Optional[str]` | Set when `evaluator.hard_filter` short-circuited evaluation (over budget, wrong city, avoid-district, etc.). Mutually exclusive with a populated `components` list; score is pinned at 0.0. Added in Alembic [`0006_scorecard_components.py`](../backend/alembic/versions/0006_scorecard_components.py). |
 | `scored_at` | `datetime` | |
 
-- **SET**: [`repo.save_score`](../backend/app/wg_agent/repo.py) immediately after `brain.score_listing` in `HuntEngine.run_find_only`.
-- **READ**: Joined in `repo.list_listings_for_hunt` via `_listing_from_row` and in `_get_listing_detail` (the detail endpoint also resolves `place_id` to `main_location.label` for the `travel_minutes_per_location` DTO field).
+- **SET**: [`repo.save_score`](../backend/app/wg_agent/repo.py) immediately after `evaluator.evaluate` in `HuntEngine.run_find_only`.
+- **READ**: Joined in `repo.list_listings_for_hunt` via `_listing_from_row` (which rehydrates `components` via `_components_from_row`) and in `_get_listing_detail` (the detail endpoint also resolves `place_id` to `main_location.label` for the `travel_minutes_per_location` DTO field and rehydrates `components` via `_components_dto_from_row` for the breakdown bars).
 
 ### AgentActionRow
 
@@ -318,13 +320,40 @@ Values below are illustrative; timestamps are ISO-8601 strings as JSON would sho
   "listing_id": "13115694",
   "hunt_id": "a1b2c3d4e5f6",
   "score": 0.82,
-  "reason": "Good transit match; preferences mention gym nearby.",
-  "match_reasons": ["public_transport"],
-  "mismatch_reasons": [],
+  "reason": "Score 0.82: strong price: €795 within comfortable band; weak commute: 42 min vs budget 40",
+  "match_reasons": ["€795 within comfortable band"],
+  "mismatch_reasons": ["Sendling: 42 min (transit) vs budget 40 min"],
   "travel_minutes": {
     "ChIJ2V-Mo_l1nkcRfZixfUq4DAE": { "mode": "BICYCLE", "minutes": 18 },
     "ChIJsendlingPlaceId": { "mode": "TRANSIT", "minutes": 14 }
   },
+  "components": [
+    {
+      "key": "price",
+      "score": 1.0,
+      "weight": 2.0,
+      "evidence": ["€795 within comfortable band (≤ €765)"],
+      "hard_cap": null,
+      "missing_data": false
+    },
+    {
+      "key": "commute",
+      "score": 0.45,
+      "weight": 2.0,
+      "evidence": ["Sendling: 42 min (transit) vs budget 40 min"],
+      "hard_cap": null,
+      "missing_data": false
+    },
+    {
+      "key": "vibe",
+      "score": 0.7,
+      "weight": 1.0,
+      "evidence": ["warm wording about shared dinners"],
+      "hard_cap": null,
+      "missing_data": false
+    }
+  ],
+  "veto_reason": null,
   "scored_at": "2024-01-02T05:02:15"
 }
 ```
@@ -361,24 +390,27 @@ Values below are illustrative; timestamps are ISO-8601 strings as JSON would sho
 1. **Search stub** — `browser.anonymous_search` returns domain `Listing` objects with id, url, title, partial card fields (no long description yet). Nothing is persisted until a listing is treated as new for this hunt.
 2. **New id gate** — `HuntEngine` compares ids against `repo.list_listings_for_hunt`; unseen ids get `ActionKind.new_listing` rows first.
 3. **Deep scrape** — `browser.anonymous_scrape_listing` fills `description`, address/district, availability, etc., on the in-memory `Listing`.
-4. **Score** — `brain.score_listing` mutates the same `Listing` with `score`, `score_reason`, and reason lists.
-5. **Persist** — `repo.upsert_listing` writes/merges `ListingRow` (preserving `first_seen_at`, updating `last_seen_at`); `repo.save_score` upserts `ListingScoreRow`.
-6. **Re-read** — `GET /api/hunts/{id}` and `GET /api/listings/{id}?hunt_id=` rebuild DTOs via `repo.get_hunt` / `_get_listing_detail`, joining scores (and photos when present).
+4. **Evaluate** — `evaluator.evaluate` runs `hard_filter`, all deterministic components, and the narrow `brain.vibe_score` LLM call. The domain `Listing` is mutated with `score`, `score_reason`, `match_reasons`, `mismatch_reasons`, `components`, and `veto_reason` before persist.
+5. **Persist** — `repo.upsert_listing` writes/merges `ListingRow` (preserving `first_seen_at`, updating `last_seen_at`); `repo.save_score` upserts `ListingScoreRow` with the component breakdown and optional veto reason.
+6. **Re-read** — `GET /api/hunts/{id}` and `GET /api/listings/{id}?hunt_id=` rebuild DTOs via `repo.get_hunt` / `_get_listing_detail`, joining scores + components (and photos when present).
 
 ```mermaid
 sequenceDiagram
   participant Search as anonymous_search
   participant Engine as HuntEngine
   participant Scrape as anonymous_scrape_listing
-  participant Brain as brain.score_listing
+  participant Evaluator as evaluator.evaluate
+  participant Brain as brain.vibe_score
   participant DB as repo (SQLite)
 
   Search-->>Engine: Listing stubs
   Engine->>DB: append_action(new_listing)
   Engine->>Scrape: per new id
   Scrape-->>Engine: enriched Listing
-  Engine->>Brain: score_listing
-  Brain-->>Engine: scored Listing
-  Engine->>DB: upsert_listing + save_score
-  Engine->>DB: append_action(evaluate)
+  Engine->>Evaluator: hard_filter + components
+  Evaluator->>Brain: vibe_score (only if not vetoed)
+  Brain-->>Evaluator: VibeScore
+  Evaluator-->>Engine: EvaluationResult
+  Engine->>DB: upsert_listing + save_score (with components)
+  Engine->>DB: append_action(evaluate) — "Scored" or "Rejected"
 ```

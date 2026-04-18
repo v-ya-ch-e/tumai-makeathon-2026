@@ -7,7 +7,7 @@ The active workstream is **WG Hunter** — a fully autonomous `wg-gesucht.de` ro
 ```text
 ┌──────────────┐          ┌──────────────────────────┐          ┌────────────────┐
 │ React SPA    │ ──fetch──▶ FastAPI (/api + SPA)     │ ──httpx──▶ wg-gesucht.de  │
-│ (Vite, TS)   │ ◀── SSE ──│ HuntEngine + OpenAI      │ ──httpx──▶ OpenAI         │
+│ (Vite, TS)   │ ◀── SSE ──│ HuntEngine → evaluator   │ ──httpx──▶ OpenAI (vibe)  │
 └──────────────┘          │ SQLite (+ Alembic)       │ ──httpx──▶ Google Maps    │
                           └──────────────────────────┘
 ```
@@ -138,7 +138,7 @@ From [`.env.example`](./.env.example). Vite reads the same file via [`envDir: '.
 
 | Variable | Required | Consumer | Purpose |
 | -------- | -------- | -------- | ------- |
-| `OPENAI_API_KEY` | **yes** | backend | OpenAI Chat Completions for listing scoring ([`brain.py`](./backend/app/wg_agent/brain.py)) |
+| `OPENAI_API_KEY` | **yes** | backend | OpenAI Chat Completions for the evaluator's narrow vibe component ([`brain.vibe_score`](./backend/app/wg_agent/brain.py)) plus the legacy orchestrator path |
 | `OPENAI_MODEL` | no | backend | Override model (`gpt-4o-mini` by default) |
 | `VITE_GOOGLE_MAPS_API_KEY` | optional | browser | Places Autocomplete in onboarding (referrer- + API-restricted) |
 | `GOOGLE_MAPS_SERVER_KEY` | optional | backend | Geocoding + Routes API (IP- + API-restricted, **never** shipped to the browser) |
@@ -159,7 +159,8 @@ All developer docs live under **[`docs/`](./docs/README.md)**. Start there:
 3. [`docs/DATA_MODEL.md`](./docs/DATA_MODEL.md) — entities, ER diagram, the three-layer rule.
 4. [`docs/BACKEND.md`](./docs/BACKEND.md), [`docs/FRONTEND.md`](./docs/FRONTEND.md), [`docs/AGENT_LOOP.md`](./docs/AGENT_LOOP.md) — walkthroughs.
 5. [`docs/DESIGN.md`](./docs/DESIGN.md), [`docs/DECISIONS.md`](./docs/DECISIONS.md), [`docs/WG_GESUCHT.md`](./docs/WG_GESUCHT.md).
-6. [`docs/_generated/openapi.json`](./docs/_generated/openapi.json) — OpenAPI spec (regenerated after API changes).
+6. [`docs/ROADMAP.md`](./docs/ROADMAP.md) — what's next and what's deliberately out of scope.
+7. [`docs/_generated/openapi.json`](./docs/_generated/openapi.json) — OpenAPI spec (regenerated after API changes).
 
 Project context (challenge brief, TUM systems inventory, AWS notes) lives under [`context/`](./context).
 

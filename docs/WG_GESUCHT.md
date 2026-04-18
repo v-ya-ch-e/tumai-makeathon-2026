@@ -41,7 +41,7 @@ Handy parameters confirmed by probing the server:
 - `city_id` also appears to cause the same bad redirect in some combinations. Skip it.
 - Just use the numeric `rMax`, `rMin`, `sMin`, `sMax`, `wgSea`, `furnishedSea`, `dFr`, `dTo` params — those are honored cleanly.
 
-Because of these quirks, the robust strategy is: pass a **small, safe filter set** in the URL, and then apply the fine-grained match scoring client-side (LLM `score_listing`).
+Because of these quirks, the robust strategy is: pass a **small, safe filter set** in the URL, and then apply the fine-grained match scoring server-side in the scorecard [`evaluator`](../backend/app/wg_agent/evaluator.py) (deterministic components + one narrow `brain.vibe_score` LLM call; see ADR-015).
 
 ### Canonical listing URL
 

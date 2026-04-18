@@ -25,7 +25,7 @@ flowchart LR
   ES --> API
   API --> PH
   PH -->|"anonymous_search / anonymous_scrape_listing"| WG
-  PH -->|"score_listing"| OAI
+  PH -->|"evaluator.evaluate (vibe_score)"| OAI
   PH -->|"repo.* SQLModel"| DB
   API -->|"reads/writes hunts, users"| DB
   React -->|"GET / (non-api)"| SPA
@@ -59,7 +59,7 @@ sequenceDiagram
   loop find pass (+ periodic sleep if schedule periodic)
     PH->>WG: anonymous_search(SearchProfile)
     PH->>WG: anonymous_scrape_listing (per new id)
-    PH->>OAI: brain.score_listing
+    PH->>OAI: evaluator.evaluate (hard filter + components + brain.vibe_score; LLM skipped on veto)
     PH->>API: repo.append_action + Queue.put(AgentAction)
     API-->>UI: SSE data: search / new_listing / evaluate / rescan
   end

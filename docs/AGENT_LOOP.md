@@ -53,12 +53,22 @@ sequenceDiagram
       Engine->>GMAPS: commute.travel_times (computeRouteMatrix, one POST per mode)
       GMAPS-->>Engine: {(place_id, mode): seconds}
     end
-    Engine->>OAI: brain.score_listing (with optional commute block in prompt)
-    OAI-->>Engine: JSON score fields on Listing
-    Engine->>DB: upsert_listing + save_score (travel_minutes JSON when present)
-    Engine->>DB: append_action(evaluate, detail=fastest mode-min per location)
-    Engine->>Q: put_nowait(evaluate)
-    API-->>SPA: SSE data: evaluate
+    Engine->>Engine: evaluator.hard_filter
+    alt Veto
+      Engine->>DB: upsert_listing + save_score (veto_reason, score=0.0)
+      Engine->>DB: append_action(evaluate, "Rejected {id}: <veto_reason>")
+      Engine->>Q: put_nowait(evaluate)
+      API-->>SPA: SSE data: evaluate (rejected)
+    else No veto
+      Engine->>Engine: price_fit / size_fit / wg_size_fit / availability_fit / commute_fit / preference_fit
+      Engine->>OAI: brain.vibe_score (prose-only, ValidationError → missing_data)
+      OAI-->>Engine: VibeScore
+      Engine->>Engine: evaluator.compose (weighted mean + hard caps + clamp)
+      Engine->>DB: upsert_listing + save_score (components JSON, travel_minutes when present)
+      Engine->>DB: append_action(evaluate, detail="price 0.9 · size 1.0 · commute 0.4 · … | fastest mode-min per location")
+      Engine->>Q: put_nowait(evaluate)
+      API-->>SPA: SSE data: evaluate (scored)
+    end
   end
 
   Engine-->>Hunter: new_count
@@ -79,7 +89,7 @@ sequenceDiagram
 
 - **Anonymous search raises (unexpected exception)** — `HuntEngine.run_find_only` catches, writes an `ActionKind.error` row, pushes the same action to the queue, and returns `0` without flipping hunt status inside the engine. `PeriodicHunter` still exits its loop according to schedule and calls `_finalize_done`, so the hunt row typically ends **`done`**, not `failed`, unless the outer `start()` coroutine hits a different uncaught exception (which uses `_finalize_failed`).
 - **`anonymous_search` hits per-request HTTP failures** — Inside [`browser.anonymous_search`](../backend/app/wg_agent/browser.py), `httpx.HTTPError` breaks the page loop and returns partial results rather than raising; the engine proceeds with whatever stubs were collected.
-- **Per-listing scrape or score failure** — The `try`/`except` inside the listing loop logs `ActionKind.error` with the listing id, pushes to the queue, and **`continue`**s with the next id; persisted listings from successful iterations remain.
+- **Per-listing scrape or score failure** — The `try`/`except` inside the listing loop logs `ActionKind.error` with the listing id, pushes to the queue, and **`continue`**s with the next id; persisted listings from successful iterations remain. The evaluator itself catches LLM failures inside `vibe_fit` and degrades that component to `missing_data` rather than raising, so only an unexpected error in `hard_filter` or the deterministic components escapes this way.
 - **Alembic failure during startup** — If `command.upgrade` raises inside [`lifespan`](../backend/app/main.py), FastAPI startup fails and the process does not serve traffic until the migration issue is resolved.
 - **SSE client disconnect** — Closing the browser tab stops the `EventSource`, but the underlying asyncio hunt task keeps running: actions continue to append to SQLite and (while the process stays up) the queue. A later reconnect receives a **full DB replay** first, then live events.
 
