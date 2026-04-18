@@ -1,5 +1,6 @@
 import { BrowserRouter, Navigate, Route, Routes } from 'react-router-dom'
 import { SessionProvider, useSession } from './lib/session'
+import Dashboard from './pages/Dashboard'
 import HealthPage from './pages/Health'
 import OnboardingPreferences from './pages/OnboardingPreferences'
 import OnboardingProfile from './pages/OnboardingProfile'
@@ -20,10 +21,6 @@ function HomeRedirect() {
   return <Navigate to="/onboarding/profile" replace />
 }
 
-function DashboardPlaceholder() {
-  return <div className="min-h-screen bg-canvas" />
-}
-
 export default function App() {
   return (
     <SessionProvider>
@@ -34,7 +31,7 @@ export default function App() {
           <Route path="/onboarding/profile" element={<OnboardingProfile />} />
           <Route path="/onboarding/requirements" element={<OnboardingRequirements />} />
           <Route path="/onboarding/preferences" element={<OnboardingPreferences />} />
-          <Route path="/dashboard" element={<DashboardPlaceholder />} />
+          <Route path="/dashboard" element={<Dashboard />} />
         </Routes>
       </BrowserRouter>
     </SessionProvider>
