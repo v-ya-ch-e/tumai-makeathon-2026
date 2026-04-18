@@ -98,6 +98,8 @@ export default function Dashboard() {
   const [openListing, setOpenListing] = useState<Listing | null>(null)
   const seenActionKeysRef = useRef<Set<string>>(new Set())
   const autoStartTriggeredRef = useRef(false)
+  const refreshTimerRef = useRef<number | null>(null)
+  const refreshInFlightRef = useRef(false)
 
   const refreshCredStatus = useCallback(async (name: string) => {
     try {
@@ -168,6 +170,31 @@ export default function Dashboard() {
     let closed = false
     let closeFn: (() => void) | null = null
 
+    const scheduleRefresh = () => {
+      if (closed) return
+      if (refreshTimerRef.current !== null) return
+      refreshTimerRef.current = window.setTimeout(() => {
+        refreshTimerRef.current = null
+        if (closed) return
+        if (refreshInFlightRef.current) {
+          scheduleRefresh()
+          return
+        }
+        refreshInFlightRef.current = true
+        void (async () => {
+          try {
+            const fresh = await refreshHunt(huntId)
+            if (closed || !fresh) return
+            setListings(fresh.listings)
+            setHunt(fresh)
+            setUiStatus(huntToUiStatus(fresh))
+          } finally {
+            refreshInFlightRef.current = false
+          }
+        })()
+      }, 750)
+    }
+
     closeFn = streamHunt(huntId, (event) => {
       if ('kind' in event && event.kind === 'stream-end') {
         if (!closed) {
@@ -186,18 +213,16 @@ export default function Dashboard() {
       seenActionKeysRef.current.add(key)
       setActions((prev) => [...prev, action])
       if (action.kind === 'evaluate' || action.kind === 'new_listing') {
-        void (async () => {
-          const fresh = await refreshHunt(huntId)
-          if (!fresh) return
-          setListings(fresh.listings)
-          setHunt(fresh)
-          setUiStatus(huntToUiStatus(fresh))
-        })()
+        scheduleRefresh()
       }
     })
 
     return () => {
       closed = true
+      if (refreshTimerRef.current !== null) {
+        window.clearTimeout(refreshTimerRef.current)
+        refreshTimerRef.current = null
+      }
       closeFn?.()
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps
