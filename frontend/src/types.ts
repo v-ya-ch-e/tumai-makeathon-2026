@@ -91,6 +91,8 @@ export type Listing = {
   /** Mirrors backend `available_to`. */
   availableTo: string | null
   description: string | null
+  coverPhotoUrl: string | null
+  bestCommuteMinutes: number | null
   score: number | null
   scoreReason: string | null
   matchReasons: string[]

@@ -26,6 +26,7 @@ from .dto import (
     ListingDTO,
     NearbyPlaceDTO,
     SearchProfileDTO,
+    UpdateUserBody,
     UpsertSearchProfileBody,
     UserDTO,
     action_to_dto,
@@ -104,6 +105,8 @@ def _get_listing_detail(
         available_from=row.available_from,
         available_to=row.available_to,
         description=row.description,
+        cover_photo_url=photos[0] if photos else None,
+        best_commute_minutes=_best_commute_minutes(score_row),
         score=score_val,
         score_reason=reason,
         match_reasons=match_reasons,
@@ -176,6 +179,19 @@ def _travel_minutes_by_label(
     return out or None
 
 
+def _best_commute_minutes(score_row: Optional[ListingScoreRow]) -> Optional[int]:
+    if score_row is None or not score_row.travel_minutes:
+        return None
+    best: Optional[int] = None
+    for entry in score_row.travel_minutes.values():
+        if not isinstance(entry, dict):
+            continue
+        minutes = entry.get("minutes")
+        if not isinstance(minutes, int):
+            continue
+        if best is None or minutes < best:
+            best = minutes
+    return best
 def _nearby_places_from_row(
     score_row: Optional[ListingScoreRow],
 ) -> list[NearbyPlaceDTO]:
@@ -214,6 +230,28 @@ def get_user(username: str, session: Session = Depends(get_session)) -> UserDTO:
     if u is None:
         raise HTTPException(status_code=404, detail="User not found")
     return user_to_dto(u)
+
+
+@router.put("/users/{username}", response_model=UserDTO)
+def update_user(
+    username: str,
+    body: UpdateUserBody,
+    session: Session = Depends(get_session),
+) -> UserDTO:
+    existing = repo.get_user(session, username=username)
+    if existing is None:
+        raise HTTPException(status_code=404, detail="User not found")
+    updated = repo.update_user(
+        session,
+        username=username,
+        profile=UserProfile(
+            username=existing.username,
+            age=body.age,
+            gender=Gender(body.gender),
+            created_at=existing.created_at,
+        ),
+    )
+    return user_to_dto(updated)
 
 
 @router.put("/users/{username}/search-profile", response_model=SearchProfileDTO)

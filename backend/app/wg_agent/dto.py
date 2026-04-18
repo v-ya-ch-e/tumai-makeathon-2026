@@ -33,6 +33,11 @@ class CreateUserBody(BaseModel):
     gender: str = Field(..., pattern=r"^(female|male|diverse|prefer_not_to_say)$")
 
 
+class UpdateUserBody(BaseModel):
+    age: int = Field(..., ge=16, le=99)
+    gender: str = Field(..., pattern=r"^(female|male|diverse|prefer_not_to_say)$")
+
+
 class SearchProfileDTO(BaseModel):
     price_min_eur: int
     price_max_eur: Optional[int] = None
@@ -121,6 +126,8 @@ class ListingDTO(BaseModel):
     available_from: Optional[date] = None
     available_to: Optional[date] = None
     description: Optional[str] = None
+    cover_photo_url: Optional[str] = None
+    best_commute_minutes: Optional[int] = None
     score: Optional[float] = None
     score_reason: Optional[str] = None
     match_reasons: list[str] = Field(default_factory=list)
@@ -184,16 +191,14 @@ def search_profile_to_dto(sp: SearchProfile) -> SearchProfileDTO:
 
 
 def upsert_body_to_search_profile(b: UpsertSearchProfileBody) -> SearchProfile:
-    # Transitional defaults so browser.py / brain.py keep working during API migration.
+    # Main locations are commute anchors, not the search city itself.
     max_eur = b.price_max_eur if b.price_max_eur is not None else 2000
-    main = list(b.main_locations)
-    city = main[0].label if main else "München"
     return SearchProfile(
-        city=city,
+        city="München",
         max_rent_eur=max_eur,
         price_min_eur=b.price_min_eur,
         price_max_eur=b.price_max_eur,
-        main_locations=main,
+        main_locations=list(b.main_locations),
         has_car=b.has_car,
         has_bike=b.has_bike,
         mode=b.mode,
@@ -255,6 +260,8 @@ def listing_to_dto(l: Listing, hunt_id: str) -> ListingDTO:
         available_from=l.available_from,
         available_to=l.available_to,
         description=l.description,
+        cover_photo_url=l.cover_photo_url,
+        best_commute_minutes=l.best_commute_minutes,
         score=l.score,
         score_reason=l.score_reason,
         match_reasons=list(l.match_reasons),

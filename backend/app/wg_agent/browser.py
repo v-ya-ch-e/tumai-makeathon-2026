@@ -17,7 +17,7 @@ from dataclasses import dataclass
 from datetime import date
 from pathlib import Path
 from typing import Optional
-from urllib.parse import urlencode
+from urllib.parse import urlencode, urljoin
 
 import httpx
 from bs4 import BeautifulSoup, Tag
@@ -111,6 +111,160 @@ def _clean(text: Optional[str]) -> str:
     if not text:
         return ""
     return re.sub(r"\s+", " ", text).strip()
+
+
+def _looks_like_block_page(soup: BeautifulSoup, full_text: str) -> bool:
+    """Detect captcha / anti-bot interstitials so we keep the stub listing data."""
+    listing_markers = (
+        soup.select_one("#ad_description_text") is not None
+        or soup.find("h2", string=re.compile(r"Kosten|Verfügbarkeit|Adresse", re.I))
+        is not None
+        or _find_contact_url(str(soup)) is not None
+    )
+    if listing_markers:
+        return False
+
+    if soup.find(attrs={"data-sitekey": True}) is not None:
+        return True
+    if soup.find(["iframe", "script"], src=re.compile(r"turnstile|captcha", re.I)) is not None:
+        return True
+
+    return bool(
+        re.search(
+            r"captcha|turnstile|verify you are human|are you human|"
+            r"sicherheits(über|ueber)pr(ü|ue)fung|bist du ein mensch|"
+            r"ungew(ö|oe)hnlichen datenverkehr|automated requests|robot",
+            full_text,
+            re.I,
+        )
+    )
+
+
+def _normalized_photo_url(raw: Optional[str]) -> Optional[str]:
+    if not raw:
+        return None
+    candidate = raw.strip()
+    if not candidate or candidate.startswith("data:"):
+        return None
+    if candidate.startswith("//"):
+        candidate = f"https:{candidate}"
+    elif candidate.startswith("/"):
+        candidate = urljoin(BASE_URL, candidate)
+    lowered = candidate.lower()
+    if any(
+        token in lowered
+        for token in (
+            "logo",
+            "avatar",
+            "icon",
+            "flag",
+            "tracking",
+            "googleads",
+            "placeholder",
+            "blank",
+            "dummy",
+            "default",
+            "more_photos",
+            "more-photos",
+            "mehr_fotos",
+            "mehr-fotos",
+        )
+    ):
+        return None
+    return candidate
+
+
+def _photo_context_text(el: Tag) -> str:
+    attrs = [
+        el.get("alt"),
+        el.get("title"),
+        el.get("aria-label"),
+        " ".join(el.get("class", [])),
+        el.get("id"),
+    ]
+    parent = el.parent if isinstance(el.parent, Tag) else None
+    if parent is not None:
+        attrs.extend(
+            [
+                " ".join(parent.get("class", [])),
+                parent.get("id"),
+            ]
+        )
+    return _clean(" ".join(part for part in attrs if part)).lower()
+
+
+def _looks_like_gallery_element(el: Tag) -> bool:
+    if el.has_attr("data-full-image") or el.has_attr("data-src") or el.has_attr("data-lazy"):
+        return True
+    for node in (el, *el.parents):
+        if not isinstance(node, Tag):
+            continue
+        haystack = _clean(
+            " ".join(
+                part
+                for part in (
+                    node.get("id"),
+                    " ".join(node.get("class", [])),
+                    node.get("data-testid"),
+                )
+                if part
+            )
+        ).lower()
+        if re.search(r"gallery|carousel|slider|photo|image|bilder", haystack):
+            return True
+    return False
+
+
+def _parse_photo_urls(soup: BeautifulSoup) -> list[str]:
+    """Return likely listing-gallery image URLs, deduplicated and ordered."""
+    candidates: list[str] = []
+
+    meta_image = soup.find("meta", attrs={"property": "og:image"})
+    if meta_image is not None:
+        normalized = _normalized_photo_url(meta_image.get("content"))
+        if normalized:
+            candidates.append(normalized)
+
+    selectors = (
+        '[data-full-image]',
+        'img[data-src]',
+        'img[data-lazy]',
+        'source[srcset]',
+        'img[src]',
+    )
+    for selector in selectors:
+        for el in soup.select(selector):
+            if el.name == "img" and not _looks_like_gallery_element(el):
+                continue
+            context = _photo_context_text(el)
+            if re.search(
+                r"male|female|neutral|divers|gender|weiblich|männlich|maennlich|"
+                r"bewohner|icon|placeholder|sketch|mehr fotos|more photos|weitere fotos",
+                context,
+            ):
+                continue
+            values: list[str] = []
+            for attr in ("data-full-image", "data-src", "data-lazy", "src", "srcset"):
+                raw = el.get(attr)
+                if not raw:
+                    continue
+                if attr == "srcset":
+                    values.extend(part.strip().split(" ")[0] for part in raw.split(","))
+                else:
+                    values.append(raw)
+            for raw in values:
+                normalized = _normalized_photo_url(raw)
+                if normalized:
+                    candidates.append(normalized)
+
+    out: list[str] = []
+    seen: set[str] = set()
+    for url in candidates:
+        if url in seen:
+            continue
+        seen.add(url)
+        out.append(url)
+    return out[:12]
 
 
 # --- Parsers ------------------------------------------------------------------
@@ -341,6 +495,9 @@ def parse_listing_page(html: str, listing: Listing) -> Listing:
     soup = BeautifulSoup(html, "html.parser")
     full_text = _clean(soup.get_text(" "))
 
+    if _looks_like_block_page(soup, full_text):
+        return listing
+
     h1 = soup.find("h1")
     if h1:
         listing.title = _clean(h1.get_text()) or listing.title
@@ -498,6 +655,11 @@ def parse_listing_page(html: str, listing: Listing) -> Listing:
     coords = _parse_map_lat_lng(html)
     if coords is not None:
         listing.lat, listing.lng = coords
+
+    photo_urls = _parse_photo_urls(soup)
+    if photo_urls:
+        listing.photo_urls = photo_urls
+        listing.cover_photo_url = photo_urls[0]
 
     return listing
 
@@ -734,8 +896,14 @@ async def anonymous_search(
                 response = await client.get(url)
                 response.raise_for_status()
             except httpx.HTTPError:
+                if page_index == 0:
+                    raise
                 break
             batch = parse_search_page(response.text, seen_ids=seen)
+            if page_index == 0 and not batch:
+                raise RuntimeError(
+                    "Search page returned no parsable listings on the first page."
+                )
             if not batch:
                 break
             out.extend(batch)

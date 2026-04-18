@@ -69,12 +69,12 @@ export function Drawer({
         aria-modal
         role="dialog"
         className={clsx(
-          'fixed top-0 right-0 z-50 flex h-full flex-col border-l border-hairline bg-surface-raised shadow-drawer transition-transform duration-[220ms] ease-in-out rounded-l-drawer',
+          'fixed top-0 right-0 z-50 flex h-full flex-col rounded-l-drawer border-l border-hairline bg-surface-raised shadow-[0_24px_80px_rgba(39,33,29,0.16)] transition-transform duration-[220ms] ease-in-out',
           widthClass,
           entered ? 'translate-x-0' : 'translate-x-full',
         )}
       >
-        <header className="flex shrink-0 items-start justify-between gap-4 border-b border-hairline px-6 py-4">
+        <header className="flex shrink-0 items-start justify-between gap-4 border-b border-hairline px-6 py-5">
           {title != null ? (
             <div className="min-w-0 flex-1 text-[15px] font-semibold text-ink">{title}</div>
           ) : (

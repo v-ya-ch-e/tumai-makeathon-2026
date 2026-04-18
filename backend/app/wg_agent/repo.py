@@ -67,6 +67,22 @@ def get_user(session: Session, *, username: str) -> Optional[UserProfile]:
     )
 
 
+def update_user(session: Session, *, username: str, profile: UserProfile) -> UserProfile:
+    row = session.get(UserRow, username)
+    if row is None:
+        raise KeyError(username)
+    row.age = profile.age
+    row.gender = profile.gender.value
+    session.commit()
+    session.refresh(row)
+    return UserProfile(
+        username=row.username,
+        age=row.age,
+        gender=Gender(row.gender),
+        created_at=row.created_at,
+    )
+
+
 def _parse_preference(raw: object) -> Optional[PreferenceWeight]:
     """Accept both new `{key, weight}` dicts and legacy bare strings."""
     if isinstance(raw, str):
@@ -110,8 +126,8 @@ def get_search_profile(session: Session, *, username: str) -> Optional[SearchPro
     main = [PlaceLocation.model_validate(d) for d in (row.main_locations or [])]
     prefs_raw = row.preferences or []
     prefs = [p for p in (_parse_preference(x) for x in prefs_raw) if p is not None]
-    # transitional: browser.py still reads these
-    city = main[0].label if main else "München"
+    # Main locations are commute anchors, not the search city itself.
+    city = "München"
     max_rent_eur = row.price_max_eur if row.price_max_eur is not None else 2000
     min_rent_eur = row.price_min_eur
     return SearchProfile(
@@ -352,7 +368,15 @@ def list_listings_for_hunt(session: Session, *, hunt_id: str) -> list[Listing]:
                 ListingScoreRow.hunt_id == hunt_id,
             )
         ).first()
-        out.append(_listing_from_row(lr, score_row))
+        out.append(
+            _listing_from_row(
+                lr,
+                score_row,
+                cover_photo_url=_cover_photo_url(
+                    session, hunt_id=hunt_id, listing_id=lr.id
+                ),
+            )
+        )
     return out
 
 
@@ -375,7 +399,10 @@ def list_actions_for_hunt(session: Session, *, hunt_id: str) -> list[AgentAction
 
 
 def _listing_from_row(
-    row: ListingRow, score_row: Optional[ListingScoreRow]
+    row: ListingRow,
+    score_row: Optional[ListingScoreRow],
+    *,
+    cover_photo_url: Optional[str] = None,
 ) -> Listing:
     score = score_row.score if score_row else None
     reason = score_row.reason if score_row else None
@@ -397,6 +424,8 @@ def _listing_from_row(
         available_from=row.available_from,
         available_to=row.available_to,
         description=row.description,
+        cover_photo_url=cover_photo_url,
+        best_commute_minutes=_best_commute_minutes(score_row),
         score=score,
         score_reason=reason,
         match_reasons=match_reasons,
@@ -425,3 +454,29 @@ def _components_from_row(
         except Exception:  # noqa: BLE001
             continue
     return out
+
+
+def _cover_photo_url(
+    session: Session, *, hunt_id: str, listing_id: str
+) -> Optional[str]:
+    photo_row = session.exec(
+        select(PhotoRow)
+        .where(PhotoRow.listing_id == listing_id, PhotoRow.hunt_id == hunt_id)
+        .order_by(PhotoRow.ordinal)
+    ).first()
+    return photo_row.url if photo_row is not None else None
+
+
+def _best_commute_minutes(score_row: Optional[ListingScoreRow]) -> Optional[int]:
+    if score_row is None or not score_row.travel_minutes:
+        return None
+    best: Optional[int] = None
+    for entry in score_row.travel_minutes.values():
+        if not isinstance(entry, dict):
+            continue
+        minutes = entry.get("minutes")
+        if not isinstance(minutes, int):
+            continue
+        if best is None or minutes < best:
+            best = minutes
+    return best

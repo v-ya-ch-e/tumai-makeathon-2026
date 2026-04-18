@@ -7,10 +7,12 @@ export type ActionLogProps = {
 }
 
 function kindToneClass(kind: string): string {
-  if (kind === 'new_listing' || kind === 'evaluate' || kind === 'done') return 'text-good'
-  if (kind === 'error') return 'text-bad'
-  if (kind === 'rescan' || kind === 'rate_limit' || kind === 'dry_run_skip') return 'text-warn'
-  return 'text-ink-muted'
+  if (kind === 'new_listing' || kind === 'evaluate' || kind === 'done') return 'border-good/30 bg-good/10 text-good'
+  if (kind === 'error') return 'border-bad/30 bg-bad/10 text-bad'
+  if (kind === 'rescan' || kind === 'rate_limit' || kind === 'dry_run_skip') {
+    return 'border-warn/30 bg-warn/10 text-warn'
+  }
+  return 'border-hairline bg-surface-raised text-ink-muted'
 }
 
 function formatTime(iso: string): string {
@@ -34,16 +36,25 @@ export function ActionLog({ actions, emptyLabel }: ActionLogProps) {
   const reversed = [...actions].reverse()
 
   return (
-    <ol className="space-y-3">
+    <ol className="space-y-4">
       {reversed.map((a, i) => (
-        <li key={`${a.at}-${i}`} className="flex items-start gap-3 border-l-2 border-hairline pl-3">
-          <span className="w-20 shrink-0 font-mono text-[12px] text-ink-muted">
-            {formatTime(a.at)}
-          </span>
-          <span className={clsx('w-24 shrink-0 font-mono text-[12px]', kindToneClass(a.kind))}>
-            {a.kind}
-          </span>
-          <span className="text-[14px] text-ink">{a.summary}</span>
+        <li
+          key={`${a.at}-${i}`}
+          className="rounded-[22px] border border-hairline/80 bg-surface-raised/80 px-4 py-4 shadow-[0_14px_30px_rgba(39,33,29,0.04)]"
+        >
+          <div className="flex flex-wrap items-center gap-2">
+            <span className="font-mono text-[12px] text-ink-muted">{formatTime(a.at)}</span>
+            <span
+              className={clsx(
+                'inline-flex rounded-full border px-2.5 py-1 font-mono text-[11px] uppercase tracking-[0.14em]',
+                kindToneClass(a.kind),
+              )}
+            >
+              {a.kind}
+            </span>
+          </div>
+          <p className="mt-3 text-[14px] leading-6 text-ink">{a.summary}</p>
+          {a.detail ? <p className="mt-2 text-[13px] leading-6 text-ink-muted">{a.detail}</p> : null}
         </li>
       ))}
     </ol>

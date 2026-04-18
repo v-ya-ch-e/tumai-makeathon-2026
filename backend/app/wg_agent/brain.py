@@ -16,6 +16,7 @@ import json
 import logging
 import os
 from typing import Any, Optional
+from urllib.parse import urlparse
 
 from openai import OpenAI
 from pydantic import BaseModel, Field, ValidationError
@@ -34,12 +35,29 @@ logger = logging.getLogger(__name__)
 DEFAULT_MODEL = os.getenv("OPENAI_MODEL", "gpt-4o-mini")
 
 
+def _base_url() -> Optional[str]:
+    base_url = os.environ.get("OPENAI_BASE_URL")
+    if not base_url:
+        return None
+    host = (urlparse(base_url).hostname or "").lower()
+    if host in {"127.0.0.1", "0.0.0.0", "localhost"}:
+        logger.warning(
+            "Ignoring OPENAI_BASE_URL=%s because it points to a local endpoint.",
+            base_url,
+        )
+        return None
+    return base_url
+
+
 def _client() -> OpenAI:
     api_key = os.environ.get("OPENAI_API_KEY")
     if not api_key:
         raise RuntimeError(
             "OPENAI_API_KEY is not set. Put it in .env or export it in the shell."
         )
+    base_url = _base_url()
+    if base_url:
+        return OpenAI(api_key=api_key, base_url=base_url)
     return OpenAI(api_key=api_key)
 
 
@@ -211,6 +229,12 @@ REQUIREMENTS:
 
 LISTING:
 {listing}
+
+Use this scoring shape for numeric fit: cheaper, bigger, and closer are
+better. Scores should stay fairly forgiving up to the user's cutoff, but once
+a listing crosses that cutoff the penalty should accelerate sharply instead of
+dropping linearly. For size, use the mirrored rule: being below the preferred
+size should hurt quickly, while anything at or above it is good.
 
 If the "Commute times" section is present, treat commutes over 40 minutes as
 strong negatives and under 20 minutes as positives. Do not invent commute

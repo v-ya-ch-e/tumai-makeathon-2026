@@ -42,6 +42,7 @@ logger = logging.getLogger(__name__)
 
 
 DEFAULT_COMMUTE_BUDGET_MIN = 40
+PRICE_HARD_VETO_MULTIPLIER = 1.5
 NEARBY_PLACE_COMFORT_M = 400
 NEARBY_PLACE_OK_M = 1000
 
@@ -127,10 +128,20 @@ def hard_filter(listing: Listing, profile: SearchProfile) -> Optional[VetoResult
     """Return a veto if the listing can't possibly match, else None.
 
     Vetoes short-circuit: no components, no LLM call, score pinned at 0.0.
+
+    Rent is treated as a soft cutoff first: slightly over-budget listings stay
+    in the pool and are punished by the price curve instead of being rejected
+    immediately. Only listings far beyond the stated budget are vetoed outright.
     """
-    if listing.price_eur is not None and listing.price_eur > profile.max_rent_eur:
+    if (
+        listing.price_eur is not None
+        and listing.price_eur > int(profile.max_rent_eur * PRICE_HARD_VETO_MULTIPLIER)
+    ):
         return VetoResult(
-            reason=f"over budget (€{listing.price_eur} > €{profile.max_rent_eur})"
+            reason=(
+                f"far over budget (€{listing.price_eur} > "
+                f"€{int(profile.max_rent_eur * PRICE_HARD_VETO_MULTIPLIER)})"
+            )
         )
     # not needed, if we filter in wg gesucht for city first, also missfires often
     # if (
@@ -200,7 +211,6 @@ def price_fit(listing: Listing, profile: SearchProfile) -> ComponentScore:
             missing_data=True,
         )
     p = listing.price_eur
-    lo = profile.min_rent_eur
     hi = profile.max_rent_eur
     if hi <= 0:
         return ComponentScore(
@@ -210,23 +220,11 @@ def price_fit(listing: Listing, profile: SearchProfile) -> ComponentScore:
             evidence=["no rent budget configured"],
             missing_data=True,
         )
-    comfortable = max(lo, int(0.85 * hi))
-    if p > hi:
-        score = 0.0
-        evidence = [f"€{p} over budget (cap €{hi})"]
-    elif p >= lo and p <= comfortable:
-        score = 1.0
-        evidence = [f"€{p} within comfortable band (≤ €{comfortable})"]
-    elif p < lo:
-        # Suspiciously cheap but not a veto: small penalty.
-        under = max(1, lo - p)
-        score = max(0.0, 1.0 - under / max(lo, 1))
-        evidence = [f"€{p} below min rent €{lo}"]
+    score = _descending_cutoff_curve(p, hi)
+    if p <= hi:
+        evidence = [f"€{p} at or under budget cap €{hi}"]
     else:
-        # comfortable < p <= hi: linear ramp 1 -> 0.
-        span = max(1, hi - comfortable)
-        score = max(0.0, 1.0 - (p - comfortable) / span)
-        evidence = [f"€{p} near cap €{hi}"]
+        evidence = [f"€{p} above budget cap €{hi} with accelerated penalty"]
     return ComponentScore(
         key="price", score=score, weight=weight, evidence=evidence
     )
@@ -244,25 +242,17 @@ def size_fit(listing: Listing, profile: SearchProfile) -> ComponentScore:
         )
     s = float(listing.size_m2)
     lo = float(profile.min_size_m2)
-    hi = float(profile.max_size_m2)
-    ramp_up_end = lo + 5.0
-    ramp_down_end = hi * 1.25
-    if s < lo:
-        score = 0.0
-        evidence = [f"{s:.0f} m² below min {lo:.0f} m²"]
-    elif s < ramp_up_end:
-        score = (s - lo) / (ramp_up_end - lo) if ramp_up_end > lo else 1.0
-        evidence = [f"{s:.0f} m² just above min"]
-    elif s <= hi:
+    hi = float(max(profile.max_size_m2, profile.min_size_m2))
+    if s >= hi:
         score = 1.0
-        evidence = [f"{s:.0f} m² inside target band"]
-    elif s <= ramp_down_end:
-        span = max(1e-6, ramp_down_end - hi)
-        score = max(0.0, 1.0 - (s - hi) / span)
-        evidence = [f"{s:.0f} m² above target {hi:.0f} m²"]
+        evidence = [f"{s:.0f} m² at or above preferred size {hi:.0f} m²"]
+    elif s >= lo:
+        span = max(1e-6, hi - lo)
+        score = 0.8 + 0.2 * ((s - lo) / span)
+        evidence = [f"{s:.0f} m² above minimum {lo:.0f} m²"]
     else:
-        score = 0.0
-        evidence = [f"{s:.0f} m² well above target {hi:.0f} m²"]
+        score = _ascending_cutoff_curve(s, lo)
+        evidence = [f"{s:.0f} m² below minimum {lo:.0f} m²"]
     return ComponentScore(
         key="size", score=score, weight=weight, evidence=evidence
     )
@@ -412,23 +402,50 @@ def commute_fit(
 
 
 def _commute_curve(minutes: int, budget: int) -> float:
-    """Piecewise linear: 1.0 at 0.5*budget, 0.5 at budget, 0 at 1.5*budget.
+    """Gentle decay up to the budget, then a much steeper post-budget drop."""
+    return _descending_cutoff_curve(minutes, budget, comfort_ratio=0.5)
 
-    Beyond 1.5*budget clamps to 0. Under 0.5*budget clamps to 1.0.
+
+def _descending_cutoff_curve(
+    value: float, cutoff: float, *, comfort_ratio: float = 0.0
+) -> float:
+    """Return a hinge curve with a gentle in-band slope and a steep tail.
+
+    `comfort_ratio` creates an optional full-score plateau before the cutoff.
+    This lets commute stay perfect while it is comfortably inside budget, while
+    price can still reward cheaper listings across the full in-budget range.
     """
-    if budget <= 0:
+    if cutoff <= 0:
         return 0.0
-    half = budget * 0.5
-    cap = budget * 1.5
-    if minutes <= half:
+    ratio = max(0.0, float(value) / float(cutoff))
+    comfort_ratio = max(0.0, min(comfort_ratio, 0.95))
+    if ratio <= comfort_ratio:
         return 1.0
-    if minutes <= budget:
-        # 1.0 at half -> 0.5 at budget
-        return 1.0 - 0.5 * (minutes - half) / (budget - half)
-    if minutes <= cap:
-        # 0.5 at budget -> 0.0 at 1.5*budget
-        return 0.5 * (1.0 - (minutes - budget) / (cap - budget))
-    return 0.0
+    if ratio <= 1.0:
+        span = max(1e-6, 1.0 - comfort_ratio)
+        normalized = (ratio - comfort_ratio) / span
+        score = 1.0 - 0.2 * (normalized ** 1.3)
+    else:
+        over = ratio - 1.0
+        score = 0.8 - 1.5 * over - 3.5 * (over ** 2)
+    return max(0.0, min(1.0, score))
+
+
+def _ascending_cutoff_curve(value: float, cutoff: float) -> float:
+    """Mirrored version of `_descending_cutoff_curve` for benefit metrics.
+
+    Below the cutoff the score drops quickly, while anything at or above the
+    cutoff stays strong. We use it for size, where bigger is better until the
+    user's preferred threshold is reached.
+    """
+    if cutoff <= 0:
+        return 1.0
+    ratio = max(0.0, float(value) / float(cutoff))
+    if ratio >= 1.0:
+        return 1.0
+    shortfall = 1.0 - ratio
+    score = 0.8 - 1.5 * shortfall - 3.5 * (shortfall ** 2)
+    return max(0.0, min(1.0, score))
 
 
 def preference_fit(

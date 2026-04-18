@@ -1,9 +1,10 @@
 import clsx from 'clsx'
-import { useEffect, useState, type ReactNode } from 'react'
+import { useEffect, useMemo, useState, type ReactNode } from 'react'
 import { useNavigate } from 'react-router-dom'
 import { OnboardingShell } from '../components/OnboardingShell'
-import { WeightSlider } from '../components/ui'
+import { Card, WeightSlider } from '../components/ui'
 import { ApiError, getSearchProfile, putSearchProfile } from '../lib/api'
+import { onboardingSteps } from '../lib/onboarding'
 import { useSession } from '../lib/session'
 import type { PreferenceWeight, SearchProfile, UpsertSearchProfileBody } from '../types'
 
@@ -182,6 +183,12 @@ const GROUPS: PreferenceGroup[] = [
 
 const DEFAULT_WEIGHT = 3
 
+const PRESETS: Array<{ label: string; keys: string[] }> = [
+  { label: 'Budget practicality', keys: ['furnished', 'washing_machine', 'supermarket', 'bike_storage'] },
+  { label: 'Social city life', keys: ['cafe', 'bars', 'nightlife', 'english_speaking'] },
+  { label: 'Calm & green', keys: ['quiet_area', 'park', 'green_space', 'non_smoking'] },
+]
+
 export default function OnboardingPreferences() {
   const navigate = useNavigate()
   const { username, isReady } = useSession()
@@ -190,6 +197,11 @@ export default function OnboardingPreferences() {
   const [hydrated, setHydrated] = useState(false)
   const [busy, setBusy] = useState(false)
   const [footer, setFooter] = useState<ReactNode>(null)
+  const progressSteps = onboardingSteps({
+    canAccessRequirements: Boolean(username),
+    canAccessPreferences: Boolean(username),
+    canAccessDashboard: hydrated && profile !== null,
+  })
 
   useEffect(() => {
     if (!isReady) return
@@ -208,8 +220,8 @@ export default function OnboardingPreferences() {
         }
         setProfile(sp)
         const next = new Map<string, number>()
-        for (const p of sp.preferences) {
-          next.set(p.key, clampWeight(p.weight))
+        for (const preference of sp.preferences) {
+          next.set(preference.key, clampWeight(preference.weight))
         }
         setSelected(next)
       } finally {
@@ -220,6 +232,17 @@ export default function OnboardingPreferences() {
       cancelled = true
     }
   }, [isReady, username, navigate])
+
+  const selectedPreferences = useMemo(
+    () =>
+      GROUPS.flatMap((group) =>
+        group.tiles.filter((tile) => selected.has(tile.key)).map((tile) => ({
+          ...tile,
+          weight: selected.get(tile.key) ?? DEFAULT_WEIGHT,
+        })),
+      ),
+    [selected],
+  )
 
   const toggle = (key: string) => {
     setSelected((prev) => {
@@ -239,12 +262,23 @@ export default function OnboardingPreferences() {
     })
   }
 
+  const applyPreset = (keys: string[]) => {
+    setSelected((prev) => {
+      const next = new Map(prev)
+      for (const key of keys) {
+        if (!next.has(key)) next.set(key, DEFAULT_WEIGHT)
+      }
+      return next
+    })
+  }
+
   const handleNext = async () => {
     setFooter(null)
     if (!username || !profile) return
-    const preferences: PreferenceWeight[] = Array.from(selected.entries()).map(
-      ([key, weight]) => ({ key, weight }),
-    )
+    const preferences: PreferenceWeight[] = Array.from(selected.entries()).map(([key, weight]) => ({
+      key,
+      weight,
+    }))
     const body: UpsertSearchProfileBody = {
       priceMinEur: profile.priceMinEur,
       priceMaxEur: profile.priceMaxEur,
@@ -258,10 +292,11 @@ export default function OnboardingPreferences() {
       rescanIntervalMinutes: profile.rescanIntervalMinutes,
       schedule: profile.schedule,
     }
+
     setBusy(true)
     try {
       await putSearchProfile(username, body)
-      navigate('/dashboard')
+      navigate('/dashboard', { state: { autoStart: true } })
     } catch (e) {
       if (e instanceof ApiError) {
         setFooter(<p className="text-[15px] text-bad">{e.message}</p>)
@@ -275,7 +310,14 @@ export default function OnboardingPreferences() {
 
   if (!isReady || !hydrated) {
     return (
-      <OnboardingShell step={3} title="Nice-to-haves" onNext={() => undefined} busy>
+      <OnboardingShell
+        step={3}
+        eyebrow="Preference tuning"
+        title="Nice-to-haves"
+        onNext={() => undefined}
+        busy
+        progressSteps={progressSteps}
+      >
         <div />
       </OnboardingShell>
     )
@@ -284,21 +326,69 @@ export default function OnboardingPreferences() {
   return (
     <OnboardingShell
       step={3}
-      title="Nice-to-haves"
-      description="Pick anything that would make a place feel like home. Use the slider to tell the agent how important each one is — ‘must-have’ acts as a near-hard filter."
+      eyebrow="Preference tuning"
+      title="Teach the agent your taste"
+      description="Pick the details that make a place feel right. The slider tells the agent whether each preference is a bonus, a serious signal, or almost a deal-breaker."
       onBack={() => navigate('/onboarding/requirements')}
       onNext={() => void handleNext()}
       busy={busy}
-      nextLabel="Start hunting"
+      nextLabel="Save and start hunt"
       footer={footer}
+      progressSteps={progressSteps}
+      aside={
+        <Card className="rounded-[28px] border-hairline/80 bg-surface/92 p-6">
+          <p className="font-mono text-[12px] uppercase tracking-[0.24em] text-accent">Selected</p>
+          <p className="mt-3 text-[24px] font-semibold tracking-[-0.03em] text-ink">
+            {selectedPreferences.length}
+          </p>
+          <p className="mt-1 text-[14px] leading-6 text-ink-muted">
+            weighted preferences ready for the first run.
+          </p>
+          {selectedPreferences.length > 0 ? (
+            <div className="mt-5 flex flex-wrap gap-2">
+              {selectedPreferences.slice(0, 8).map((tile) => (
+                <span
+                  key={tile.key}
+                  className="rounded-full border border-hairline bg-surface-raised px-3 py-1 text-[12px] text-ink"
+                >
+                  {tile.label}
+                </span>
+              ))}
+            </div>
+          ) : (
+            <p className="mt-4 text-[13px] leading-6 text-ink-muted">
+              You can start with zero preferences and add them later, but choosing a few makes the first ranking much sharper.
+            </p>
+          )}
+        </Card>
+      }
     >
       <div className="space-y-8">
+        <Card className="rounded-[28px] border-hairline/80 bg-surface-raised/85 p-6">
+          <p className="text-[18px] font-semibold tracking-[-0.02em] text-ink">Quick presets</p>
+          <p className="mt-2 text-[13px] leading-6 text-ink-muted">
+            Start with a vibe, then fine-tune individual preferences below.
+          </p>
+          <div className="mt-4 flex flex-wrap gap-2">
+            {PRESETS.map((preset) => (
+              <button
+                key={preset.label}
+                type="button"
+                onClick={() => applyPreset(preset.keys)}
+                className="rounded-full border border-hairline bg-surface px-3 py-1.5 text-[13px] text-ink transition-colors hover:bg-surface-raised"
+              >
+                {preset.label}
+              </button>
+            ))}
+          </div>
+        </Card>
+
         {GROUPS.map((group) => (
-          <section key={group.id} className="space-y-3">
-            <h2 className="text-[13px] uppercase tracking-wide text-ink-muted">
-              {group.title}
-            </h2>
-            <div className="grid grid-cols-2 gap-3 sm:grid-cols-3">
+          <section key={group.id} className="space-y-4">
+            <div>
+              <h2 className="text-[12px] uppercase tracking-[0.28em] text-ink-muted">{group.title}</h2>
+            </div>
+            <div className="grid gap-3 sm:grid-cols-2 xl:grid-cols-3">
               {group.tiles.map((tile) => {
                 const weight = selected.get(tile.key)
                 const isSelected = weight !== undefined
@@ -306,47 +396,58 @@ export default function OnboardingPreferences() {
                 return (
                   <div
                     key={tile.key}
+                    role="button"
+                    tabIndex={0}
+                    onClick={() => toggle(tile.key)}
+                    onKeyDown={(event) => {
+                      if (event.key === 'Enter' || event.key === ' ') {
+                        event.preventDefault()
+                        toggle(tile.key)
+                      }
+                    }}
+                    aria-pressed={isSelected}
                     className={clsx(
-                      'flex flex-col gap-3 rounded-card border p-4 transition-colors duration-150 ease-out',
+                      'group cursor-pointer rounded-[26px] border p-5 transition-all duration-200 ease-out focus:outline-none focus:ring-2 focus:ring-accent/40',
                       isSelected
-                        ? 'border-accent bg-accent-muted text-ink'
-                        : 'border-hairline bg-surface text-ink hover:bg-surface-raised',
+                        ? 'border-accent/60 bg-[linear-gradient(180deg,rgba(200,165,134,0.3),rgba(250,246,238,0.95))] shadow-[0_18px_50px_rgba(138,90,59,0.12)]'
+                        : 'border-hairline/80 bg-surface-raised/75 hover:-translate-y-0.5 hover:border-accent/30 hover:shadow-[0_16px_40px_rgba(43,38,35,0.08)]',
                     )}
                   >
-                    <button
-                      type="button"
-                      onClick={() => toggle(tile.key)}
-                      aria-pressed={isSelected}
-                      className="flex items-start gap-3 text-left"
-                    >
+                    <div className="flex w-full items-start gap-4 text-left">
                       <span
                         className={clsx(
-                          'transition-colors',
-                          isSelected ? 'text-accent' : 'text-ink-muted',
+                          'mt-0.5 rounded-2xl border p-3 transition-colors',
+                          isSelected
+                            ? 'border-accent/30 bg-surface text-accent'
+                            : 'border-hairline bg-surface text-ink-muted group-hover:text-ink',
                         )}
                       >
                         {tile.svg}
                       </span>
-                      <span className="text-[14px] font-medium leading-snug">
-                        {tile.label}
+                      <span className="min-w-0 flex-1">
+                        <span className="block text-[15px] font-semibold text-ink">{tile.label}</span>
+                        <span className="mt-1 block text-[13px] text-ink-muted">
+                          {isSelected ? weightLabel(weight ?? DEFAULT_WEIGHT) : 'Click anywhere on the card to add'}
+                        </span>
                       </span>
-                    </button>
-                    {isSelected && (
-                      <div>
-                        <label
-                          htmlFor={sliderId}
-                          className="mb-1 block text-[11px] text-ink-muted"
-                        >
+                    </div>
+                    {isSelected ? (
+                      <div
+                        className="mt-5 border-t border-hairline/80 pt-4"
+                        onClick={(event) => event.stopPropagation()}
+                        onKeyDown={(event) => event.stopPropagation()}
+                      >
+                        <label htmlFor={sliderId} className="mb-2 block text-[11px] uppercase tracking-[0.2em] text-ink-muted">
                           Importance
                         </label>
                         <WeightSlider
                           id={sliderId}
                           ariaLabel={`Importance of ${tile.label}`}
                           value={weight ?? DEFAULT_WEIGHT}
-                          onChange={(w) => setWeight(tile.key, w)}
+                          onChange={(nextWeight) => setWeight(tile.key, nextWeight)}
                         />
                       </div>
-                    )}
+                    ) : null}
                   </div>
                 )
               })}
@@ -364,4 +465,11 @@ function clampWeight(n: number): number {
   if (rounded < 1) return 1
   if (rounded > 5) return 5
   return rounded
+}
+
+function weightLabel(weight: number): string {
+  if (weight >= 5) return 'Must-have'
+  if (weight >= 4) return 'Important'
+  if (weight <= 2) return 'Nice bonus'
+  return 'Good tie-breaker'
 }
