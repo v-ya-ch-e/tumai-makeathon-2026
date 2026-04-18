@@ -8,8 +8,17 @@ The backend container hosts the FastAPI app + `wg_agent` package: JSON/SSE API, 
 backend/app/main.py              FastAPI app, lifespan (DB bootstrap + per-user agent resume), SPA mount, legacy /items routes
 backend/app/scraper/
   __init__.py                    Package docstring; scraper is the sole writer of ListingRow + PhotoRow
-  agent.py                       `ScraperAgent` async loop: search → skip-if-fresh → deep-scrape → upsert_global_listing → deletion sweep (mark_listing_deleted after N missing passes)
+  agent.py                       `ScraperAgent` async loop: per-source × per-kind iteration → skip-if-fresh → deep-scrape → upsert_global_listing → per-source deletion sweep
   main.py                        `python -m app.scraper.main` entrypoint: db.init_db + run_forever
+  migrate_multi_source.py        `python -m app.scraper.migrate_multi_source` one-shot DB migration (widen TEXT columns, add `kind` + index, namespace existing wg-gesucht ids, force rescrape). Idempotent + transactional + `--dry-run`. See [`backend/app/scraper/README.md`](../backend/app/scraper/README.md)
+  README.md                      Multi-source contract (id namespacing, kind, dedup) + deploy procedure
+  SOURCE_*.md                    Per-site recon notes (one per source: wg-gesucht, tum-living, kleinanzeigen)
+  sources/
+    __init__.py                  Source registry; `build_sources()` reads `SCRAPER_ENABLED_SOURCES` (default `wg-gesucht`)
+    base.py                      `Source` Protocol: `search(kind, profile)`, `scrape_detail(stub)`, `looks_like_block_page`, plus pacing constants per [MULTI_SOURCE_SCRAPER_PLAN D-5](./MULTI_SOURCE_SCRAPER_PLAN.md#open-design-decisions)
+    wg_gesucht.py                Thin shim over `wg_agent/browser.anonymous_search` + `anonymous_scrape_listing`. `kind_supported = {'wg'}` (flat vertical TODO; see [SOURCE_WG_GESUCHT.md](../backend/app/scraper/SOURCE_WG_GESUCHT.md))
+    tum_living.py                GraphQL + CSRF source (both kinds). Re-mints CSRF on `EBADCSRFTOKEN`
+    kleinanzeigen.py             Anonymous httpx + bs4 source (both kinds). Munich-only locality catalogue for now
 backend/app/wg_agent/
   __init__.py                    Package docstring; points contributors to WG recon notes
   api.py                         `/api` router: users, search profile, credentials, per-user listings/actions/stream, agent start/pause/status, listing detail
@@ -82,7 +91,7 @@ Conversion helpers: `user_to_dto`, `search_profile_to_dto`, `upsert_body_to_sear
 
 ## `db_models.py`
 
-Defines the eight `*Row` tables: `UserRow`, `WgCredentialsRow`, `SearchProfileRow`, `ListingRow`, `PhotoRow`, `UserListingRow`, `UserActionRow`. Column-level documentation lives in [DATA_MODEL.md](./DATA_MODEL.md).
+Defines the seven `*Row` tables: `UserRow`, `WgCredentialsRow`, `SearchProfileRow`, `ListingRow`, `PhotoRow`, `UserListingRow`, `UserActionRow`. Column-level documentation lives in [DATA_MODEL.md](./DATA_MODEL.md). `ListingRow` carries a `kind` column (`'wg'` | `'flat'`, indexed) per [ADR-021](./DECISIONS.md#adr-021-listing-kind-as-a-first-class-column) and explicit `Column(Text)` typing on every long-text column (`url`, `title`, `city`, `district`, `address`, `description`, `scrape_error`) per [MULTI_SOURCE_SCRAPER_PLAN D-11](./MULTI_SOURCE_SCRAPER_PLAN.md#open-design-decisions).
 
 ## `crypto.py`
 
@@ -103,20 +112,20 @@ Narrow surface (domain in/out unless noted). Write ownership is split: the scrap
 | `upsert_credentials` | JSON-encode `WGCredentials`, Fernet-encrypt, upsert `WgCredentialsRow` |
 | `delete_credentials` | Remove credential row |
 | `credentials_status` | `(connected, saved_at)` tuple |
-| `upsert_global_listing` | Merge `ListingRow` (scraper only); bumps `scraped_at` + `scrape_status` + optional `scrape_error`; stamps `deleted_at` when `status="deleted"` |
+| `upsert_global_listing` | Merge `ListingRow` (scraper only); writes `kind`; bumps `scraped_at` + `scrape_status` + optional `scrape_error`; stamps `deleted_at` when `status="deleted"` |
 | `save_user_match` | Upsert `UserListingRow` with optional `scored_against_scraped_at` (per-user matcher only) |
 | `save_photos` | Replace `PhotoRow` rows for a listing (scraper only) |
 | `list_user_listings` | `UserListingRow JOIN ListingRow` (excluding `deleted_at IS NOT NULL`) → matched `Listing` domain list for the user, ordered by score desc |
-| `list_scorable_listings_for_user` | Global listings with the given `scrape_status` that this user has not yet scored, excluding soft-deleted rows (matcher input) |
+| `list_scorable_listings_for_user` | Global listings with the given `scrape_status` that this user has not yet scored, excluding soft-deleted rows. Optional `mode='wg'` / `'flat'` kwarg adds `WHERE kind = mode` (the matcher passes `sp.mode` so users with `mode='flat'` only see flats; per [ADR-021](./DECISIONS.md#adr-021-listing-kind-as-a-first-class-column)) |
 | `list_stale_listings` | Listings whose `scraped_at < older_than` (scraper refresh input) |
 | `append_user_action` | Insert `UserActionRow` |
 | `list_actions_for_user` | Ordered `AgentAction` list (optional `limit`) |
 | `mark_listing_deleted` | Tombstone a listing: `scrape_status='deleted'` + `deleted_at=now()` (scraper deletion sweep only) |
-| `list_active_listing_ids` | Set of `ListingRow.id` where `scrape_status='full'` AND `deleted_at IS NULL` (scraper deletion sweep input) |
+| `list_active_listing_ids` | Set of `ListingRow.id` where `scrape_status='full'` AND `deleted_at IS NULL`. Optional `source='wg-gesucht'` kwarg adds `WHERE id LIKE 'wg-gesucht:%'`; the per-source deletion sweep relies on this so a wg-gesucht-only pass never tombstones rows from the other sources (per [ADR-020](./DECISIONS.md#adr-020-multi-source-listing-identifiers-via-string-namespacing)) |
 | `list_usernames_with_search_profile` | Every `SearchProfileRow.username`; used by `resume_user_agents` to decide which agents to respawn on boot |
 | `row_to_domain_listing` | Rehydrate a global `ListingRow` into a domain `Listing` without a score (matcher uses this before evaluation) |
 
-Internal helpers: `_listing_from_row`, `_components_from_row`, `_cover_photo_url`, `_best_commute_minutes`, `_default_requirements`, `_user_row_to_profile`, `_parse_preference`.
+Internal helpers: `_listing_from_row`, `_components_from_row`, `_cover_photo_url`, `_best_commute_minutes`, `_kind_from_row` (safe row → domain coercion of the `kind` column), `_default_requirements`, `_user_row_to_profile`, `_parse_preference`.
 
 ## `api.py`
 
@@ -148,10 +157,31 @@ There is no hunt concept in v1: there is no `POST /users/{u}/hunts`, no `POST /h
 
 ## `app/scraper/agent.py`
 
-- **`ScraperAgent.run_once`** — Builds a permissive `SearchProfile` from env config (`SCRAPER_CITY`, `SCRAPER_MAX_RENT`, `SCRAPER_MAX_PAGES`), calls `browser.anonymous_search`, and for each returned stub: consults `ListingRow` via `session.get(ListingRow, stub.id)`. `_needs_scrape` returns `True` when the row is absent, when `scrape_status != "full"`, or when `scraped_at` is older than `SCRAPER_REFRESH_HOURS`. On `True`, calls `browser.anonymous_scrape_listing`; on exception, upserts with `scrape_status='failed'` + `scrape_error`. On success, `_status_for(listing)` flips to `'full'` only when both description and coords are present (otherwise `'stub'`), then calls `repo.upsert_global_listing` + `repo.save_photos`. After the per-listing loop finishes, `_sweep_deletions` runs.
-- **`ScraperAgent._sweep_deletions`** — Diffs `repo.list_active_listing_ids()` against the set of ids returned by the just-completed search. A process-local `_missing_passes: dict[str, int]` counter is incremented for each active listing not in the search results; listings present in the search results have their counter reset. When the counter reaches `SCRAPER_DELETION_PASSES` (default `2`), `repo.mark_listing_deleted` stamps `scrape_status='deleted'` + `deleted_at=now()`. Counters are kept in memory only: a scraper restart effectively restarts each listing at zero passes.
+- **`ScraperAgent.__init__`** — Builds a permissive `SearchProfile` template from env config (`SCRAPER_CITY`, `SCRAPER_MAX_RENT`) and resolves the active source list via `sources.build_sources()` (default just `wg-gesucht`; opt in to more via `SCRAPER_ENABLED_SOURCES=wg-gesucht,tum-living,kleinanzeigen`).
+- **`ScraperAgent.run_once`** — Iterates `self._sources` sequentially. For each source, calls `_run_source(source)`, which iterates each `kind in source.kind_supported`, calls `source.search(kind, profile)` to get stubs, consults `ListingRow` via `session.get(ListingRow, stub.id)`, and gates the deep-scrape on `_needs_scrape(existing, source)`. `_needs_scrape` returns `True` when the row is absent, `scrape_status != "full"`, or `scraped_at` is older than `source.refresh_hours` (per-source, not global). On `True`, calls `_scrape_and_save_via(source, stub)`, which calls `source.scrape_detail(stub)`; on exception, upserts with `scrape_status='failed'` + `scrape_error`. On success, `_status_for(listing)` flips to `'full'` only when both description and coords are present (otherwise `'stub'`), then calls `repo.upsert_global_listing` + `repo.save_photos`. After all kinds for a source finish, `_sweep_deletions_for(source, seen_ids)` runs.
+- **`ScraperAgent._sweep_deletions_for`** — Per-source-scoped sweep. Diffs `repo.list_active_listing_ids(source=source.name)` against the set of ids seen by that source this pass. A per-source `_missing_passes: dict[str, dict[str, int]]` counter (keyed by source name, then by listing id) is incremented for each active listing not in the search results; listings present in the search results have their counter reset. When the counter reaches `SCRAPER_DELETION_PASSES` (default `2`), `repo.mark_listing_deleted` stamps `scrape_status='deleted'` + `deleted_at=now()`. Counters are kept in memory only: a scraper restart effectively restarts each listing at zero passes. Per-source scoping (added with [ADR-020](./DECISIONS.md#adr-020-multi-source-listing-identifiers-via-string-namespacing)) means a wg-gesucht-only pass never tombstones Kleinanzeigen / TUM Living rows.
 - **`ScraperAgent.run_forever`** — Wraps `run_once` in a `while True` that sleeps `SCRAPER_INTERVAL_SECONDS` between passes, logging and retrying on unexpected exceptions.
 - **`app/scraper/main.py`** — Entrypoint for the scraper container (`python -m app.scraper.main`): calls `db.init_db()` (which bootstraps the schema via `SQLModel.metadata.create_all`), then `asyncio.run(ScraperAgent().run_forever())`.
+
+## `app/scraper/sources/`
+
+Per-source plugins consumed by `ScraperAgent` via `sources.build_sources()` ([ADR-020](./DECISIONS.md#adr-020-multi-source-listing-identifiers-via-string-namespacing) + [ADR-021](./DECISIONS.md#adr-021-listing-kind-as-a-first-class-column); design rationale in [MULTI_SOURCE_SCRAPER_PLAN.md D-4 / D-5](./MULTI_SOURCE_SCRAPER_PLAN.md#open-design-decisions)).
+
+- **`base.py`** — `Source` Protocol with five class-level constants (`name`, `kind_supported`, `search_page_delay_seconds`, `detail_delay_seconds`, `max_pages`, `refresh_hours`) and three async methods (`search`, `scrape_detail`, `looks_like_block_page`). Stubs returned by `search` carry the namespaced `id` and final `kind` immutably.
+- **`__init__.py`** — `_REGISTRY` maps source name → class; `build_sources(enabled=None)` reads `SCRAPER_ENABLED_SOURCES` (comma-separated; default `"wg-gesucht"`) and instantiates the matching plugins. Unknown names log a warning and are skipped; an empty result falls back to wg-gesucht so the existing deployment behavior is preserved.
+- **`wg_gesucht.py`** — `WgGesuchtSource`. Thin shim over [`browser.anonymous_search`](../backend/app/wg_agent/browser.py) and `browser.anonymous_scrape_listing`. `kind_supported = {'wg'}` only — flat-vertical category id is unverified ([SOURCE_WG_GESUCHT.md](../backend/app/scraper/SOURCE_WG_GESUCHT.md) TODO #3). Pacing 1.5s search/detail, max 2 pages, 24h refresh.
+- **`tum_living.py`** — `TumLivingSource`. GraphQL POSTs to `https://living.tum.de/graphql` with CSRF double-submit (mints `csrf-token` from `GET /api/me`; re-mints once on `EBADCSRFTOKEN`). Verbatim queries `LISTINGS_QUERY` / `DETAIL_QUERY` from [SOURCE_TUM_LIVING.md](../backend/app/scraper/SOURCE_TUM_LIVING.md). `kind_supported = {'wg', 'flat'}` (filter `type: SHARED_APARTMENT` vs `APARTMENT`). Pacing 2.5s, max 7 pages, 48h refresh.
+- **`kleinanzeigen.py`** — `KleinanzeigenSource`. Anonymous httpx + bs4 with the verified `_BAD_CHARREF` patch for unterminated `&#8203;` charrefs. Munich-only (`KA_LOCALITY_BY_CITY = {"München": 6411, "Muenchen": 6411}`). `kind_supported = {'wg', 'flat'}` (URL slug `s-auf-zeit-wg` + `c199` vs `s-mietwohnung` + `c203`). Pacing 2.5s search / 3.5s detail, max 5 pages (robots.txt cap), 24h refresh.
+
+## `app/scraper/migrate_multi_source.py`
+
+One-shot DB migration for the multi-source rollout. Idempotent + transactional + supports `--dry-run`. Three steps:
+
+1. Widen `listingrow.{url,title,city,district,address,description,scrape_error}` from `VARCHAR(255)` to `TEXT` and add `kind VARCHAR(255) NOT NULL DEFAULT 'wg'` + its index ([MULTI_SOURCE_SCRAPER_PLAN D-11](./MULTI_SOURCE_SCRAPER_PLAN.md#open-design-decisions)).
+2. Namespace existing wg-gesucht ids in one transaction across `listingrow.id` + the three FK columns (D-2). Children first, parent last (FKs declare no `ON UPDATE CASCADE`).
+3. Flip every `'full'` row to `'stub'` so the next scraper pass overwrites the previously-truncated descriptions through the now-wider `description TEXT` column.
+
+Verifies G1 / G2 / G9 at the end. Run from `cd backend && venv/bin/python -m app.scraper.migrate_multi_source`. See [`backend/app/scraper/README.md`](../backend/app/scraper/README.md) for the full deploy procedure (containers stop → migrate → containers up → optionally flip `SCRAPER_ENABLED_SOURCES`).
 
 ## `browser.py`
 
@@ -195,7 +225,11 @@ Curve tuning (weights and thresholds) lives at the top of the module in `COMPONE
 | [`test_wg_parser.py`](../backend/tests/test_wg_parser.py) | Cached HTML fixtures under `tests/fixtures/`; asserts parser output shape and locks down the structured fields the scorer relies on (address split, available-from/to, languages, pets/smoking, description-doesn't-leak-page-chrome, map-pin lat/lng) | `cd backend && python tests/test_wg_parser.py` (or `pytest tests/test_wg_parser.py`) |
 | [`test_repo.py`](../backend/tests/test_repo.py) | In-memory SQLite round-trip for `repo` + crypto (user/email, search profile, credentials, per-user match rows, soft-delete exclusion, per-user action log) | `cd backend && pytest tests/test_repo.py` |
 | [`test_periodic.py`](../backend/tests/test_periodic.py) | `UserAgent` / `PeriodicUserMatcher` with pre-seeded global pool + mocked I/O (commute-reaches-evaluator, nearby-places-persist, lat-missing guard, `PeriodicUserMatcher` cancellation clears registry) | `cd backend && pytest tests/test_periodic.py` |
-| [`test_scraper.py`](../backend/tests/test_scraper.py) | `ScraperAgent` with mocked `browser.*`: status/scrape_error branches, refresh-TTL skip, stale-refresh, and the deletion sweep (`mark_listing_deleted` after N missing passes, counter reset when a listing returns) | `cd backend && pytest tests/test_scraper.py` |
+| [`test_scraper.py`](../backend/tests/test_scraper.py) | `ScraperAgent` with the `wg-gesucht` source plugin + mocked `browser.*`: status/scrape_error branches, refresh-TTL skip, stale-refresh, deletion sweep (`mark_listing_deleted` after N missing passes, counter reset when a listing returns), and the per-source-scoped sweep (a wg-gesucht-only pass cannot tombstone Kleinanzeigen rows) | `cd backend && pytest tests/test_scraper.py` |
+| [`tests/scraper/test_parse_tum_living.py`](../backend/tests/scraper/test_parse_tum_living.py) | Offline parser tests for the TUM Living source against captured GraphQL fixtures (`tests/scraper/fixtures/tum_living/`); plus block-page detector cases for `EBADCSRFTOKEN`, GraphQL-errors-with-null-data, and HTTP 5xx | `cd backend && pytest tests/scraper/test_parse_tum_living.py` |
+| [`tests/scraper/test_parse_kleinanzeigen.py`](../backend/tests/scraper/test_parse_kleinanzeigen.py) | Offline parser tests for the Kleinanzeigen source against captured HTML fixtures (`tests/scraper/fixtures/kleinanzeigen/`); covers WG + flat search pages, one detail page, and the block-page detector | `cd backend && pytest tests/scraper/test_parse_kleinanzeigen.py` |
+| [`tests/scraper/live/test_live_tum_living.py`](../backend/tests/scraper/live/test_live_tum_living.py) | Smoke test against the live TUM Living GraphQL endpoint. Skipped unless `SCRAPER_LIVE_TESTS=1`; run manually before a deploy | `SCRAPER_LIVE_TESTS=1 cd backend && pytest tests/scraper/live/` |
+| [`test_migrate_multi_source.py`](../backend/tests/test_migrate_multi_source.py) | Steps 2 + 3 of the migration script against an in-memory SQLite engine: namespacing rewrites + FK rewrites, idempotent re-run, dry-run is non-mutating, force-rescrape flag flip | `cd backend && pytest tests/test_migrate_multi_source.py` |
 | [`test_commute.py`](../backend/tests/test_commute.py) | Route Matrix client with monkey-patched `httpx.post` | `cd backend && pytest tests/test_commute.py` |
 | [`test_places.py`](../backend/tests/test_places.py) | Nearby-place client with mocked `httpx` (cache + fail-soft paths) | `cd backend && pytest tests/test_places.py` |
 | [`test_brain.py`](../backend/tests/test_brain.py) | `_listing_summary` commute-block formatting (no LLM) | `cd backend && pytest tests/test_brain.py` |

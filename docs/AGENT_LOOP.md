@@ -9,45 +9,52 @@ Background: [ARCHITECTURE.md](./ARCHITECTURE.md), persistence: [DATA_MODEL.md](.
 
 ## Scraper pass (ScraperAgent.run_once)
 
+`ScraperAgent` iterates the active source list (built from `SCRAPER_ENABLED_SOURCES`; default `wg-gesucht`). For each source, it iterates each `kind` the source supports; the deletion sweep then runs once per source, scoped to that source's id namespace ([ADR-020](./DECISIONS.md#adr-020-multi-source-listing-identifiers-via-string-namespacing)).
+
 ```mermaid
 sequenceDiagram
   autonumber
   participant SA as ScraperAgent
-  participant WG as wg-gesucht.de
+  participant SRC as Source plugin (wg-gesucht / tum-living / kleinanzeigen)
   participant DB as MySQL
 
-  SA->>WG: anonymous_search (httpx, permissive filters)
-  WG-->>SA: Listing stubs
-  loop per stub
-    SA->>DB: session.get(ListingRow, stub.id)
-    DB-->>SA: existing row or None
-    alt needs_scrape (missing, not full, or scraped_at older than SCRAPER_REFRESH_HOURS)
-      SA->>WG: anonymous_scrape_listing
-      alt scrape raises
-        WG-->>SA: exception
-        SA->>DB: upsert_global_listing(status="failed", scrape_error=...)
-      else scrape succeeds
-        WG-->>SA: enriched Listing
-        SA->>DB: upsert_global_listing(status="full" if description + lat/lng else "stub")
-        SA->>DB: save_photos(listing_id, urls)
+  loop per source × per kind
+    SA->>SRC: search(kind, profile)
+    SRC-->>SA: Listing stubs (namespaced id + kind set)
+    loop per stub
+      SA->>DB: session.get(ListingRow, stub.id)
+      DB-->>SA: existing row or None
+      alt needs_scrape (missing, not full, or scraped_at older than source.refresh_hours)
+        SA->>SRC: scrape_detail(stub)
+        alt scrape raises
+          SRC-->>SA: exception
+          SA->>DB: upsert_global_listing(status="failed", scrape_error=...)
+        else scrape succeeds
+          SRC-->>SA: enriched Listing
+          SA->>DB: upsert_global_listing(status="full" if description + lat/lng else "stub")
+          SA->>DB: save_photos(listing_id, urls)
+        end
+      else recently scraped
+        SA->>SA: skip
       end
-    else recently scraped
-      SA->>SA: skip
     end
   end
-  SA->>DB: list_active_listing_ids
-  Note over SA: diff active vs search ids; bump per-listing miss counter
-  opt counter ≥ SCRAPER_DELETION_PASSES
-    SA->>DB: mark_listing_deleted (scrape_status='deleted', deleted_at=now)
+  loop per source
+    SA->>DB: list_active_listing_ids(source=source.name)
+    Note over SA: diff active vs ids seen by THIS source; bump per-source miss counter
+    opt counter ≥ SCRAPER_DELETION_PASSES
+      SA->>DB: mark_listing_deleted (scrape_status='deleted', deleted_at=now)
+    end
   end
 ```
 
 Error paths:
 
-- **Search failure** — `browser.anonymous_search` raises → `run_once` logs and returns `0`; `run_forever` sleeps and retries. The pool keeps its previous contents.
+- **Search failure** — `source.search(...)` raises → `_run_source` logs and continues with the next kind / source; `run_forever` sleeps after the full pass and retries. The pool keeps its previous contents.
 - **Per-listing scrape failure** — recorded as `scrape_status='failed'` with `scrape_error` set, so the listing is visible in the pool for observability but excluded from the matcher (which filters on `status='full'`).
+- **Block-page response** — each source declares its own `looks_like_block_page` (TUM Living: `EBADCSRFTOKEN` / GraphQL-errors-with-null-data; Kleinanzeigen: 403/429/short-body/datadome regex; wg-gesucht: captcha/turnstile markers in the HTML). When detected, the source returns the unmodified stub (or empty list) so the loop persists what it has and retries later instead of crashing.
 - **Unexpected exception inside `run_once`** — caught by `run_forever`; logged via `logger.exception`, then the loop sleeps and retries.
-- **Deletion sweep** — `ScraperAgent._sweep_deletions` runs after the per-listing loop. It diffs `repo.list_active_listing_ids()` against the ids returned by `anonymous_search`. A per-listing `_missing_passes` counter (process-local) increments for listings missing from this pass and resets for listings that reappear. When the counter reaches `SCRAPER_DELETION_PASSES` (default `2`), the listing is tombstoned via `repo.mark_listing_deleted` (`scrape_status='deleted'`, `deleted_at=now()`). A scraper restart effectively starts every listing at zero missing passes.
+- **Per-source deletion sweep** — `ScraperAgent._sweep_deletions_for(source, seen_ids)` runs after each source finishes its kinds. It diffs `repo.list_active_listing_ids(source=source.name)` (rows whose id starts with `f"{source.name}:"`) against the ids that source saw this pass. A per-source counter (`_missing_passes[source.name]`) increments for listings missing from this pass and resets for listings that reappear. When the counter reaches `SCRAPER_DELETION_PASSES` (default `2`), the listing is tombstoned via `repo.mark_listing_deleted`. Per-source scoping (added with [ADR-020](./DECISIONS.md#adr-020-multi-source-listing-identifiers-via-string-namespacing)) means a wg-gesucht-only pass never tombstones Kleinanzeigen / TUM Living rows. A scraper restart effectively starts every listing at zero missing passes.
 
 ## One match pass (UserAgent.run_match_pass + SSE)
 

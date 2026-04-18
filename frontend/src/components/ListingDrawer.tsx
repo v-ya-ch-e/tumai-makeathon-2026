@@ -158,6 +158,9 @@ export function ListingDrawer({ open, listing, onClose }: ListingDrawerProps) {
         activeListing ? (
           <div className="flex items-center gap-3">
             <span className="truncate">{activeListing.title ?? `Listing ${activeListing.id}`}</span>
+            {activeListing.kind ? (
+              <StatusPill tone="idle">{activeListing.kind === 'flat' ? 'Whole flat' : 'WG room'}</StatusPill>
+            ) : null}
             <StatusPill tone={scoreTone(activeListing.score)}>{formatScore(activeListing.score)}</StatusPill>
           </div>
         ) : (

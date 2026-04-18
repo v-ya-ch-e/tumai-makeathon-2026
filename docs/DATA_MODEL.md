@@ -4,7 +4,7 @@ MySQL tables mirror [`db_models.py`](../backend/app/wg_agent/db_models.py). Doma
 
 Post-[ADR-018](./DECISIONS.md#adr-018-separate-scraper-container--global-listingrow-mysql-only), the write ownership is split:
 
-- The **scraper** container (see [`backend/app/scraper/`](../backend/app/scraper/)) is the sole writer of `ListingRow` and `PhotoRow`. It keys listings by wg-gesucht's numeric id — one row per listing across all users.
+- The **scraper** container (see [`backend/app/scraper/`](../backend/app/scraper/)) is the sole writer of `ListingRow` and `PhotoRow`. Per [ADR-020](./DECISIONS.md#adr-020-multi-source-listing-identifiers-via-string-namespacing), it keys listings by `f"{source}:{external_id}"` (e.g. `"wg-gesucht:12345678"`, `"tum-living:cf76dd26-…"`, `"kleinanzeigen:3362398693"`) — one row per listing per source, dedup-collision-proof across sources.
 - The **backend** container writes only `UserListingRow` (per-user), `UserActionRow` (per-user), and everything user / profile / credentials related.
 
 A `UserListingRow` row is the **user ↔ listing membership record**: the frontend's matched-listings view ([`list_user_listings`](../backend/app/wg_agent/repo.py)) joins `userlistingrow JOIN listingrow`, so a listing only appears in a user's dashboard after the matcher has scored it (including `score=0.0` veto rows). Rows for listings the scraper has tombstoned (`ListingRow.deleted_at IS NOT NULL`) are filtered out of the join so the UI naturally drops vanished listings.
@@ -64,37 +64,38 @@ One-to-one requirements/preferences schedule slice persisted for the wizard. Map
 
 ### ListingRow
 
-**Global** normalized wg-gesucht listing. Single-column PK on `id`; the scraper container is the sole writer.
+**Global** normalized listing — one row per `(source, external_id)` across `wg-gesucht`, `tum-living`, and `kleinanzeigen`. Single-column PK on `id`; the scraper container is the sole writer.
 
 | Field | Type | Notes |
 | ----- | ---- | ----- |
-| `id` | `str` | wg-gesucht listing id. Sole primary key. |
-| `url` | `str` | Canonical or long URL as string. |
-| `title` | `Optional[str]` | |
+| `id` | `str` | Namespaced listing id `f"{source}:{external_id}"` per [ADR-020](./DECISIONS.md#adr-020-multi-source-listing-identifiers-via-string-namespacing). Examples: `"wg-gesucht:12345678"`, `"tum-living:cf76dd26-0bbb-45af-b74d-14f5face8ba0"`, `"kleinanzeigen:3362398693"`. Sole primary key. The source is recoverable from any code path via `id.split(":", 1)[0]`. |
+| `url` | `str` | Canonical detail URL as string (column type: `TEXT` so wg-gesucht / Kleinanzeigen long slug URLs aren't truncated). |
+| `title` | `Optional[str]` | `TEXT`. |
 | `price_eur` | `Optional[int]` | |
 | `size_m2` | `Optional[float]` | |
-| `wg_size` | `Optional[int]` | |
-| `city` | `Optional[str]` | Parsed from the Adresse panel; fed into `brain.vibe_score`'s listing summary. |
-| `district` | `Optional[str]` | Munich Bezirk / district name; used in `evaluator.hard_filter`'s avoid-districts veto. |
-| `address` | `Optional[str]` | Street + number. Used as the geocoder fallback query when the map pin is missing. |
-| `lat` | `Optional[float]` | Populated during `anonymous_scrape_listing`: first from the listing's `map_config.markers` script block via `browser._parse_map_lat_lng` (no external call, landlord-precise), falling back to [`geocoder.geocode`](../backend/app/wg_agent/geocoder.py) for listings that don't ship a map pin. `None` when both paths are unavailable. |
-| `lng` | `Optional[float]` | Same origin as `lat`; paired with it for commute-aware scoring. |
+| `wg_size` | `Optional[int]` | Total flatmates including the new tenant. wg-gesucht reads `(\d+)er WG`; Kleinanzeigen reads `Anzahl Mitbewohner` and adds 1 (per [MULTI_SOURCE_SCRAPER_PLAN D-3](./MULTI_SOURCE_SCRAPER_PLAN.md#open-design-decisions)); TUM Living leaves it `None` (the GraphQL API does not expose flatmate count). |
+| `city` | `Optional[str]` | `TEXT`. Parsed from each source's locality block; fed into `brain.vibe_score`'s listing summary. |
+| `district` | `Optional[str]` | `TEXT`. Used in `evaluator.hard_filter`'s avoid-districts veto. |
+| `address` | `Optional[str]` | `TEXT`. Street + number when the source exposes it (wg-gesucht, TUM Living); `None` for Kleinanzeigen, which only publishes PLZ + district. |
+| `lat` | `Optional[float]` | wg-gesucht: `map_config.markers` script block → [`geocoder.geocode`](../backend/app/wg_agent/geocoder.py) fallback. TUM Living: `coordinates.x` (the GraphQL field IS the latitude). Kleinanzeigen: `<meta property="og:latitude">`. `None` when the source doesn't expose them on a particular listing. |
+| `lng` | `Optional[float]` | Same per-source origin as `lat`; paired for commute-aware scoring. |
 | `available_from` | `Optional[date]` | |
 | `available_to` | `Optional[date]` | |
-| `description` | `Optional[str]` | Filled after deep scrape. |
+| `description` | `Optional[str]` | `TEXT` (per [MULTI_SOURCE_SCRAPER_PLAN D-11](./MULTI_SOURCE_SCRAPER_PLAN.md#open-design-decisions); the prior `VARCHAR(255)` silently truncated 2 KB+ bodies). Filled after deep scrape: wg-gesucht `#ad_description_text`, TUM Living `furtherEquipmentEn`, Kleinanzeigen `#viewad-description-text`. |
 | `furnished` | `Optional[bool]` | `True` / `False` / `None` (unknown). Feeds `evaluator.hard_filter` (weight-5 "must-have furnished" veto) and `evaluator.preference_fit`. |
 | `pets_allowed` | `Optional[bool]` | Same shape as `furnished`; feeds the same evaluator paths for weight-5 "must-have pets" vetoes. |
 | `smoking_ok` | `Optional[bool]` | Same shape; feeds the smoking-preference evaluator paths. |
-| `languages` | `Optional[list[str]]` | Languages spoken in the WG (e.g. `["Deutsch", "Englisch"]`). Fed into the `brain.vibe_score` prompt. JSON column. |
-| `scrape_status` | `str` | `"stub"` (partial, don't score yet), `"full"` (description + coords present), `"failed"` (scrape exception), or `"deleted"` (tombstoned by the scraper's deletion sweep — no longer visible on wg-gesucht). Indexed. The matcher only iterates `status="full"` rows. |
+| `languages` | `Optional[list[str]]` | Languages spoken in the WG (wg-gesucht only; TUM Living and Kleinanzeigen don't expose this). JSON column. |
+| `kind` | `str` | `"wg"` (room in a shared flat) or `"flat"` (whole apartment). Indexed. Set by each per-source scraper from the search vertical it iterated; the detail page is never re-parsed for kind. Defaults to `"wg"` for legacy rows. Per [ADR-021](./DECISIONS.md#adr-021-listing-kind-as-a-first-class-column); honored at read time by `repo.list_scorable_listings_for_user(mode=...)` so the matcher respects the wizard's `SearchProfile.mode`. |
+| `scrape_status` | `str` | `"stub"` (partial, don't score yet), `"full"` (description + coords present), `"failed"` (scrape exception), or `"deleted"` (tombstoned by the scraper's deletion sweep — no longer visible on the source). Indexed. The matcher only iterates `status="full"` rows. |
 | `scraped_at` | `Optional[datetime]` | UTC timestamp of the last `upsert_global_listing`. Indexed so the scraper can cheaply find stale rows via `list_stale_listings`. |
-| `scrape_error` | `Optional[str]` | Free-text breadcrumb when `scrape_status == "failed"`. |
+| `scrape_error` | `Optional[str]` | `TEXT`. Free-text breadcrumb (often a Python traceback) when `scrape_status == "failed"`. |
 | `first_seen_at` | `datetime` | Preserved across upserts. |
 | `last_seen_at` | `datetime` | Bumped on each upsert. |
-| `deleted_at` | `Optional[datetime]` | Stamped by [`repo.mark_listing_deleted`](../backend/app/wg_agent/repo.py) when the scraper's deletion sweep has seen the listing miss `SCRAPER_DELETION_PASSES` consecutive search passes. `NULL` for active listings. `list_user_listings` and `list_scorable_listings_for_user` filter rows with `deleted_at IS NOT NULL`. |
+| `deleted_at` | `Optional[datetime]` | Stamped by [`repo.mark_listing_deleted`](../backend/app/wg_agent/repo.py) when the scraper's deletion sweep has seen the listing miss `SCRAPER_DELETION_PASSES` consecutive search passes. The sweep is per-source-scoped (a wg-gesucht-only pass cannot tombstone Kleinanzeigen rows). `NULL` for active listings. `list_user_listings` and `list_scorable_listings_for_user` filter rows with `deleted_at IS NOT NULL`. |
 
-- **SET**: [`repo.upsert_global_listing`](../backend/app/wg_agent/repo.py) from [`ScraperAgent._scrape_and_save`](../backend/app/scraper/agent.py); [`repo.mark_listing_deleted`](../backend/app/wg_agent/repo.py) from `ScraperAgent._sweep_deletions`. The matcher never writes this table.
-- **READ**: [`repo.list_user_listings`](../backend/app/wg_agent/repo.py) (joined through `UserListingRow`), [`repo.list_scorable_listings_for_user`](../backend/app/wg_agent/repo.py) in the matcher, [`repo.list_active_listing_ids`](../backend/app/wg_agent/repo.py) in the scraper's deletion sweep, direct `session.get(ListingRow, listing_id)` in [`api._get_listing_detail`](../backend/app/wg_agent/api.py).
+- **SET**: [`repo.upsert_global_listing`](../backend/app/wg_agent/repo.py) from [`ScraperAgent._scrape_and_save_via`](../backend/app/scraper/agent.py); [`repo.mark_listing_deleted`](../backend/app/wg_agent/repo.py) from `ScraperAgent._sweep_deletions_for`. The matcher never writes this table.
+- **READ**: [`repo.list_user_listings`](../backend/app/wg_agent/repo.py) (joined through `UserListingRow`), [`repo.list_scorable_listings_for_user`](../backend/app/wg_agent/repo.py) in the matcher (with `mode` filter for [ADR-021](./DECISIONS.md#adr-021-listing-kind-as-a-first-class-column)), [`repo.list_active_listing_ids(source=...)`](../backend/app/wg_agent/repo.py) in the scraper's per-source deletion sweep, direct `session.get(ListingRow, listing_id)` in [`api._get_listing_detail`](../backend/app/wg_agent/api.py).
 
 ### PhotoRow
 
@@ -258,7 +259,7 @@ Values below are illustrative; timestamps are ISO-8601 strings as JSON would sho
 
 ```json
 {
-  "id": "13115694",
+  "id": "wg-gesucht:13115694",
   "url": "https://www.wg-gesucht.de/13115694.html",
   "title": "Room near Laim S-Bahn",
   "price_eur": 795,
@@ -276,6 +277,7 @@ Values below are illustrative; timestamps are ISO-8601 strings as JSON would sho
   "pets_allowed": false,
   "smoking_ok": false,
   "languages": ["Deutsch", "Englisch"],
+  "kind": "wg",
   "scrape_status": "full",
   "scraped_at": "2024-01-02T05:02:10",
   "scrape_error": null,
@@ -289,7 +291,7 @@ Values below are illustrative; timestamps are ISO-8601 strings as JSON would sho
 
 ```json
 {
-  "listing_id": "13115694",
+  "listing_id": "wg-gesucht:13115694",
   "ordinal": 0,
   "url": "https://www.wg-gesucht.de/gal/…/thumb.jpg"
 }
@@ -300,7 +302,7 @@ Values below are illustrative; timestamps are ISO-8601 strings as JSON would sho
 ```json
 {
   "username": "lea",
-  "listing_id": "13115694",
+  "listing_id": "wg-gesucht:13115694",
   "score": 0.82,
   "reason": "Score 0.82: strong price: €795 within comfortable band; weak commute: 42 min vs budget 40",
   "match_reasons": ["€795 within comfortable band"],
@@ -366,9 +368,9 @@ Values below are illustrative; timestamps are ISO-8601 strings as JSON would sho
   "id": 42,
   "username": "lea",
   "kind": "evaluate",
-  "summary": "Scored 13115694: 0.82",
+  "summary": "Scored wg-gesucht:13115694: 0.82",
   "detail": null,
-  "listing_id": "13115694",
+  "listing_id": "wg-gesucht:13115694",
   "at": "2024-01-02T05:02:15"
 }
 ```
@@ -377,15 +379,16 @@ Values below are illustrative; timestamps are ISO-8601 strings as JSON would sho
 
 **Scraper container** (sole writer of `ListingRow` + `PhotoRow`):
 
-1. **Search stub** — `browser.anonymous_search` returns domain `Listing` objects with id, url, title, partial card fields.
-2. **Refresh gate** — `ScraperAgent._needs_scrape` skips listings whose `scrape_status == 'full'` and whose `scraped_at` is within `SCRAPER_REFRESH_HOURS`.
-3. **Deep scrape** — `browser.anonymous_scrape_listing` fills description, address/district, availability, etc. On HTTP failure the stub is persisted with `scrape_status='failed'` and `scrape_error`.
-4. **Persist** — `repo.upsert_global_listing` writes/merges `ListingRow` with `scrape_status='full'` when description + coords are present (otherwise `'stub'`), preserving `first_seen_at` and bumping `last_seen_at` + `scraped_at`. `repo.save_photos` replaces `PhotoRow`s.
-5. **Deletion sweep** — After each pass, `ScraperAgent._sweep_deletions` diffs `repo.list_active_listing_ids()` against the set of ids seen in the current search. A per-listing counter (`_missing_passes`) bumps each time the listing is missing; when it reaches `SCRAPER_DELETION_PASSES` (default 2) the listing is tombstoned via `repo.mark_listing_deleted` (`scrape_status='deleted'`, `deleted_at=now()`). Listings that reappear reset the counter.
+1. **Source dispatch** — [`ScraperAgent.run_once`](../backend/app/scraper/agent.py) iterates the registry from [`backend/app/scraper/sources/`](../backend/app/scraper/sources/) (selected by `SCRAPER_ENABLED_SOURCES`, default `wg-gesucht`). For each source, for each `kind` it supports.
+2. **Search stub** — `Source.search(kind=..., profile=...)` returns domain `Listing` objects with the namespaced `id` and the final `kind` already set (immutable downstream).
+3. **Refresh gate** — `ScraperAgent._needs_scrape` skips listings whose `scrape_status == 'full'` and whose `scraped_at` is within the source's `refresh_hours` (24h for wg-gesucht / Kleinanzeigen, 48h for TUM Living).
+4. **Deep scrape** — `Source.scrape_detail(stub)` fills description, address/district, photos, etc. On HTTP failure the stub is persisted with `scrape_status='failed'` and `scrape_error`. On block-page detection (each source declares its own `looks_like_block_page`), the unmodified stub is persisted with `scrape_status='stub'`.
+5. **Persist** — `repo.upsert_global_listing` writes/merges `ListingRow` (including `kind`) with `scrape_status='full'` when description + coords are present (otherwise `'stub'`), preserving `first_seen_at` and bumping `last_seen_at` + `scraped_at`. `repo.save_photos` replaces `PhotoRow`s.
+6. **Per-source deletion sweep** — After each source finishes its pass, `ScraperAgent._sweep_deletions_for(source, seen_ids)` diffs `repo.list_active_listing_ids(source=source.name)` against the set of ids seen for that source. A per-source counter (`_missing_passes[source.name]`) bumps each time a listing is missing; when it reaches `SCRAPER_DELETION_PASSES` (default 2) the listing is tombstoned via `repo.mark_listing_deleted`. Listings that reappear reset the counter. Per-source scoping (added with [ADR-020](./DECISIONS.md#adr-020-multi-source-listing-identifiers-via-string-namespacing)) means a wg-gesucht-only pass never tombstones Kleinanzeigen / TUM Living rows.
 
 **Backend container, per user** (matcher, writes only `UserListingRow` + `UserActionRow`):
 
-1. **Candidate fetch** — `repo.list_scorable_listings_for_user(username, status='full')` returns global listings (with `deleted_at IS NULL`) not yet scored for this user.
+1. **Candidate fetch** — `repo.list_scorable_listings_for_user(username, status='full', mode=sp.mode)` returns global listings (with `deleted_at IS NULL`) not yet scored for this user, optionally filtered by `kind` when the user's `SearchProfile.mode != 'both'` (per [ADR-021](./DECISIONS.md#adr-021-listing-kind-as-a-first-class-column)).
 2. **Log new_listing** — one `UserActionRow` per candidate via `repo.append_user_action(ActionKind.new_listing)`.
 3. **Evaluate** — `evaluator.evaluate` runs `hard_filter`, all deterministic components, and the narrow `brain.vibe_score` LLM call on the in-memory `Listing` rehydrated via `repo.row_to_domain_listing`.
 4. **Persist** — `repo.save_user_match` writes `UserListingRow` with `score`, components, veto, and `scored_against_scraped_at = row.scraped_at`. Vetoes still write a row so the UI can show the rejection reason.
@@ -394,19 +397,25 @@ Values below are illustrative; timestamps are ISO-8601 strings as JSON would sho
 ```mermaid
 sequenceDiagram
   participant SA as ScraperAgent
-  participant WG as wg-gesucht.de
+  participant SRC as Source plugin (wg-gesucht / tum-living / kleinanzeigen)
   participant Matcher as UserAgent (matcher)
   participant Evaluator as evaluator.evaluate
   participant Brain as brain.vibe_score
   participant DB as MySQL
 
-  SA->>WG: anonymous_search + anonymous_scrape_listing
-  WG-->>SA: enriched Listing
-  SA->>DB: upsert_global_listing (ListingRow, status=full) + save_photos (PhotoRow)
-  SA->>DB: list_active_listing_ids → mark_listing_deleted for misses across N passes
+  loop per source × per kind
+    SA->>SRC: search(kind, profile)
+    SRC-->>SA: Listing stubs (namespaced id + kind)
+    SA->>SRC: scrape_detail(stub)
+    SRC-->>SA: enriched Listing
+    SA->>DB: upsert_global_listing (ListingRow, status=full) + save_photos (PhotoRow)
+  end
+  loop per source
+    SA->>DB: list_active_listing_ids(source=...) → mark_listing_deleted for misses across N passes
+  end
 
-  Matcher->>DB: list_scorable_listings_for_user(username)
-  DB-->>Matcher: ListingRow candidates (deleted_at IS NULL)
+  Matcher->>DB: list_scorable_listings_for_user(username, mode=sp.mode)
+  DB-->>Matcher: ListingRow candidates (deleted_at IS NULL, kind filter)
   Matcher->>DB: append_user_action(new_listing)
   Matcher->>Evaluator: hard_filter + components
   Evaluator->>Brain: vibe_score (only if not vetoed)

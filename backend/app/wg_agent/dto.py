@@ -118,6 +118,7 @@ class ListingDTO(BaseModel):
     username: Optional[str] = None
     url: str
     title: Optional[str] = None
+    kind: Optional[Literal["wg", "flat"]] = None
     district: Optional[str] = None
     lat: Optional[float] = None
     lng: Optional[float] = None
@@ -317,6 +318,7 @@ def listing_to_dto(l: Listing, *, username: Optional[str] = None) -> ListingDTO:
         username=username,
         url=str(l.url),
         title=title,
+        kind=l.kind,
         district=l.district,
         lat=l.lat,
         lng=l.lng,

@@ -227,6 +227,7 @@ class UserAgent:
                 username=self._username,
                 status="full",
                 limit=max_listings,
+                mode=sp.mode,
             )
 
         n_candidates = len(candidate_rows)

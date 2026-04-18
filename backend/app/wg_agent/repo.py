@@ -237,6 +237,7 @@ def upsert_global_listing(
         pets_allowed=listing.pets_allowed,
         smoking_ok=listing.smoking_ok,
         languages=list(listing.languages) if listing.languages else None,
+        kind=listing.kind,
         scrape_status=status,
         scraped_at=now,
         scrape_error=scrape_error,
@@ -334,9 +335,15 @@ def list_scorable_listings_for_user(
     username: str,
     status: str = "full",
     limit: Optional[int] = None,
+    mode: Optional[str] = None,
 ) -> list[ListingRow]:
     """Global listings with the given scrape status that this user has not
-    yet scored, excluding soft-deleted listings."""
+    yet scored, excluding soft-deleted listings.
+
+    `mode` (one of `'wg'`, `'flat'`, `'both'`, or `None`) honors the
+    user's `SearchProfile.mode` selection: pass `'wg'` to get rooms only,
+    `'flat'` to get full apartments only, `'both'` or `None` for both.
+    """
     already_scored = session.exec(
         select(UserListingRow.listing_id).where(UserListingRow.username == username)
     ).all()
@@ -347,6 +354,8 @@ def list_scorable_listings_for_user(
         .where(ListingRow.deleted_at.is_(None))
         .order_by(ListingRow.last_seen_at.desc())
     )
+    if mode in ("wg", "flat"):
+        stmt = stmt.where(ListingRow.kind == mode)
     rows = session.exec(stmt).all()
     out: list[ListingRow] = []
     for r in rows:
@@ -420,12 +429,23 @@ def mark_listing_deleted(session: Session, *, listing_id: str) -> None:
     session.commit()
 
 
-def list_active_listing_ids(session: Session) -> set[str]:
-    rows = session.exec(
+def list_active_listing_ids(
+    session: Session, *, source: Optional[str] = None
+) -> set[str]:
+    """Return the ids of active (full + non-deleted) listings.
+
+    `source` filters by the namespaced id prefix (`f"{source}:%"`); the
+    deletion sweep uses this so a wg-gesucht-only pass cannot tombstone
+    Kleinanzeigen / TUM Living rows it never tried to see.
+    """
+    stmt = (
         select(ListingRow.id)
         .where(ListingRow.scrape_status == "full")
         .where(ListingRow.deleted_at.is_(None))
-    ).all()
+    )
+    if source is not None:
+        stmt = stmt.where(ListingRow.id.like(f"{source}:%"))
+    rows = session.exec(stmt).all()
     return {row for row in rows}
 
 
@@ -447,6 +467,7 @@ def row_to_domain_listing(row: ListingRow) -> Listing:
         id=row.id,
         url=HttpUrl(row.url),
         title=row.title or "",
+        kind=_kind_from_row(row),
         city=row.city,
         district=row.district,
         address=row.address,
@@ -463,6 +484,17 @@ def row_to_domain_listing(row: ListingRow) -> Listing:
         pets_allowed=row.pets_allowed,
         smoking_ok=row.smoking_ok,
     )
+
+
+def _kind_from_row(row: ListingRow) -> str:
+    """Coerce `ListingRow.kind` (a free-form `str`) into the domain literal.
+
+    The column defaults to `'wg'` for legacy rows; any unexpected value
+    degrades to `'wg'` so `Listing` validation never raises on a stale
+    pre-migration row.
+    """
+    raw = (row.kind or "").strip().lower()
+    return raw if raw in ("wg", "flat") else "wg"
 
 
 def _listing_from_row(
@@ -482,6 +514,7 @@ def _listing_from_row(
         id=row.id,
         url=HttpUrl(row.url),
         title=title,
+        kind=_kind_from_row(row),
         city=row.city,
         district=row.district,
         address=row.address,

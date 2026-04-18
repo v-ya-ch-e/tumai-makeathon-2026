@@ -298,7 +298,7 @@ def parse_search_page(html: str, seen_ids: set[str] | None = None) -> list[Listi
     for card in cards:
         card_text = card.get_text(" ", strip=True)
         # Prefer the data-id attribute wg-gesucht sets on each card.
-        listing_id = card.get("data-id") if hasattr(card, "get") else None
+        external_id = card.get("data-id") if hasattr(card, "get") else None
         href: Optional[str] = None
         for a in card.find_all("a", href=_LISTING_ID_RE):
             candidate = a.get("href", "")
@@ -307,16 +307,19 @@ def parse_search_page(html: str, seen_ids: set[str] | None = None) -> list[Listi
             match = _LISTING_ID_RE.search(candidate)
             if not match:
                 continue
-            if listing_id is None:
-                listing_id = match.group(1)
+            if external_id is None:
+                external_id = match.group(1)
             href = candidate
             if re.match(rf"{re.escape(BASE_URL)}/\d+\.html$", candidate):
                 # The short canonical form is most stable; prefer it.
                 break
-        if not listing_id:
+        if not external_id:
             continue
+        # Tolerate already-namespaced inputs in callers that pre-seed `seen_ids`.
+        bare_id = external_id.split(":", 1)[1] if ":" in external_id else external_id
+        listing_id = f"wg-gesucht:{bare_id}"
         if href is None:
-            href = f"{BASE_URL}/{listing_id}.html"
+            href = f"{BASE_URL}/{bare_id}.html"
         url = href
         if listing_id in seen_ids:
             continue
@@ -359,7 +362,8 @@ def parse_search_page(html: str, seen_ids: set[str] | None = None) -> list[Listi
             Listing(
                 id=listing_id,
                 url=url,
-                title=title or f"Listing {listing_id}",
+                title=title or f"Listing {bare_id}",
+                kind="wg",
                 city=city,
                 district=district,
                 address=address,

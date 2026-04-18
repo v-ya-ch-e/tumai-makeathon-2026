@@ -94,6 +94,9 @@ export type Listing = {
   username: string | null
   url: string
   title: string | null
+  /** `'wg'` (room in a shared flat) or `'flat'` (whole apartment). Optional
+   * for backwards-compatibility with payloads that pre-date the column. */
+  kind?: 'wg' | 'flat'
   district: string | null
   lat: number | null
   lng: number | null

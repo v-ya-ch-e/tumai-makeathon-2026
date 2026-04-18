@@ -201,6 +201,7 @@ class Listing(BaseModel):
     id: str
     url: HttpUrl
     title: str
+    kind: Literal["wg", "flat"] = "wg"
     city: Optional[str] = None
     district: Optional[str] = None
     address: Optional[str] = None

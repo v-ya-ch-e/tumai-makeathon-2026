@@ -328,7 +328,32 @@ Persistence: one additive Alembic revision [`0006_scorecard_components.py`](../b
 
 ---
 
-## ADR-020: Batched + rate-limited email digest, gated on `first_seen_at > user.created_at`
+## ADR-020: Multi-source listing identifiers via string namespacing
+
+- **Date:** 2026-04-18
+- **Status:** Accepted
+
+**Context:** WG Hunter is moving from one scraper source (`wg-gesucht`) to three (`wg-gesucht`, `tum-living`, `kleinanzeigen`). Each source has its own external id namespace: wg-gesucht uses 5–9 digit numbers, TUM Living uses UUIDs, Kleinanzeigen uses ~10 digit numbers. The id namespaces don't structurally collide today (different lengths, different alphabets) but nothing prevents a future Kleinanzeigen id from also being a valid wg-gesucht id, and the existing single-column `ListingRow.id: str` PK has no way to distinguish them. We needed an identifier that (a) makes cross-source collisions structurally impossible, (b) lets `repo.upsert_global_listing` keep its `session.get(ListingRow, id)` then `session.merge(row)` shape, (c) avoids changing every API URL, SSE payload, and frontend `listingId` reference.
+
+**Decision:** Encode the source as a prefix on the existing string PK: `ListingRow.id = f"{source}:{external_id}"` where `source ∈ {wg-gesucht, tum-living, kleinanzeigen}`. The PK stays a single `str` column. The source is recoverable from any code path via `id.split(":", 1)[0]`. Existing wg-gesucht rows are migrated by a one-shot SQL `UPDATE … SET id = CONCAT('wg-gesucht:', id)` plus matching FK column updates on `photorow.listing_id`, `userlistingrow.listing_id`, `useractionrow.listing_id`, executed by hand at cutover (no Alembic, per [ADR-019](#adr-019-drop-alembic-use-sqlmodelmetadatacreate_all)). New sources emit the namespaced form from day one. The deletion sweep also gains per-source scoping (`repo.list_active_listing_ids(source=...)` filters by `id LIKE 'wg-gesucht:%'`) so a wg-gesucht-only pass cannot tombstone Kleinanzeigen / TUM Living rows.
+
+**Consequences:** Zero schema change beyond the migration UPDATE — the `id: str` column stays put. Zero change to API URLs (`/api/listings/{listing_id}` accepts the longer string after percent-encoding the colon, which `encodeURIComponent` does automatically and FastAPI decodes back transparently). Zero change to SSE payload structure — `Action.listingId` is already an opaque string. Zero change to `repo.upsert_global_listing`'s dedup logic — the longer string dedups the same way. Trade-off: we lose the ability to query "all listings from source X" without a `LIKE 'X:%'` scan; if that ever becomes hot, a partial-index workaround or a derived `source` column is one additive migration away. We considered (and rejected) a composite `(source, external_id)` PK — it would force changes to every API route signature, every SSE payload, every frontend type.
+
+**Introduced in:** this commit
+
+---
+
+## ADR-021: Listing kind as a first-class column
+
+- **Date:** 2026-04-18
+- **Status:** Accepted
+
+**Context:** WG Hunter scrapes both shared rooms (WG) and full apartments. The existing `SearchProfile.mode: Literal['wg', 'flat', 'both']` was wired in the wizard months ago, but the matcher could never honor it because nothing on `ListingRow` told us what kind the listing was. Two options: infer at read time from the listing's source URL pattern (`/wg-zimmer-in-…` vs `/s-mietwohnung/…`), or persist the kind explicitly. Inferring at read time is fragile (each source has its own URL pattern, the regex would have to live in `repo.py` and stay in sync with three scraper modules), forces a per-source URL parser into a layer that doesn't otherwise know about sources, and runs a regex on every listing on every read.
+
+**Decision:** Add `kind: Literal['wg', 'flat']` as an indexed column on `ListingRow` (default `'wg'` for the existing wg-gesucht-only pool) and as a field on the domain `Listing` model. Each per-source scraper sets `kind` from the search vertical it iterated — the listing-detail page does not need to be parsed to determine kind. The matcher's `repo.list_scorable_listings_for_user` now accepts a `mode` kwarg and filters by `kind = mode` when `mode != 'both'`, finally honoring the wizard's `mode` selection. Frontend gets one optional `kind?: 'wg' | 'flat'` field on the TS `Listing` type and one neutral `<StatusPill>` in the listing card / drawer (`{kind === 'flat' ? 'Whole flat' : 'WG room'}`).
+
+**Consequences:** The matcher honors `SearchProfile.mode` for the first time. Indexed lookup for the `WHERE kind = sp.mode` filter means the read cost is essentially free. Schema change is one additive column on one table — existing rows default to `'wg'` so the migration is invisible. Trade-off: every per-source scraper has to remember to set `kind` correctly; the protocol enforces it by making `kind` part of the search-stub return value (immutable from stub creation through `scrape_detail`, per the `Source` protocol). We considered (and rejected) inferring kind from `id` prefix at read time — it doesn't work for sources like Kleinanzeigen that serve both kinds under the same id namespace.
+## ADR-023: Batched + rate-limited email digest, gated on `first_seen_at > user.created_at`
 
 - **Date:** 2026-04-18
 - **Status:** Accepted

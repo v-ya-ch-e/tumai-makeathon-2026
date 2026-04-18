@@ -101,6 +101,10 @@ export function ListingList({ listings, onOpen, emptyLabel }: ListingListProps) 
                       {subline(listing) || 'Location and availability still loading'}
                     </p>
                   </div>
+                  <div className="flex flex-wrap items-center gap-2">
+                    {listing.kind ? (
+                      <StatusPill tone="idle">{listing.kind === 'flat' ? 'Whole flat' : 'WG room'}</StatusPill>
+                    ) : null}
                   <div className="flex items-start justify-start sm:justify-end">
                     <StatusPill tone={scoreTone(listing.score)}>{scoreLabel(listing.score)}</StatusPill>
                   </div>

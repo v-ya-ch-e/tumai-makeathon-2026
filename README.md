@@ -145,6 +145,8 @@ From [`.env.example`](./.env.example). Vite reads the same file via [`envDir: '.
 | `WG_SECRET_KEY` | no | backend | Pin the Fernet key used to encrypt credentials (else auto-generated at `~/.wg_hunter/secret.key`) |
 | `WG_RESCAN_INTERVAL_MINUTES` | no | backend | Global floor on how often each per-user matcher re-checks the listing pool (minutes). Overrides the per-profile value when set. Default `3` in `.env.example` so new matches email within a few minutes of scraping |
 | `WG_STATE_FILE` | no | backend | Playwright `storage_state.json` for authenticated flows (reserved for post-v1) |
+| `SCRAPER_ENABLED_SOURCES` | no | scraper | Comma-separated source names. Default `wg-gesucht`. Valid: `wg-gesucht`, `tum-living`, `kleinanzeigen`. See [`docs/MULTI_SOURCE_SCRAPER_PLAN.md`](./docs/MULTI_SOURCE_SCRAPER_PLAN.md) |
+| `SCRAPER_CITY` / `SCRAPER_MAX_RENT` / `SCRAPER_MAX_PAGES` / `SCRAPER_INTERVAL_SECONDS` / `SCRAPER_REFRESH_HOURS` / `SCRAPER_DELETION_PASSES` | no | scraper | Tune the scraper loop. Defaults: `München` / `2000` / `2` / `300` / `24` / `2` |
 | `AWS_ACCESS_KEY_ID` / `AWS_SECRET_ACCESS_KEY` / `AWS_DEFAULT_REGION` | no | backend | IAM user credentials + region for Amazon SES. Used by [`notifier.py`](./backend/app/wg_agent/notifier.py) to email users when a new match scores at/above `WG_NOTIFY_THRESHOLD`. See [`DEPLOYMENT.md`](./DEPLOYMENT.md#email-notifications-amazon-ses) for the one-time SES setup. Blank values silently disable notifications |
 | `SES_FROM_EMAIL` | no | backend | Sender identity for score-alert emails (must be a verified SES identity in `AWS_DEFAULT_REGION`). Default `noreply@doubleu.team` |
 | `WG_NOTIFY_THRESHOLD` | no | backend | Minimum match score (inclusive) that triggers an email. Default `0.9` |
@@ -173,7 +175,8 @@ All developer docs live under **[`docs/`](./docs/README.md)**. Layout:
 │   ├── AGENT_LOOP.md ─────── one HuntEngine.run_find_only pass end-to-end
 │   ├── DESIGN.md ──────────── palette, typography, UI primitives
 │   ├── WG_GESUCHT.md ─────── DOM selectors and rate-limit notes
-│   ├── DECISIONS.md ──────── ADR log (ADR-001 … ADR-017)
+│   ├── DECISIONS.md ──────── ADR log (ADR-001 … ADR-021)
+│   ├── MULTI_SOURCE_SCRAPER_PLAN.md  rollout plan for the multi-source scraper
 │   ├── ROADMAP.md ─────────── queued / later / done-recently
 │   └── _generated/openapi.json   committed OpenAPI spec
 └── context/ ──────────────── hackathon background (challenge brief, TUM systems, code samples)

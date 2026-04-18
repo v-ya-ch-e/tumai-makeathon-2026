@@ -3,7 +3,7 @@
 WG Hunter runs as two containers against a shared AWS-hosted MySQL:
 
 1. **backend** — FastAPI process that serves the built React SPA, bootstraps the schema on startup via `SQLModel.metadata.create_all`, and spawns per-user `UserAgent` asyncio tasks that **match** listings from the shared pool (they never scrape).
-2. **scraper** — Standalone Python process that owns `ListingRow` + `PhotoRow`. It hits `wg-gesucht.de` via httpx on a fixed interval, deep-scrapes every new listing, refreshes listings older than `SCRAPER_REFRESH_HOURS`, and tombstones listings that stop showing up in search across `SCRAPER_DELETION_PASSES` consecutive passes.
+2. **scraper** — Standalone Python process that owns `ListingRow` + `PhotoRow`. It iterates a registry of `Source` plugins ([`backend/app/scraper/sources/`](../backend/app/scraper/sources/)) — wg-gesucht (default), TUM Living, Kleinanzeigen — selected via `SCRAPER_ENABLED_SOURCES`, deep-scrapes every new listing per source × per kind, refreshes listings older than the source's `refresh_hours`, and tombstones listings that stop showing up across `SCRAPER_DELETION_PASSES` consecutive passes for that source. Per [ADR-020](./DECISIONS.md#adr-020-multi-source-listing-identifiers-via-string-namespacing), every listing id is namespaced (`f"{source}:{external_id}"`) so cross-source collisions are structurally impossible; per [ADR-021](./DECISIONS.md#adr-021-listing-kind-as-a-first-class-column), every row carries a `kind` (`'wg'` | `'flat'`) so the matcher honors `SearchProfile.mode`.
 
 ## Runtime shape
 
@@ -18,13 +18,13 @@ flowchart LR
     PM["UserAgent / PeriodicUserMatcher<br/>one task per username"]
   end
   subgraph external [External]
-    WG["wg-gesucht.de via httpx"]
+    WG["wg-gesucht.de · living.tum.de · kleinanzeigen.de"]
     OAI["OpenAI API"]
     GM["Google Maps Platform"]
   end
   MySQL[("AWS MySQL<br/>DB_HOST / DB_PORT / DB_USER / DB_PASSWORD / DB_NAME")]
-  SA -->|"anonymous_search + anonymous_scrape_listing"| WG
-  SA -->|"upsert_global_listing + save_photos + mark_listing_deleted"| MySQL
+  SA -->|"per source × per kind: search + scrape_detail"| WG
+  SA -->|"upsert_global_listing + save_photos + per-source mark_listing_deleted"| MySQL
   React["React (Vite)"] -->|"fetch /api"| API
   React -->|"GET /api/users/:u/stream"| API
   API --> PM
@@ -47,6 +47,7 @@ Fernet key material for credential blobs is resolved in [`crypto.py`](../backend
 ## Why these choices
 
 - **Split scraping from matching** — The scraper writes once per listing across all users; per-user work is pure scoring. See [ADR-018](./DECISIONS.md#adr-018-separate-scraper-container--global-listingrow-mysql-only).
+- **Source-pluggable scraper** — `ScraperAgent` consumes `Source` instances from `app/scraper/sources/` instead of hardcoding wg-gesucht. Each source declares its own pacing (`search_page_delay_seconds`, `detail_delay_seconds`), pagination (`max_pages`), and refresh window (`refresh_hours`); the loop is otherwise source-agnostic. Adding a new site is a new module + a registry entry. See [ADR-020](./DECISIONS.md#adr-020-multi-source-listing-identifiers-via-string-namespacing) and [ADR-021](./DECISIONS.md#adr-021-listing-kind-as-a-first-class-column).
 - **One agent per user (not per hunt)** — The UI has no "start a new hunt" concept anymore: saving a search profile auto-spawns a continuous `UserAgent`, and the backend resumes agents for every user with a `SearchProfileRow` on boot. Listings and actions are keyed by `username`, so the whole hunt-lifecycle state machine (`pending/running/done/failed`) is gone.
 - **MySQL on AWS, no local DB** — All developers share one AWS RDS instance via five `DB_*` env vars (`DB_HOST`, `DB_PORT`, `DB_USER`, `DB_PASSWORD`, `DB_NAME`) in `.env`. No docker-compose `mysql` service, no per-developer schema drift. Tests use in-memory SQLite for isolation ([`backend/tests/conftest.py`](../backend/tests/conftest.py) sets inert `DB_*` placeholders so the production `db.py` can import; individual tests then build their own SQLite engine and monkey-patch `db_module.engine`).
 - **Vite + React, not Next.js** — No SSR requirement; the UI is a desktop-first SPA. FastAPI serves `frontend/dist/` so one service covers API + static assets.
@@ -71,8 +72,8 @@ sequenceDiagram
   UI->>API: EventSource GET /api/users/{username}/stream
   API->>DB: replay UserActionRow
   loop match pass (+ sleep rescan_interval)
-    PM->>DB: list_scorable_listings_for_user(username, status="full")
-    DB-->>PM: ListingRow candidates (from shared pool)
+    PM->>DB: list_scorable_listings_for_user(username, status="full", mode=sp.mode)
+    DB-->>PM: ListingRow candidates (from shared pool, kind matches sp.mode)
     PM->>GM: commute.travel_times + places.nearby_places
     PM->>OAI: evaluator.evaluate (hard filter + components + vibe)
     PM->>DB: save_user_match(username, listing_id, ...)
@@ -89,21 +90,25 @@ Meanwhile, independently of any user, the scraper container runs its own loop:
 ```mermaid
 sequenceDiagram
   participant SA as ScraperAgent
-  participant WG as wg-gesucht.de
+  participant SRC as Source plugin
   participant DB as MySQL
 
   loop every SCRAPER_INTERVAL_SECONDS
-    SA->>WG: anonymous_search
-    WG-->>SA: Listing stubs
-    loop per new or stale listing
-      SA->>WG: anonymous_scrape_listing
-      WG-->>SA: enriched Listing
-      SA->>DB: upsert_global_listing (status=full) + save_photos
+    loop per source × per kind
+      SA->>SRC: search(kind, profile)
+      SRC-->>SA: Listing stubs (namespaced id + kind)
+      loop per new or stale listing
+        SA->>SRC: scrape_detail(stub)
+        SRC-->>SA: enriched Listing
+        SA->>DB: upsert_global_listing (status=full) + save_photos
+      end
     end
-    SA->>DB: list_active_listing_ids
-    Note over SA: diff active vs seen; bump per-listing miss counter
-    opt counter ≥ SCRAPER_DELETION_PASSES
-      SA->>DB: mark_listing_deleted (scrape_status='deleted', deleted_at=now)
+    loop per source
+      SA->>DB: list_active_listing_ids(source=source.name)
+      Note over SA: diff active vs seen-by-this-source; bump per-source miss counter
+      opt counter ≥ SCRAPER_DELETION_PASSES
+        SA->>DB: mark_listing_deleted (scrape_status='deleted', deleted_at=now)
+      end
     end
   end
 ```
