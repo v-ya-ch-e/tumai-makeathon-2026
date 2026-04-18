@@ -15,6 +15,7 @@ export type OnboardingShellProps = {
   busy?: boolean
   footer?: ReactNode
   showProgress?: boolean
+  hideIntro?: boolean
   aside?: ReactNode
   progressSteps?: [ProgressStepLink, ProgressStepLink, ProgressStepLink, ProgressStepLink]
 }
@@ -32,6 +33,7 @@ export function OnboardingShell({
   busy = false,
   footer,
   showProgress = true,
+  hideIntro = false,
   aside,
   progressSteps,
 }: OnboardingShellProps) {
@@ -41,30 +43,33 @@ export function OnboardingShell({
   return (
     <div className="min-h-screen bg-canvas">
       <div className="app-shell">
-        {showProgress ? (
-          <div className="mb-8 flex flex-col gap-3 border-b border-hairline pb-4 sm:flex-row sm:items-center sm:justify-between">
-            <ProgressSteps current={step} steps={progressSteps} />
-            <span className="hidden font-mono text-[11px] uppercase tracking-[0.22em] text-ink-muted sm:inline">
-              WG Hunter
-            </span>
+        <div className="mb-8 flex flex-col gap-5 border-b border-hairline pb-5 sm:flex-row sm:items-end sm:justify-between">
+          <div>
+            <p className="brand-wordmark">Sherlock Homes</p>
+            <p className="mt-1 max-w-xl text-[14px] text-ink-muted">
+              A focused rental search experience built to help you compare options with confidence.
+            </p>
           </div>
-        ) : null}
+          {showProgress ? <ProgressSteps current={step} steps={progressSteps} /> : null}
+        </div>
 
         <div className={aside ? 'grid gap-8 lg:grid-cols-[minmax(0,1fr)_320px]' : 'grid gap-6'}>
           <section className="page-frame overflow-hidden">
-            <div className="border-b border-hairline px-6 py-8 sm:px-8 lg:px-10">
-              {eyebrow ? (
-                <p className="section-kicker mb-3 text-accent">
-                  {eyebrow}
-                </p>
-              ) : null}
-              <h1 className="page-title max-w-2xl">
-                {title}
-              </h1>
-              {description ? (
-                <p className="body-copy mt-4 max-w-2xl">{description}</p>
-              ) : null}
-            </div>
+            {hideIntro ? null : (
+              <div className="border-b border-hairline px-6 py-8 sm:px-8 lg:px-10">
+                {eyebrow ? (
+                  <p className="section-kicker mb-3 text-accent">
+                    {eyebrow}
+                  </p>
+                ) : null}
+                <h1 className="page-title max-w-2xl">
+                  {title}
+                </h1>
+                {description ? (
+                  <p className="body-copy mt-4 max-w-2xl">{description}</p>
+                ) : null}
+              </div>
+            )}
 
             <div className="px-6 py-8 sm:px-8 lg:px-10">
               {children}
@@ -79,7 +84,7 @@ export function OnboardingShell({
                       Back
                     </Button>
                   ) : (
-                    <p className="text-[13px] text-ink-muted">We only store what the hunt needs.</p>
+                    <p className="text-[13px] text-ink-muted">You can revisit these details later.</p>
                   )}
                 </div>
                 <div className="flex items-center justify-end gap-3">

@@ -14,6 +14,8 @@ export type User = {
   createdAt: string
 }
 
+export type HuntStatus = 'pending' | 'running' | 'done' | 'failed'
+
 export type PlaceLocation = {
   label: string
   placeId: string
@@ -59,6 +61,16 @@ export type Action = {
   listingId: string | null
 }
 
+export type Hunt = {
+  id: string
+  status: HuntStatus
+  startedAt: string
+  finishedAt: string | null
+  listings: Listing[]
+  actions: Action[]
+  error: string | null
+}
+
 export type Component = {
   key: string
   score: number
@@ -75,6 +87,11 @@ export type NearbyPlace = {
   distanceM: number | null
   placeName: string | null
   category: string | null
+}
+
+export type CommuteInfo = {
+  minutes: number
+  mode: string
 }
 
 export type Listing = {
@@ -94,6 +111,8 @@ export type Listing = {
   description: string | null
   coverPhotoUrl: string | null
   bestCommuteMinutes: number | null
+  bestCommuteLabel: string | null
+  bestCommuteMode: string | null
   score: number | null
   scoreReason: string | null
   matchReasons: string[]
@@ -106,7 +125,7 @@ export type ListingDetail = {
   listing: Listing
   photos: string[]
   score: number | null
-  travelMinutesPerLocation: Record<string, number> | null
+  travelMinutesPerLocation: Record<string, CommuteInfo> | null
   nearbyPreferencePlaces: NearbyPlace[]
 }
 

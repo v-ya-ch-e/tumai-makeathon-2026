@@ -417,9 +417,9 @@ def _travel_minutes_by_label(
     *,
     username: str,
     match_row: Optional[UserListingRow],
-) -> Optional[dict[str, int]]:
+) -> Optional[dict[str, dict[str, str | int]]]:
     """Convert the persisted `{place_id: {mode, minutes}}` blob into
-    `{label: minutes}` by looking up each place_id in the user's
+    `{label: {mode, minutes}}` by looking up each place_id in the user's
     SearchProfile.main_locations."""
     if match_row is None or not match_row.travel_minutes:
         return None
@@ -427,16 +427,17 @@ def _travel_minutes_by_label(
     if sp is None or not sp.main_locations:
         return None
     label_by_pid = {loc.place_id: loc.label for loc in sp.main_locations}
-    out: dict[str, int] = {}
+    out: dict[str, dict[str, str | int]] = {}
     for place_id, entry in match_row.travel_minutes.items():
         if not isinstance(entry, dict):
             continue
         minutes = entry.get("minutes")
-        if not isinstance(minutes, int):
+        mode = entry.get("mode")
+        if not isinstance(minutes, int) or not isinstance(mode, str):
             continue
         label = label_by_pid.get(place_id)
         if label:
-            out[label] = minutes
+            out[label] = {"minutes": minutes, "mode": mode}
     return out or None
 
 

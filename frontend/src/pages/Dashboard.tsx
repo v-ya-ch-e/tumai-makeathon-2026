@@ -1,6 +1,5 @@
 import { useCallback, useEffect, useRef, useState, type ReactNode } from 'react'
-import { useNavigate } from 'react-router-dom'
-import { ActionLog } from '../components/ActionLog'
+import { useLocation, useNavigate } from 'react-router-dom'
 import { AppTabs } from '../components/AppTabs'
 import { ConnectWGDialog } from '../components/ConnectWGDialog'
 import { ListingDrawer } from '../components/ListingDrawer'
@@ -8,17 +7,17 @@ import { ListingList } from '../components/ListingList'
 import { Button, Card, StatusPill, type StatusPillTone } from '../components/ui'
 import {
   ApiError,
-  getAgentStatus,
+  createHunt,
   getCredentialsStatus,
+  getHunt,
   getSearchProfile,
-  getUserActions,
-  getUserListings,
-  pauseAgent,
-  startAgent,
-  streamUser,
+  stopHunt,
+  streamHunt,
 } from '../lib/api'
 import { useSession } from '../lib/session'
-import type { Action, CredentialsStatus, Listing, SearchProfile } from '../types'
+import type { Action, CredentialsStatus, Hunt, Listing, SearchProfile } from '../types'
+
+const LS_HUNT_ID = 'wg-hunter.hunt-id'
 
 type UiStatus = 'idle' | 'starting' | 'running' | 'stopping' | 'error'
 
@@ -32,9 +31,16 @@ function statusPillTone(status: UiStatus): StatusPillTone {
 function statusLabel(status: UiStatus): string {
   if (status === 'running') return 'Running'
   if (status === 'starting') return 'Starting'
-  if (status === 'stopping') return 'Pausing'
+  if (status === 'stopping') return 'Stopping'
   if (status === 'error') return 'Error'
   return 'Idle'
+}
+
+function huntToUiStatus(hunt: Hunt | null): UiStatus {
+  if (hunt === null) return 'idle'
+  if (hunt.status === 'running' || hunt.status === 'pending') return 'running'
+  if (hunt.status === 'failed') return 'error'
+  return 'idle'
 }
 
 function formatDate(value: string | null): string {
@@ -68,20 +74,21 @@ function formatBudget(profile: SearchProfile): string {
 function topScore(listings: Listing[]): string {
   const scored = listings.map((listing) => listing.score).filter((score): score is number => score !== null)
   if (scored.length === 0) return '—'
-  return Math.max(...scored).toFixed(2)
+  return `${Math.round(Math.max(...scored) * 100)}%`
 }
 
 function summaryCount(listings: Listing[]): string {
   const scored = listings.filter((listing) => listing.score !== null)
-  return scored.length > 0 ? `${scored.length} scored` : 'No scores yet'
+  return scored.length > 0 ? `${scored.length} reviewed` : 'No results yet'
 }
 
 export default function Dashboard() {
   const navigate = useNavigate()
+  const location = useLocation()
   const { username, isReady, setUsername } = useSession()
 
   const [profile, setProfile] = useState<SearchProfile | null>(null)
-  const [agentRunning, setAgentRunning] = useState(false)
+  const [hunt, setHunt] = useState<Hunt | null>(null)
   const [actions, setActions] = useState<Action[]>([])
   const [listings, setListings] = useState<Listing[]>([])
   const [uiStatus, setUiStatus] = useState<UiStatus>('idle')
@@ -90,6 +97,7 @@ export default function Dashboard() {
   const [errorMessage, setErrorMessage] = useState<string | null>(null)
   const [openListing, setOpenListing] = useState<Listing | null>(null)
   const seenActionKeysRef = useRef<Set<string>>(new Set())
+  const autoStartTriggeredRef = useRef(false)
 
   const refreshCredStatus = useCallback(async (name: string) => {
     try {
@@ -100,6 +108,32 @@ export default function Dashboard() {
   }, [])
 
   const actionKey = (action: Action): string => `${action.at}|${action.kind}|${action.summary}`
+
+  const applyHunt = useCallback((nextHunt: Hunt | null) => {
+    if (nextHunt === null) {
+      setHunt(null)
+      setActions([])
+      setListings([])
+      setUiStatus('idle')
+      seenActionKeysRef.current = new Set()
+      return
+    }
+    setHunt(nextHunt)
+    setListings(nextHunt.listings)
+    setActions(nextHunt.actions)
+    seenActionKeysRef.current = new Set(nextHunt.actions.map(actionKey))
+    setUiStatus(huntToUiStatus(nextHunt))
+  }, [])
+
+  const refreshHunt = useCallback(async (id: string | null): Promise<Hunt | null> => {
+    if (!id) return null
+    const nextHunt = await getHunt(id)
+    if (nextHunt === null) {
+      localStorage.removeItem(LS_HUNT_ID)
+      return null
+    }
+    return nextHunt
+  }, [])
 
   useEffect(() => {
     if (!isReady) return
@@ -117,79 +151,84 @@ export default function Dashboard() {
       }
       setProfile(searchProfile)
       await refreshCredStatus(username)
-      try {
-        const [userListings, userActions, agentStatus] = await Promise.all([
-          getUserListings(username),
-          getUserActions(username),
-          getAgentStatus(username),
-        ])
-        if (cancelled) return
-        setListings(userListings)
-        setActions(userActions)
-        seenActionKeysRef.current = new Set(userActions.map(actionKey))
-        setAgentRunning(agentStatus.running)
-        setUiStatus(agentStatus.running ? 'running' : 'idle')
-      } catch (error) {
-        if (!cancelled) {
-          setErrorMessage(error instanceof ApiError ? error.message : String(error))
-        }
-      }
+      const storedId = localStorage.getItem(LS_HUNT_ID)
+      const nextHunt = await refreshHunt(storedId)
+      if (!cancelled) applyHunt(nextHunt)
     })()
     return () => {
       cancelled = true
     }
-  }, [isReady, username, navigate, refreshCredStatus])
+  }, [isReady, username, navigate, refreshCredStatus, refreshHunt, applyHunt])
 
   useEffect(() => {
-    if (!username || !profile) return
+    const huntId = hunt?.id
+    if (!huntId) return
+    if (hunt?.status === 'done' || hunt?.status === 'failed') return
 
     let closed = false
-    const close = streamUser(username, (action) => {
-      if (closed) return
+    let closeFn: (() => void) | null = null
+
+    closeFn = streamHunt(huntId, (event) => {
+      if ('kind' in event && event.kind === 'stream-end') {
+        if (!closed) {
+          closed = true
+          closeFn?.()
+        }
+        void (async () => {
+          const fresh = await refreshHunt(huntId)
+          if (fresh) applyHunt(fresh)
+        })()
+        return
+      }
+      const action = event as Action
       const key = actionKey(action)
       if (seenActionKeysRef.current.has(key)) return
       seenActionKeysRef.current.add(key)
       setActions((prev) => [...prev, action])
       if (action.kind === 'evaluate' || action.kind === 'new_listing') {
         void (async () => {
-          try {
-            const fresh = await getUserListings(username)
-            if (!closed) setListings(fresh)
-          } catch {
-            // Ignore transient refresh errors; next event will retry.
-          }
+          const fresh = await refreshHunt(huntId)
+          if (!fresh) return
+          setListings(fresh.listings)
+          setHunt(fresh)
+          setUiStatus(huntToUiStatus(fresh))
         })()
       }
     })
 
     return () => {
       closed = true
-      close()
+      closeFn?.()
     }
-  }, [username, profile])
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [hunt?.id])
 
   const onStart = async () => {
-    if (!username) return
+    if (!username || !profile) return
     setErrorMessage(null)
     setUiStatus('starting')
     try {
-      await startAgent(username)
-      setAgentRunning(true)
-      setUiStatus('running')
+      const nextHunt = await createHunt(username, { schedule: profile.schedule })
+      localStorage.setItem(LS_HUNT_ID, nextHunt.id)
+      applyHunt(nextHunt)
     } catch (error) {
       setErrorMessage(error instanceof ApiError ? error.message : String(error))
       setUiStatus('error')
     }
   }
 
-  const onPause = async () => {
-    if (!username) return
+  const onRestart = async () => {
+    if (!username || !profile) return
     setErrorMessage(null)
-    setUiStatus('stopping')
+    setUiStatus('starting')
     try {
-      await pauseAgent(username)
-      setAgentRunning(false)
-      setUiStatus('idle')
+      if (hunt && (hunt.status === 'running' || hunt.status === 'pending')) {
+        await stopHunt(hunt.id)
+      }
+      const nextHunt = await createHunt(username, { schedule: profile.schedule })
+      localStorage.setItem(LS_HUNT_ID, nextHunt.id)
+      setOpenListing(null)
+      applyHunt(nextHunt)
     } catch (error) {
       setErrorMessage(error instanceof ApiError ? error.message : String(error))
       setUiStatus('error')
@@ -197,15 +236,39 @@ export default function Dashboard() {
   }
 
   const onLogout = () => {
+    localStorage.removeItem(LS_HUNT_ID)
     setOpenListing(null)
     setUsername(null)
     navigate('/onboarding/profile', { replace: true })
+  }
+
+  const onStop = async () => {
+    if (!hunt) return
+    setErrorMessage(null)
+    setUiStatus('stopping')
+    try {
+      const nextHunt = await stopHunt(hunt.id)
+      applyHunt(nextHunt)
+    } catch (error) {
+      setErrorMessage(error instanceof ApiError ? error.message : String(error))
+      setUiStatus('error')
+    }
   }
 
   const onCredentialsSaved = async () => {
     setDialogOpen(false)
     if (username) await refreshCredStatus(username)
   }
+
+  useEffect(() => {
+    if (!profile || !username) return
+    if (!location.state || typeof location.state !== 'object' || !('autoStart' in location.state)) return
+    if ((location.state as { autoStart?: boolean }).autoStart !== true) return
+    if (autoStartTriggeredRef.current) return
+    autoStartTriggeredRef.current = true
+    navigate(location.pathname, { replace: true, state: null })
+    if (hunt === null) void onStart()
+  }, [location.pathname, location.state, navigate, profile, username, hunt])
 
   if (!isReady || profile === null) {
     return (
@@ -216,24 +279,23 @@ export default function Dashboard() {
   }
 
   const connected = credStatus?.connected ?? false
-  const isStarting = uiStatus === 'starting'
+  const isActive = uiStatus === 'running' || uiStatus === 'starting'
   const isStopping = uiStatus === 'stopping'
-  const isEmpty = listings.length === 0 && actions.length === 0
+  const isStarting = uiStatus === 'starting'
 
   return (
     <div className="min-h-screen bg-canvas">
       <div className="app-shell space-y-8">
         <div className="flex flex-wrap items-center justify-between gap-4 border-b border-hairline pb-4">
           <div>
-            <p className="section-kicker text-accent">WG Hunter</p>
-            <p className="mt-1 text-[14px] text-ink-muted">Dashboard and profile</p>
+            <p className="section-kicker text-accent">Sherlock Homes</p>
+            <p className="mt-1 text-[14px] text-ink-muted">Matches, profile, and live updates</p>
           </div>
           <div className="flex flex-wrap items-center justify-end gap-3">
             <AppTabs
               current="/dashboard"
               tabs={[
                 { label: 'Dashboard', href: '/dashboard' },
-                { label: 'Timeline', href: '/timeline' },
                 { label: 'Profile', href: '/profile' },
               ]}
             />
@@ -250,9 +312,9 @@ export default function Dashboard() {
                 <p className="section-kicker text-accent">Dashboard</p>
                 <StatusPill tone={statusPillTone(uiStatus)}>{statusLabel(uiStatus)}</StatusPill>
               </div>
-              <h1 className="page-title mt-4">{username}&apos;s room hunt</h1>
+              <h1 className="page-title mt-4">{username}&apos;s search</h1>
               <p className="body-copy mt-4 max-w-3xl">
-                WG Hunter pulls fresh WG-Gesucht listings, checks them against your commute and move-in constraints, and keeps a live log of every pass here.
+                See fresh matches, compare the trade-offs, and keep your shortlist moving with confidence.
               </p>
 
               <dl className="mt-6 grid gap-4 sm:grid-cols-2 xl:grid-cols-4">
@@ -269,8 +331,8 @@ export default function Dashboard() {
             <div className="px-6 py-6 lg:px-8">
               <div className="space-y-4">
                 <ControlRow
-                  label="WG login"
-                  value={connected ? 'Connected' : 'Not connected'}
+                  label="WG-Gesucht"
+                  value={connected ? 'Connected' : 'Optional'}
                   action={
                     <Button variant="secondary" size="sm" onClick={() => setDialogOpen(true)}>
                       {connected ? 'Manage' : 'Connect'}
@@ -279,33 +341,27 @@ export default function Dashboard() {
                 />
 
                 <ControlRow
-                  label="Background agent"
-                  value={agentRunning ? 'Running' : 'Paused'}
+                  label="Search"
+                  value={hunt ? `Run ${hunt.id}` : 'Ready to start'}
                   action={
                     <div className="flex flex-wrap justify-end gap-2">
-                      {agentRunning ? (
-                        <Button variant="destructive" size="sm" onClick={() => void onPause()} disabled={isStopping}>
-                          {isStopping ? 'Pausing…' : 'Pause'}
+                      {isActive ? (
+                        <Button variant="destructive" size="sm" onClick={() => void onStop()} disabled={isStopping}>
+                          {isStopping ? 'Stopping…' : 'Stop'}
                         </Button>
                       ) : (
-                        <Button variant="primary" size="sm" onClick={() => void onStart()} disabled={isStarting}>
-                          {isStarting ? 'Starting…' : 'Resume'}
+                        <Button
+                          variant="primary"
+                          size="sm"
+                          onClick={() => void (hunt ? onRestart() : onStart())}
+                          disabled={isStarting}
+                        >
+                          {isStarting ? 'Starting…' : hunt ? 'Restart' : 'Start'}
                         </Button>
                       )}
                     </div>
                   }
                 />
-
-                <ControlRow
-                  label="Reset"
-                  value="Clear the current local profile and start as a new user."
-                  action={
-                    <Button variant="secondary" size="sm" onClick={onLogout}>
-                      New user
-                    </Button>
-                  }
-                />
-
                 {errorMessage ? (
                   <p className="rounded border border-bad/30 bg-bad/5 px-4 py-3 text-[13px] leading-6 text-bad">
                     {errorMessage}
@@ -317,8 +373,8 @@ export default function Dashboard() {
 
           <div className="grid border-t border-hairline sm:grid-cols-4">
             <StatStrip label="Listings" value={String(listings.length)} note={summaryCount(listings)} />
-            <StatStrip label="Top score" value={topScore(listings)} note="Best current fit" />
-            <StatStrip label="Actions" value={String(actions.length)} note="Events captured" />
+            <StatStrip label="Best fit" value={topScore(listings)} note="Top match right now" />
+            <StatStrip label="Updates" value={String(actions.length)} note="Recent changes" />
             <StatStrip
               label="Move-in"
               value={formatDate(profile.moveInFrom)}
@@ -327,17 +383,17 @@ export default function Dashboard() {
           </div>
         </header>
 
-        {isEmpty ? (
+        {hunt === null ? (
           <section className="grid gap-8 lg:grid-cols-[minmax(0,1fr)_320px]">
             <Card className="panel p-8">
-              <p className="section-kicker text-accent">Before the first run</p>
-              <h2 className="section-title mt-4">The brief is ready.</h2>
+              <p className="section-kicker text-accent">Ready when you are</p>
+              <h2 className="section-title mt-4">Your search is set.</h2>
               <p className="body-copy mt-4 max-w-2xl">
-                Start the background agent when you want a new sweep. The dashboard will fill with live crawl events on the right and ranked listings on the left as soon as scoring starts.
+                Start a fresh search when you are ready. New matches and updates will appear here automatically.
               </p>
               <div className="mt-6 flex flex-wrap gap-3">
-                <Button variant="primary" onClick={() => void onStart()} disabled={isStarting || agentRunning}>
-                  {agentRunning ? 'Agent running' : isStarting ? 'Starting…' : 'Start background agent'}
+                <Button variant="primary" onClick={() => void onStart()}>
+                  Start search
                 </Button>
                 <Button variant="secondary" onClick={() => setDialogOpen(true)}>
                   {connected ? 'Manage WG login' : 'Connect WG-Gesucht'}
@@ -347,18 +403,18 @@ export default function Dashboard() {
               <ol className="mt-8 divide-y divide-hairline border-t border-hairline">
                 <LaunchStep
                   number="01"
-                  title="Fetch listings"
-                  detail="WG Hunter reads search pages and opens each new listing in detail."
+                  title="Collect listings"
+                  detail="Gather fresh places that match the basics of your search."
                 />
                 <LaunchStep
                   number="02"
-                  title="Score the fit"
-                  detail="Budget, commute, move-in timing, preferences, and vibe each contribute to the final ranking."
+                  title="Rank the fit"
+                  detail="Budget, commute, timing, and preferences help sort the best options to the top."
                 />
                 <LaunchStep
                   number="03"
-                  title="Review the output"
-                  detail="Use the list for triage, then open a drawer for the full score breakdown and original post."
+                  title="Review your shortlist"
+                  detail="Open any place for the details, highlights, and the original listing."
                 />
               </ol>
             </Card>
@@ -391,34 +447,19 @@ export default function Dashboard() {
             </Card>
           </section>
         ) : (
-          <section className="grid gap-8 xl:grid-cols-[minmax(0,1.12fr)_400px]">
-            <section className="page-frame overflow-hidden">
-              <div className="flex flex-wrap items-end justify-between gap-4 border-b border-hairline px-6 py-5">
-                <div>
-                  <p className="section-kicker text-accent">Ranked results</p>
-                  <h2 className="section-title mt-2">Listings</h2>
-                </div>
-                <p className="text-[13px] text-ink-muted">
-                  {listings.length} collected · {summaryCount(listings)}
-                </p>
+          <section className="page-frame overflow-hidden">
+            <div className="flex flex-wrap items-end justify-between gap-4 border-b border-hairline px-6 py-5">
+              <div>
+                <p className="section-kicker text-accent">Ranked results</p>
+                <h2 className="section-title mt-2">Best matches</h2>
               </div>
-              <div className="max-h-[820px] overflow-y-auto">
-                <ListingList listings={listings} onOpen={(listing) => setOpenListing(listing)} />
-              </div>
-            </section>
-
-            <section className="page-frame overflow-hidden">
-              <div className="flex items-end justify-between gap-4 border-b border-hairline px-6 py-5">
-                <div>
-                  <p className="section-kicker text-accent">Agent activity</p>
-                  <h2 className="section-title mt-2">Live log</h2>
-                </div>
-                <span className="font-mono text-[12px] text-ink-muted">Background agent</span>
-              </div>
-              <div className="max-h-[820px] overflow-y-auto px-6 py-2">
-                <ActionLog actions={actions} />
-              </div>
-            </section>
+              <p className="text-[13px] text-ink-muted">
+                {listings.length} collected · {summaryCount(listings)}
+              </p>
+            </div>
+            <div className="max-h-[820px] overflow-y-auto">
+              <ListingList listings={listings} onOpen={(listing) => setOpenListing(listing)} />
+            </div>
           </section>
         )}
 

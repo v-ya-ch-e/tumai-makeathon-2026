@@ -63,7 +63,7 @@ export function ConnectWGDialog({ open, username, onClose, onSaved }: ConnectWGD
       return
     }
     if (typeof parsed !== 'object' || parsed === null) {
-      setError(<p className="text-[13px] text-bad">Expected a JSON object from Playwright's storage_state().</p>)
+      setError(<p className="text-[13px] text-bad">Paste a valid session JSON object.</p>)
       return
     }
     setBusy(true)
@@ -83,12 +83,11 @@ export function ConnectWGDialog({ open, username, onClose, onSaved }: ConnectWGD
   }
 
   return (
-    <Drawer open={open} onClose={handleClose} title="Connect wg-gesucht">
+    <Drawer open={open} onClose={handleClose} title="Connect WG-Gesucht">
       <div className="space-y-8">
         <p className="text-[14px] text-ink-muted">
-          Credentials are stored encrypted on your own machine. The agent uses them only when the
-          site requires login; most listings are readable without an account. In v1 the agent
-          always runs anonymously, but you can connect now so it's ready for the next increment.
+          Save your WG-Gesucht access details for listings that require sign-in. Most listings stay
+          visible without an account, so this step is optional.
         </p>
 
         <form className="space-y-4" onSubmit={submitEmailPassword}>
@@ -124,13 +123,13 @@ export function ConnectWGDialog({ open, username, onClose, onSaved }: ConnectWGD
 
         <div className="border-t border-hairline pt-6">
           <form className="space-y-4" onSubmit={submitStorageState}>
-            <h3 className="text-[15px] font-semibold text-ink">Or paste storage_state.json</h3>
+            <h3 className="text-[15px] font-semibold text-ink">Or paste a saved session</h3>
             <p className="text-[13px] text-ink-muted">
-              If you saved a Playwright session already, drop the JSON here. Safer than password
-              login — avoids CAPTCHAs.
+              If you already exported a session file, paste it here instead of entering your
+              password.
             </p>
             <textarea
-              aria-label="storage_state JSON"
+              aria-label="Saved session JSON"
               value={storageStateText}
               onChange={(e) => setStorageStateText(e.target.value)}
               placeholder='{"cookies": [...], "origins": [...]}'

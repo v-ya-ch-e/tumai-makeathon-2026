@@ -10,6 +10,7 @@ from __future__ import annotations
 import asyncio
 import logging
 import os
+from concurrent.futures import Future
 from typing import Optional
 
 from sqlmodel import Session
@@ -81,6 +82,7 @@ def _nearby_places_detail(
 
 _ACTIVE_AGENTS: dict[str, asyncio.Task[None]] = {}
 _EVENT_QUEUES: dict[str, asyncio.Queue[AgentAction]] = {}
+_RUNTIME_LOOP: asyncio.AbstractEventLoop | None = None
 
 
 def _safe_put(queue: asyncio.Queue[AgentAction], action: AgentAction) -> None:
@@ -88,6 +90,29 @@ def _safe_put(queue: asyncio.Queue[AgentAction], action: AgentAction) -> None:
         queue.put_nowait(action)
     except asyncio.QueueFull:
         pass
+
+
+def set_runtime_loop(loop: asyncio.AbstractEventLoop | None) -> None:
+    global _RUNTIME_LOOP
+    _RUNTIME_LOOP = loop
+
+
+def _create_task(coro: object) -> asyncio.Task[None]:
+    try:
+        loop = asyncio.get_running_loop()
+        return loop.create_task(coro)  # type: ignore[arg-type]
+    except RuntimeError:
+        if _RUNTIME_LOOP is None:
+            raise RuntimeError("Periodic matcher loop is not initialized")
+
+        future: Future[asyncio.Task[None]] = Future()
+
+        def _schedule() -> None:
+            task = _RUNTIME_LOOP.create_task(coro)  # type: ignore[arg-type]
+            future.set_result(task)
+
+        _RUNTIME_LOOP.call_soon_threadsafe(_schedule)
+        return future.result()
 
 
 def _append(session: Session, username: str, action: AgentAction) -> None:
@@ -249,7 +274,7 @@ class UserAgent:
                     ev_detail_parts.append(nearby_detail)
                 ev = AgentAction(
                     kind=ActionKind.evaluate,
-                    summary=f"Scored {listing.id}: {listing.score:.2f}",
+                    summary=f"Scored {listing.id}: {round((listing.score or 0.0) * 100)}%",
                     detail=" | ".join(ev_detail_parts) or None,
                     listing_id=listing.id,
                 )
@@ -350,7 +375,7 @@ def spawn_user_agent(username: str, *, interval_minutes: int = 30) -> None:
         event_queue=queue,
         interval_minutes=interval_minutes,
     )
-    task = asyncio.create_task(matcher.start())
+    task = _create_task(matcher.start())
     _ACTIVE_AGENTS[username] = task
 
 

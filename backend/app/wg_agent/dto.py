@@ -125,6 +125,8 @@ class ListingDTO(BaseModel):
     description: Optional[str] = None
     cover_photo_url: Optional[str] = None
     best_commute_minutes: Optional[int] = None
+    best_commute_label: Optional[str] = None
+    best_commute_mode: Optional[str] = None
     score: Optional[float] = None
     score_reason: Optional[str] = None
     match_reasons: list[str] = Field(default_factory=list)
@@ -151,7 +153,7 @@ class ListingDetailDTO(BaseModel):
     listing: ListingDTO
     photos: list[str]
     score: Optional[float] = None
-    travel_minutes_per_location: Optional[dict[str, int]] = None
+    travel_minutes_per_location: Optional[dict[str, dict[str, str | int]]] = None
     nearby_preference_places: list[NearbyPlaceDTO] = Field(default_factory=list)
 
 
@@ -254,6 +256,8 @@ def listing_to_dto(l: Listing, *, username: Optional[str] = None) -> ListingDTO:
         description=l.description,
         cover_photo_url=l.cover_photo_url,
         best_commute_minutes=l.best_commute_minutes,
+        best_commute_label=l.best_commute_label,
+        best_commute_mode=l.best_commute_mode,
         score=l.score,
         score_reason=l.score_reason,
         match_reasons=list(l.match_reasons),

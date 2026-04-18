@@ -32,7 +32,7 @@ const DEFAULT_STATE: LocalState = {
   priceMax: '900',
   mainLocations: [],
   hasCar: false,
-  hasBike: true,
+  hasBike: false,
   mode: 'both',
   moveInFrom: '',
   moveInUntil: '',
@@ -170,7 +170,7 @@ export default function OnboardingRequirements() {
       <OnboardingShell
         step={2}
         eyebrow="Requirements"
-        title="Define the search brief"
+        title="Set your requirements"
         onNext={() => undefined}
         busy
         progressSteps={progressSteps}
@@ -184,8 +184,8 @@ export default function OnboardingRequirements() {
     <OnboardingShell
       step={2}
       eyebrow="Requirements"
-      title="Define the search brief"
-      description="Set the real constraints first: rent ceiling, places you need to reach, and how aggressively the agent should rescan WG-Gesucht."
+      title="Set your requirements"
+      description="Start with the essentials: budget, key destinations, and how often you want fresh results."
       onBack={() => navigate('/onboarding/profile')}
       onNext={() => void handleNext()}
       busy={busy}
@@ -213,7 +213,7 @@ export default function OnboardingRequirements() {
       <div className="overflow-hidden rounded-card border border-hairline bg-surface">
         <RequirementSection
           title="Monthly rent"
-          hint={errors.price ?? 'Set the highest monthly rent you would still consider, including cases the agent should reject immediately.'}
+          hint={errors.price ?? 'Set the highest monthly rent you would genuinely consider.'}
           error={Boolean(errors.price)}
         >
           <div className="max-w-sm">
@@ -251,7 +251,7 @@ export default function OnboardingRequirements() {
             }}
           />
           <p className="mt-3 text-[13px] leading-6 text-ink-muted">
-            Use the commute field to define your upper comfort limit. Leave it blank if the place matters, but timing does not.
+            Use the commute field to define your comfort limit. Leave it blank if the place matters, but timing does not.
           </p>
         </RequirementSection>
 
@@ -271,7 +271,7 @@ export default function OnboardingRequirements() {
 
         <RequirementSection
           title="What to search"
-          hint="Leave this on either unless you already know the agent should ignore one listing type."
+          hint="Choose what you want to see most often."
         >
           <div className="flex flex-wrap gap-2">
             <Chip selected={state.mode === 'wg'} onToggle={() => setState({ ...state, mode: 'wg' })}>
@@ -329,7 +329,7 @@ export default function OnboardingRequirements() {
 
         <RequirementSection
           title="Run mode"
-          hint={errors.rescanInterval ?? 'Choose between one pass or a recurring background scan.'}
+          hint={errors.rescanInterval ?? 'Choose a single search or ongoing updates.'}
           error={Boolean(errors.rescanInterval)}
         >
           <div className="flex flex-wrap gap-2">
@@ -349,7 +349,7 @@ export default function OnboardingRequirements() {
                 setErrors((prev) => ({ ...prev, rescanInterval: undefined }))
               }}
             >
-              Keep rescanning
+              Keep checking
             </Chip>
           </div>
           {state.schedule === 'periodic' ? (

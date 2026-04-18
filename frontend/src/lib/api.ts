@@ -2,6 +2,7 @@ import type {
   Action,
   CredentialsStatus,
   Gender,
+  Hunt,
   Listing,
   ListingDetail,
   SearchProfile,
@@ -258,6 +259,60 @@ export async function getUserListings(username: string): Promise<Listing[]> {
   return data as Listing[]
 }
 
+function huntIdForUser(username: string): string {
+  return `user:${encodeURIComponent(username)}`
+}
+
+function usernameFromHuntId(huntId: string): string | null {
+  if (!huntId.startsWith('user:')) return null
+  try {
+    return decodeURIComponent(huntId.slice(5))
+  } catch {
+    return null
+  }
+}
+
+async function buildHunt(username: string): Promise<Hunt> {
+  const [status, listings, actions] = await Promise.all([
+    getAgentStatus(username),
+    getUserListings(username),
+    getUserActions(username, 200),
+  ])
+  const running = status.running
+  return {
+    id: huntIdForUser(username),
+    status: running ? 'running' : 'done',
+    startedAt: actions[0]?.at ?? new Date().toISOString(),
+    finishedAt: running ? null : actions.at(-1)?.at ?? null,
+    listings,
+    actions,
+    error: null,
+  }
+}
+
+export async function createHunt(
+  username: string,
+  _body: { schedule: SearchProfile['schedule'] },
+): Promise<Hunt> {
+  await startAgent(username)
+  return buildHunt(username)
+}
+
+export async function getHunt(huntId: string): Promise<Hunt | null> {
+  const username = usernameFromHuntId(huntId)
+  if (!username) return null
+  return buildHunt(username)
+}
+
+export async function stopHunt(huntId: string): Promise<Hunt> {
+  const username = usernameFromHuntId(huntId)
+  if (!username) {
+    throw new ApiError(400, { detail: 'Invalid hunt id' }, 'Invalid hunt id')
+  }
+  await pauseAgent(username)
+  return buildHunt(username)
+}
+
 export async function getUserActions(
   username: string,
   limit?: number,
@@ -343,4 +398,16 @@ export function streamUser(
   }
   es.onerror = (e) => onError?.(e)
   return () => es.close()
+}
+
+export function streamHunt(
+  huntId: string,
+  onEvent: (action: Action) => void,
+  onError?: (err: unknown) => void,
+): () => void {
+  const username = usernameFromHuntId(huntId)
+  if (!username) {
+    throw new ApiError(400, { detail: 'Invalid hunt id' }, 'Invalid hunt id')
+  }
+  return streamUser(username, onEvent, onError)
 }
