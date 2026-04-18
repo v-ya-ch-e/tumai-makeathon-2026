@@ -195,24 +195,14 @@ export default function OnboardingRequirements() {
       busy={busy}
       footer={footer}
       aside={
-        <div className="space-y-4">
-          <Card className="rounded-[28px] border-hairline/80 bg-surface/92 p-6">
-            <p className="font-mono text-[12px] uppercase tracking-[0.24em] text-accent">Search summary</p>
-            <SummaryItem label="Budget" value={priceSummary} />
-            <SummaryItem label="Places" value={state.mainLocations.length > 0 ? `${state.mainLocations.length} added` : 'Not set'} />
-            <SummaryItem label="Mobility" value={mobilitySummary(state)} />
-            <SummaryItem label="Mode" value={modeLabel(state.mode)} />
-            <SummaryItem label="Cadence" value={state.schedule === 'periodic' ? `Every ${state.rescanIntervalMinutes || '30'} min` : 'One-off sweep'} />
-          </Card>
-          <Card className="rounded-[28px] border-hairline/80 bg-surface/92 p-6">
-            <p className="text-[14px] font-semibold text-ink">What makes this strong</p>
-            <ul className="mt-3 space-y-3 text-[14px] leading-6 text-ink-muted">
-              <li>At least one place with a commute target.</li>
-              <li>A realistic max rent, not just a dream number.</li>
-              <li>The run mode that matches how urgently you are searching.</li>
-            </ul>
-          </Card>
-        </div>
+        <Card className="rounded-[28px] border-hairline/80 bg-surface/92 p-6">
+          <p className="font-mono text-[12px] uppercase tracking-[0.24em] text-accent">Search summary</p>
+          <SummaryItem label="Budget" value={priceSummary} />
+          <SummaryItem label="Places" value={state.mainLocations.length > 0 ? `${state.mainLocations.length} added` : 'Not set'} />
+          <SummaryItem label="Mobility" value={mobilitySummary(state)} />
+          <SummaryItem label="Mode" value={modeLabel(state.mode)} />
+          <SummaryItem label="Cadence" value={state.schedule === 'periodic' ? `Every ${state.rescanIntervalMinutes || '30'} min` : 'One-off sweep'} />
+        </Card>
       }
     >
       <div className="space-y-6">

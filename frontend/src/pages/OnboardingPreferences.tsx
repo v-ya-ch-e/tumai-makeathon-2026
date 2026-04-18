@@ -290,7 +290,7 @@ export default function OnboardingPreferences() {
     setBusy(true)
     try {
       await putSearchProfile(username, body)
-      navigate('/dashboard')
+      navigate('/dashboard', { state: { autoStart: true } })
     } catch (e) {
       if (e instanceof ApiError) {
         setFooter(<p className="text-[15px] text-bad">{e.message}</p>)
@@ -319,40 +319,34 @@ export default function OnboardingPreferences() {
       onBack={() => navigate('/onboarding/requirements')}
       onNext={() => void handleNext()}
       busy={busy}
-      nextLabel="Start hunting"
+      nextLabel="Save and start hunt"
       footer={footer}
       aside={
-        <div className="space-y-4">
-          <Card className="rounded-[28px] border-hairline/80 bg-surface/92 p-6">
-            <p className="font-mono text-[12px] uppercase tracking-[0.24em] text-accent">Selected</p>
-            <p className="mt-3 text-[24px] font-semibold tracking-[-0.03em] text-ink">
-              {selectedPreferences.length}
+        <Card className="rounded-[28px] border-hairline/80 bg-surface/92 p-6">
+          <p className="font-mono text-[12px] uppercase tracking-[0.24em] text-accent">Selected</p>
+          <p className="mt-3 text-[24px] font-semibold tracking-[-0.03em] text-ink">
+            {selectedPreferences.length}
+          </p>
+          <p className="mt-1 text-[14px] leading-6 text-ink-muted">
+            weighted preferences ready for the first run.
+          </p>
+          {selectedPreferences.length > 0 ? (
+            <div className="mt-5 flex flex-wrap gap-2">
+              {selectedPreferences.slice(0, 8).map((tile) => (
+                <span
+                  key={tile.key}
+                  className="rounded-full border border-hairline bg-surface-raised px-3 py-1 text-[12px] text-ink"
+                >
+                  {tile.label}
+                </span>
+              ))}
+            </div>
+          ) : (
+            <p className="mt-4 text-[13px] leading-6 text-ink-muted">
+              You can start with zero preferences and add them later, but choosing a few makes the first ranking much sharper.
             </p>
-            <p className="mt-1 text-[14px] leading-6 text-ink-muted">
-              preferences shaping your ranking model.
-            </p>
-            {selectedPreferences.length > 0 ? (
-              <div className="mt-5 flex flex-wrap gap-2">
-                {selectedPreferences.slice(0, 8).map((tile) => (
-                  <span
-                    key={tile.key}
-                    className="rounded-full border border-hairline bg-surface-raised px-3 py-1 text-[12px] text-ink"
-                  >
-                    {tile.label}
-                  </span>
-                ))}
-              </div>
-            ) : null}
-          </Card>
-          <Card className="rounded-[28px] border-hairline/80 bg-surface/92 p-6">
-            <p className="text-[14px] font-semibold text-ink">How the weights behave</p>
-            <ul className="mt-3 space-y-3 text-[14px] leading-6 text-ink-muted">
-              <li><strong className="text-ink">1–2:</strong> nice bonus when present.</li>
-              <li><strong className="text-ink">3:</strong> meaningful tie-breaker.</li>
-              <li><strong className="text-ink">4–5:</strong> strong signal, close to a filter.</li>
-            </ul>
-          </Card>
-        </div>
+          )}
+        </Card>
       }
     >
       <div className="space-y-8">

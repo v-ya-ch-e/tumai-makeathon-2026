@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
-import { useNavigate } from 'react-router-dom'
+import { useLocation, useNavigate } from 'react-router-dom'
 import { ActionLog } from '../components/ActionLog'
 import { ConnectWGDialog } from '../components/ConnectWGDialog'
 import { ListingDrawer } from '../components/ListingDrawer'
@@ -80,7 +80,8 @@ function summaryCount(listings: Listing[]): string {
 
 export default function Dashboard() {
   const navigate = useNavigate()
-  const { username, isReady } = useSession()
+  const location = useLocation()
+  const { username, isReady, setUsername } = useSession()
 
   const [profile, setProfile] = useState<SearchProfile | null>(null)
   const [hunt, setHunt] = useState<Hunt | null>(null)
@@ -92,6 +93,7 @@ export default function Dashboard() {
   const [errorMessage, setErrorMessage] = useState<string | null>(null)
   const [openListing, setOpenListing] = useState<Listing | null>(null)
   const seenActionKeysRef = useRef<Set<string>>(new Set())
+  const autoStartTriggeredRef = useRef(false)
 
   const refreshCredStatus = useCallback(
     async (name: string) => {
@@ -216,6 +218,31 @@ export default function Dashboard() {
     }
   }
 
+  const onRestart = async () => {
+    if (!username || !profile) return
+    setErrorMessage(null)
+    setUiStatus('starting')
+    try {
+      if (hunt && (hunt.status === 'running' || hunt.status === 'pending')) {
+        await stopHunt(hunt.id)
+      }
+      const nextHunt = await createHunt(username, { schedule: profile.schedule })
+      localStorage.setItem(LS_HUNT_ID, nextHunt.id)
+      setOpenListing(null)
+      applyHunt(nextHunt)
+    } catch (error) {
+      setErrorMessage(error instanceof ApiError ? error.message : String(error))
+      setUiStatus('error')
+    }
+  }
+
+  const onStartAsNewUser = () => {
+    localStorage.removeItem(LS_HUNT_ID)
+    setOpenListing(null)
+    setUsername(null)
+    navigate('/onboarding/profile', { replace: true })
+  }
+
   const onStop = async () => {
     if (!hunt) return
     setErrorMessage(null)
@@ -247,6 +274,20 @@ export default function Dashboard() {
     ].filter((value): value is string => value !== null)
   }, [profile])
 
+  useEffect(() => {
+    if (!profile || !username) return
+    if (!location.state || typeof location.state !== 'object' || !('autoStart' in location.state)) {
+      return
+    }
+    if ((location.state as { autoStart?: boolean }).autoStart !== true) return
+    if (autoStartTriggeredRef.current) return
+    autoStartTriggeredRef.current = true
+    navigate(location.pathname, { replace: true, state: null })
+    if (hunt === null) {
+      void onStart()
+    }
+  }, [location.pathname, location.state, navigate, profile, username, hunt])
+
   if (!isReady || profile === null) {
     return (
       <div className="flex min-h-screen items-center justify-center bg-canvas font-sans text-[15px] text-ink-muted">
@@ -259,6 +300,12 @@ export default function Dashboard() {
   const isActive = uiStatus === 'running' || uiStatus === 'starting'
   const isStopping = uiStatus === 'stopping'
   const isStarting = uiStatus === 'starting'
+  const hasListings = listings.length > 0
+  const progression = [
+    { label: 'Brief ready', done: profile !== null },
+    { label: 'Hunt running', done: hunt !== null && hunt.status !== 'failed' },
+    { label: 'Listings found', done: hasListings },
+  ]
 
   return (
     <div className="relative min-h-screen overflow-hidden bg-canvas">
@@ -269,7 +316,7 @@ export default function Dashboard() {
 
       <div className="relative mx-auto max-w-7xl px-5 py-5 sm:px-8 lg:px-10">
         <section className="overflow-hidden rounded-[34px] border border-hairline/80 bg-surface/95 shadow-[0_30px_80px_rgba(39,33,29,0.08)]">
-          <div className="grid gap-6 border-b border-hairline/80 px-6 py-8 lg:grid-cols-[minmax(0,1.3fr)_320px] lg:px-8 xl:px-10">
+          <div className="grid gap-6 border-b border-hairline/80 px-6 py-6 lg:grid-cols-[minmax(0,1.3fr)_360px] lg:px-8 xl:px-10">
             <div>
               <div className="flex flex-wrap items-center gap-3">
                 <p className="font-mono text-[12px] uppercase tracking-[0.28em] text-accent">
@@ -277,17 +324,33 @@ export default function Dashboard() {
                 </p>
                 <StatusPill tone={statusPillTone(uiStatus)}>{statusLabel(uiStatus)}</StatusPill>
               </div>
-              <h1 className="mt-4 max-w-3xl text-[34px] font-semibold tracking-[-0.035em] text-ink sm:text-[44px]">
+              <h1 className="mt-3 max-w-3xl text-[30px] font-semibold tracking-[-0.035em] text-ink sm:text-[38px]">
                 {username}&apos;s live room hunt
               </h1>
-              <p className="mt-4 max-w-2xl text-[16px] leading-7 text-ink-muted">
+              <p className="mt-3 max-w-2xl text-[15px] leading-7 text-ink-muted">
                 Launch scans, track agent activity, and review the strongest listings in one place.
               </p>
-              <div className="mt-6 flex flex-wrap gap-2">
+              <div className="mt-4 flex flex-wrap gap-2">
                 {briefChips.map((chip) => (
                   <Chip key={chip} selected onToggle={() => undefined} className="pointer-events-none">
                     {chip}
                   </Chip>
+                ))}
+              </div>
+              <div className="mt-5 grid gap-3 sm:grid-cols-3">
+                {progression.map((step, index) => (
+                  <div
+                    key={step.label}
+                    className="rounded-[20px] border border-hairline/80 bg-surface-raised/85 px-4 py-3"
+                  >
+                    <p className="font-mono text-[11px] uppercase tracking-[0.16em] text-ink-muted">
+                      0{index + 1}
+                    </p>
+                    <p className="mt-2 text-[14px] font-semibold text-ink">{step.label}</p>
+                    <p className="mt-1 text-[13px] text-ink-muted">
+                      {step.done ? 'Done' : 'Waiting'}
+                    </p>
+                  </div>
                 ))}
               </div>
             </div>
@@ -314,15 +377,32 @@ export default function Dashboard() {
                     <p className="text-[13px] uppercase tracking-[0.14em] text-ink-muted">Run mode</p>
                     <p className="mt-1 text-[15px] font-semibold text-ink">{formatSchedule(profile)}</p>
                   </div>
-                  {isActive ? (
-                    <Button variant="destructive" onClick={() => void onStop()} disabled={isStopping}>
-                      {isStopping ? 'Stopping…' : 'Stop agent'}
-                    </Button>
-                  ) : (
-                    <Button variant="primary" onClick={() => void onStart()} disabled={isStarting}>
-                      {isStarting ? 'Starting…' : 'Start agent'}
-                    </Button>
-                  )}
+                  <div className="flex flex-wrap justify-end gap-2">
+                    {hunt ? (
+                      <Button variant="secondary" size="sm" onClick={() => void onRestart()} disabled={isStarting || isStopping}>
+                        Restart fresh
+                      </Button>
+                    ) : null}
+                    {isActive ? (
+                      <Button variant="destructive" onClick={() => void onStop()} disabled={isStopping}>
+                        {isStopping ? 'Stopping…' : 'Stop agent'}
+                      </Button>
+                    ) : (
+                      <Button variant="primary" onClick={() => void onStart()} disabled={isStarting}>
+                        {isStarting ? 'Starting…' : hunt ? 'Start again' : 'Start agent'}
+                      </Button>
+                    )}
+                  </div>
+                </div>
+
+                <div className="flex items-center justify-between rounded-2xl border border-hairline/80 bg-surface-raised/85 px-4 py-3">
+                  <div>
+                    <p className="text-[13px] uppercase tracking-[0.14em] text-ink-muted">New search</p>
+                    <p className="mt-1 text-[15px] font-semibold text-ink">Start as a new user</p>
+                  </div>
+                  <Button variant="secondary" size="sm" onClick={onStartAsNewUser}>
+                    New user
+                  </Button>
                 </div>
               </div>
 
@@ -346,7 +426,7 @@ export default function Dashboard() {
           </div>
         </section>
 
-        <main className="mt-6 grid gap-6 xl:grid-cols-[320px_minmax(0,1fr)]">
+        <main className="mt-6 grid gap-6 xl:grid-cols-[290px_minmax(0,1fr)]">
           <aside className="space-y-6">
             <Card className="rounded-[28px] bg-[#f6ecdd] p-6">
               <p className="font-mono text-[12px] uppercase tracking-[0.24em] text-accent">Search brief</p>
@@ -373,11 +453,11 @@ export default function Dashboard() {
             </Card>
 
             <Card className="rounded-[28px] p-6">
-              <p className="text-[18px] font-semibold tracking-[-0.02em] text-ink">Current focus</p>
+              <p className="text-[18px] font-semibold tracking-[-0.02em] text-ink">Session status</p>
               <ul className="mt-4 space-y-3 text-[14px] leading-6 text-ink-muted">
-                <li>Monitor new listings as they appear.</li>
-                <li>Open top matches to inspect score details and commute time.</li>
-                <li>Refine the brief if results drift away from your target.</li>
+                <li>{hunt ? `Current hunt: ${hunt.id}` : 'No hunt started yet.'}</li>
+                <li>{hasListings ? `${listings.length} listings currently in view.` : 'Listings will appear here as soon as scoring starts.'}</li>
+                <li>{actions.length > 0 ? `${actions.length} logged events so far.` : 'The action log will fill in automatically.'}</li>
               </ul>
             </Card>
           </aside>
@@ -419,24 +499,7 @@ export default function Dashboard() {
               </Card>
             </section>
           ) : (
-            <section className="grid gap-6 lg:grid-cols-[minmax(0,0.82fr)_minmax(0,1.18fr)]">
-              <Card className="rounded-[30px] p-0">
-                <div className="flex items-center justify-between border-b border-hairline/80 px-6 py-5">
-                  <div>
-                    <p className="font-mono text-[12px] uppercase tracking-[0.24em] text-accent">
-                      Agent activity
-                    </p>
-                    <h2 className="mt-2 text-[22px] font-semibold tracking-[-0.02em] text-ink">
-                      Live log
-                    </h2>
-                  </div>
-                  <span className="font-mono text-[12px] text-ink-muted">Hunt {hunt.id}</span>
-                </div>
-                <div className="max-h-[820px] overflow-y-auto px-6 py-5">
-                  <ActionLog actions={actions} />
-                </div>
-              </Card>
-
+            <section className="grid gap-6 lg:grid-cols-[minmax(0,1.18fr)_minmax(0,0.82fr)]">
               <Card className="rounded-[30px] p-0">
                 <div className="flex flex-wrap items-end justify-between gap-4 border-b border-hairline/80 px-6 py-5">
                   <div>
@@ -453,6 +516,23 @@ export default function Dashboard() {
                 </div>
                 <div className="max-h-[820px] overflow-y-auto px-6 py-5">
                   <ListingList listings={listings} onOpen={(listing) => setOpenListing(listing)} />
+                </div>
+              </Card>
+
+              <Card className="rounded-[30px] p-0">
+                <div className="flex items-center justify-between border-b border-hairline/80 px-6 py-5">
+                  <div>
+                    <p className="font-mono text-[12px] uppercase tracking-[0.24em] text-accent">
+                      Agent activity
+                    </p>
+                    <h2 className="mt-2 text-[22px] font-semibold tracking-[-0.02em] text-ink">
+                      Live log
+                    </h2>
+                  </div>
+                  <span className="font-mono text-[12px] text-ink-muted">Hunt {hunt.id}</span>
+                </div>
+                <div className="max-h-[820px] overflow-y-auto px-6 py-5">
+                  <ActionLog actions={actions} />
                 </div>
               </Card>
             </section>

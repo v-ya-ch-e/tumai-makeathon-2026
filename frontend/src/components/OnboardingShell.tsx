@@ -52,7 +52,7 @@ export function OnboardingShell({
           </div>
         ) : null}
 
-        <div className="grid gap-6 lg:grid-cols-[minmax(0,1.3fr)_340px] xl:grid-cols-[minmax(0,1.35fr)_380px]">
+        <div className={aside ? 'grid gap-6 lg:grid-cols-[minmax(0,1.3fr)_340px] xl:grid-cols-[minmax(0,1.35fr)_380px]' : 'grid gap-6'}>
           <section className="overflow-hidden rounded-[32px] border border-hairline/80 bg-surface/95 shadow-[0_30px_80px_rgba(39,33,29,0.08)]">
             <div className="border-b border-hairline/80 px-6 py-8 sm:px-8 lg:px-10">
               {eyebrow ? (
@@ -99,39 +99,7 @@ export function OnboardingShell({
             </div>
           </section>
 
-          <aside className="space-y-4 lg:sticky lg:top-6 lg:self-start">
-            <div className="overflow-hidden rounded-[28px] border border-hairline/80 bg-[#f6ecdd] p-0 shadow-[0_26px_60px_rgba(140,85,52,0.12)]">
-              <div className="border-b border-hairline/80 px-6 py-5">
-                <p className="font-mono text-[12px] uppercase tracking-[0.24em] text-accent">Step {step}</p>
-                <p className="mt-3 text-[22px] font-semibold tracking-[-0.02em] text-ink">
-                  Build your hunt profile.
-                </p>
-              </div>
-              <div className="space-y-5 px-6 py-5">
-                <p className="text-[14px] leading-6 text-ink-muted">
-                  The sharper this brief is, the more confidently the agent can reject weak rooms and surface real contenders.
-                </p>
-                <div className="grid gap-3">
-                  {[
-                    'Search basics first',
-                    'Tune preferences second',
-                    'Watch ranked results live',
-                  ].map((item, index) => (
-                    <div
-                      key={item}
-                      className="flex items-start gap-3 rounded-2xl border border-hairline/70 bg-surface-raised/80 px-4 py-3"
-                    >
-                      <span className="font-mono text-[12px] text-accent">
-                        0{index + 1}
-                      </span>
-                      <span className="text-[13px] leading-5 text-ink">{item}</span>
-                    </div>
-                  ))}
-                </div>
-              </div>
-            </div>
-            {aside ? aside : null}
-          </aside>
+          {aside ? <aside className="hidden space-y-4 lg:sticky lg:top-6 lg:block lg:self-start">{aside}</aside> : null}
         </div>
       </div>
     </div>
