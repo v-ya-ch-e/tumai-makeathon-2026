@@ -14,7 +14,7 @@ from typing import Optional
 
 from sqlmodel import Session
 
-from . import commute, evaluator, places, repo
+from . import commute, evaluator, notifier, places, repo
 from . import db as db_module
 from .models import ActionKind, AgentAction, NearbyPlace, SearchProfile
 
@@ -210,6 +210,18 @@ class UserAgent:
                     veto_reason=listing.veto_reason,
                     scored_against_scraped_at=row.scraped_at,
                 )
+
+            with Session(db_module.engine) as session:
+                user = repo.get_user(session, username=self._username)
+                notify_email = user.email if user is not None else None
+            notifier.notify_if_high_score(
+                to_email=notify_email,
+                listing_title=listing.title or "",
+                listing_url=str(listing.url),
+                score=float(listing.score or 0.0),
+                match_reasons=list(listing.match_reasons),
+                username=self._username,
+            )
 
             if result.veto_reason is not None:
                 ev = AgentAction(
