@@ -26,6 +26,31 @@ No messaging in v1 — the orchestrator has that code staged for a future iterat
 | Scoring | **Scorecard evaluator** (code) + **OpenAI** (narrow vibe call) | Deterministic components are unit-testable; LLM only judges what it's good at (ADR-015) |
 | External | **wg-gesucht.de** (httpx scrape), **Google Maps Platform** (frontend autocomplete + backend geocoding/routing/nearby places), **OpenAI** | No APIs for wg-gesucht exist; we scrape defensively |
 
+## Doc tree
+
+```text
+docs/
+├── README.md (this file) ── index + read-in-order + three-layer rule
+├── SETUP.md ──────────────── clone-to-running in ~30 min + first-contribution recipes
+├── ARCHITECTURE.md ──────── runtime shape, request flow, why each piece exists
+├── DATA_MODEL.md ─────────── every table with columns + JSON example + ER diagram
+├── BACKEND.md ────────────── file-by-file tour of backend/app/wg_agent/
+├── FRONTEND.md ───────────── file-by-file tour of frontend/src/
+├── AGENT_LOOP.md ─────────── one HuntEngine.run_find_only pass end-to-end
+├── DESIGN.md ─────────────── palette, typography, UI primitives, enforced rules
+├── WG_GESUCHT.md ─────────── live recon notes + DOM selectors we depend on
+├── DECISIONS.md ──────────── ADR log (ADR-001 … ADR-017)
+├── ROADMAP.md ────────────── queued / later / done-recently
+└── _generated/openapi.json   committed OpenAPI spec (regenerate after API changes)
+```
+
+Related files outside `docs/`:
+
+- [`../README.md`](../README.md) — repo-root quick-start, `.env` table, deploy summary.
+- [`../CLAUDE.md`](../CLAUDE.md) / [`../AGENTS.md`](../AGENTS.md) — behavioral guidelines + doc tree for coding agents.
+- [`../DEPLOYMENT.md`](../DEPLOYMENT.md) / [`../CI-CONFIGURATION.md`](../CI-CONFIGURATION.md) — EC2 + GitHub Actions recipes.
+- [`../context/`](../context/) — hackathon background: challenge brief, TUM systems inventory, code samples.
+
 ## Read in order
 
 1. [**SETUP.md**](./SETUP.md) — clone to running locally in ~30 minutes.
@@ -92,7 +117,4 @@ Commit the updated file alongside your API change.
 
 ## Related reading (outside `docs/`)
 
-- [`../README.md`](../README.md) — repo root quick-start, AWS deploy, `.env` table.
-- [`../CLAUDE.md`](../CLAUDE.md) / [`../AGENTS.md`](../AGENTS.md) — behavioral guidelines for human contributors and coding agents.
-- [`../context/`](../context/) — hackathon background: challenge brief, TUM systems inventory, AWS/Bedrock reference code, event logistics.
-- [`../DEPLOYMENT.md`](../DEPLOYMENT.md) / [`../CI-CONFIGURATION.md`](../CI-CONFIGURATION.md) — EC2 + GitHub Actions recipes.
+See the [doc tree](#doc-tree) at the top of this file for the full layout across the repo root.

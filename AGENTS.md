@@ -1,5 +1,5 @@
 # Agent instructions
 
-**Read [`docs/README.md`](./docs/README.md) first.** It links the full setup, architecture, and data-model docs that ground every non-trivial change.
+**Start with [`CLAUDE.md`](./CLAUDE.md).** It contains the project overview, the full documentation tree, the read-in-order list, and the behavioral guidelines (assumptions, simplicity, surgical edits, goal-driven execution) that every coding agent should follow in this repo.
 
-Coding and behavioral guidelines for this repository are in **[CLAUDE.md](./CLAUDE.md)**. Read that file for assumptions, simplicity, surgical edits, and goal-driven execution.
+After reading `CLAUDE.md`, follow its links into [`docs/README.md`](./docs/README.md) and the specific developer docs under `docs/` before making non-trivial changes.

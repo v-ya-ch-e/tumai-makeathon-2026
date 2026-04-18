@@ -36,6 +36,7 @@ frontend/src/components/ui/index.ts        Re-export barrel
 frontend/src/components/OnboardingShell.tsx  Wizard chrome (progress + nav)
 frontend/src/components/ConnectWGDialog.tsx  Modal to save wg credentials (optional)
 frontend/src/components/PlaceAutocomplete.tsx  Google Places combobox + removable chips (used in step 2)
+frontend/src/components/AppTabs.tsx          Pill-style Dashboard / Profile nav tabs
 frontend/src/components/ActionLog.tsx        Monospace-tagged SSE log
 frontend/src/components/ListingList.tsx      Ranked cards + selection callback
 frontend/src/components/ListingDrawer.tsx    Detail fetch + `Drawer` presentation
@@ -43,6 +44,7 @@ frontend/src/pages/OnboardingProfile.tsx       Step 1: demographics
 frontend/src/pages/OnboardingRequirements.tsx Step 2: rent, locations, schedule
 frontend/src/pages/OnboardingPreferences.tsx  Step 3: preference tiles
 frontend/src/pages/Dashboard.tsx               Hunt controls, log, listings, drawer host
+frontend/src/pages/Profile.tsx                 Account page: edit age / gender, jump back into the wizard
 frontend/src/pages/Health.tsx                Simple connectivity check page
 ```
 
@@ -55,6 +57,7 @@ frontend/src/pages/Health.tsx                Simple connectivity check page
 | `/onboarding/requirements` | `OnboardingRequirements` | Edits numeric/slider/chip requirements, `PUT` search profile |
 | `/onboarding/preferences` | `OnboardingPreferences` | Toggles string tags, merges into search profile |
 | `/dashboard` | `Dashboard` | Starts/stops hunts, renders log + listings + credential dialog |
+| `/profile` | `Profile` | Account settings: edit age/gender (`PUT /api/users/{username}`) and shortcut back into the onboarding wizard steps |
 | `/health` | `HealthPage` | Lightweight sanity page for local debugging |
 
 ## Session
@@ -72,6 +75,7 @@ frontend/src/pages/Health.tsx                Simple connectivity check page
 - **`ApiError`** — Carries HTTP status plus parsed body for non-2xx responses.
 - **`requestJson`** — Shared `fetch` wrapper: applies `toCamel` on JSON successes; throws `ApiError` on failures.
 - **404 policy** — `getUser`, `getSearchProfile`, `getHunt`, and `getListingDetail` return `null` on 404 instead of throwing (safe idempotent reads). Mutating calls still throw `ApiError` on errors.
+- **User mutations** — `createUser` → `POST /api/users`; `updateUser` → `PUT /api/users/{username}` (age / gender only — username is immutable). Both return `UserDTO` normalized to camelCase.
 - **`streamHunt`** — Constructs `EventSource` against `/api/hunts/{id}/stream`, JSON-parses each `message` event, normalizes with `toCamel`, returns a disposer that calls `es.close()`.
 
 ## Components
@@ -79,6 +83,7 @@ frontend/src/pages/Health.tsx                Simple connectivity check page
 - **UI primitives** — See [DESIGN.md](./DESIGN.md) for tokens and primitive rules. Shared via [`components/ui/index.ts`](../frontend/src/components/ui/index.ts).
 - **`OnboardingShell`** — Wraps the three wizard pages with `ProgressSteps`, title slot, and sticky footer actions (`Button` variants).
 - **`ConnectWGDialog`** — Modal form for email/password or pasted storage JSON; calls credential `PUT`/`DELETE` APIs; consumed from `Dashboard`.
+- **`AppTabs`** — Pill-style nav used on both the dashboard header and the profile page to switch between `/dashboard` and `/profile` without leaving the shared card shell.
 - **`ActionLog`** — Renders `Action` rows with `font-mono` kind labels and timestamps; fed from SSE + initial `hunt.actions`.
 - **`ListingList`** — Scrollable ranked cards (score pill, meta); notifies parent on row activate.
 - **`ListingDrawer`** — Fetches `getListingDetail`, shows description/meta inside `Drawer`, external link to wg-gesucht.
@@ -88,7 +93,8 @@ frontend/src/pages/Health.tsx                Simple connectivity check page
 - **`OnboardingProfile`** — Dual-mode page gated by a *Create account* / *Sign in* tab control. *Create* collects username/age/gender and `POST /api/users`, then navigates to `/onboarding/requirements`. *Sign in* accepts an existing username, verifies it with `getUser` (404 → inline error), then calls `setUsername` and navigates to `/` so `HomeRedirect` routes based on hydrated session. Progress steps only render on the create tab.
 - **`OnboardingRequirements`** — Binds sliders, chips, mode select, move-in dates, schedule fields to `UpsertSearchProfileBody`, persists with `putSearchProfile`. Main locations are collected via [`PlaceAutocomplete`](../frontend/src/components/PlaceAutocomplete.tsx) as structured `PlaceLocation[]` (`label`, `placeId`, `lat`, `lng`, optional `maxCommuteMinutes`). Each picked location renders a row with a 5–240 minute ideal-commute input; blank means no budget.
 - **`OnboardingPreferences`** — Grouped grid of inline-SVG tiles toggling `PreferenceWeight[]` entries; selected tiles expand to show an inline [`WeightSlider`](../frontend/src/components/ui/WeightSlider.tsx) bound to the 1–5 importance value (default 3). Saves merged profile before routing to `/dashboard`.
-- **`Dashboard`** — Loads search profile + optional credentials status, persists last hunt id in `localStorage` (`wg-hunter.hunt-id`), starts hunts (`createHunt`), attaches `streamHunt`, hydrates listings from periodic `getHunt` polling / SSE merges, hosts `ListingDrawer` + `ConnectWGDialog`, maps backend hunt status to UI pill tones.
+- **`Dashboard`** — Loads search profile + optional credentials status, persists last hunt id in `localStorage` (`wg-hunter.hunt-id`), starts hunts (`createHunt`), attaches `streamHunt`, hydrates listings from periodic `getHunt` polling / SSE merges, hosts `ListingDrawer` + `ConnectWGDialog`, maps backend hunt status to UI pill tones. Top-right `AppTabs` links over to `/profile`.
+- **`Profile`** — Account page for an already-onboarded user. Hydrates `user` + `SearchProfile` from the session, lets the user edit age / gender via `updateUser`, and exposes `Edit` shortcuts that jump back into `/onboarding/requirements` or `/onboarding/preferences` while keeping the shared `AppTabs` navigation visible.
 - **`HealthPage`** — Minimal read-only check (useful when verifying proxy + API reachability during dev).
 
 ## Build & dev
