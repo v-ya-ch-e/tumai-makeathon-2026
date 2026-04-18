@@ -107,7 +107,7 @@ export default function OnboardingRequirements() {
     }
 
     if (state.mainLocations.length === 0) {
-      nextErrors.locations = 'Add at least one city, campus, or district to anchor the case.'
+      nextErrors.locations = 'Add at least one city, campus, or district to anchor the search.'
     }
 
     const invalidLocation = state.mainLocations.find(
@@ -170,7 +170,7 @@ export default function OnboardingRequirements() {
       <OnboardingShell
         step={2}
         eyebrow="Requirements"
-        title="Set your search brief"
+        title="Set your requirements"
         onNext={() => undefined}
         busy
         progressSteps={progressSteps}
@@ -184,8 +184,8 @@ export default function OnboardingRequirements() {
     <OnboardingShell
       step={2}
       eyebrow="Requirements"
-      title="Set your search brief"
-      description="Start with the facts that narrow the case: budget, key destinations, and how often fresh leads should arrive."
+      title="Set your requirements"
+      description="Start with the essentials: budget, key destinations, and how often you want fresh results."
       onBack={() => navigate('/onboarding/profile')}
       onNext={() => void handleNext()}
       busy={busy}

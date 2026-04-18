@@ -136,10 +136,10 @@ export default function OnboardingProfile() {
     <OnboardingShell
       step={1}
       eyebrow={createMode ? 'Profile' : 'Resume'}
-      title={createMode ? 'Open your case file' : 'Welcome back'}
+      title={createMode ? 'Create your profile' : 'Welcome back'}
       description={
         createMode
-          ? 'Start with the essentials Sherlock Homes uses to examine each lead for you.'
+          ? 'Start with the core details Sherlock Homes uses to personalize your search.'
           : 'Use the same username you created earlier to reopen your saved search.'
       }
       onNext={() => void (createMode ? handleCreate() : handleSignIn())}
@@ -156,7 +156,7 @@ export default function OnboardingProfile() {
         createMode ? (
           <div className="space-y-4">
             <Card className="panel-muted p-6">
-              <p className="section-kicker">Case file</p>
+              <p className="section-kicker">Saved profile</p>
               <p className="mt-4 text-[24px] font-semibold text-ink">{usernamePreview}</p>
               <dl className="mt-5 space-y-3">
                 <PreviewRow label="Age" value={ageInput || 'Not set'} />
@@ -167,11 +167,11 @@ export default function OnboardingProfile() {
               </dl>
             </Card>
             <Card className="panel p-6">
-              <p className="text-[15px] font-semibold text-ink">What Sherlock Homes checks next</p>
+              <p className="text-[15px] font-semibold text-ink">What happens next</p>
               <ul className="mt-3 space-y-2 text-[14px] leading-6 text-ink-muted">
-                <li>Set the budget and destinations that anchor a good match.</li>
-                <li>Add the signals that should move one listing above another.</li>
-                <li>Review the strongest leads in one calm shortlist.</li>
+                <li>Set your budget and the locations that matter most.</li>
+                <li>Choose the preferences that should affect ranking.</li>
+                <li>Review your best matches in one clear shortlist.</li>
               </ul>
             </Card>
           </div>

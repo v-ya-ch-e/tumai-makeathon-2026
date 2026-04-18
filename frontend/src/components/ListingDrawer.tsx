@@ -49,11 +49,11 @@ function ComponentBar({ component }: { component: Component }) {
   return (
     <li
       className={clsx(
-        'grid grid-cols-[96px_1fr_48px] items-center gap-3 text-[13px]',
+        'grid grid-cols-[88px_minmax(0,1fr)_56px] items-start gap-3 text-[13px]',
         component.missingData && 'opacity-60',
       )}
     >
-      <span className="truncate text-ink-muted">{componentLabel(component.key)}</span>
+      <span className="leading-5 text-ink-muted">{componentLabel(component.key)}</span>
       <div className="space-y-1">
         <div className="h-1.5 w-full rounded-full bg-hairline/60">
           <div
@@ -61,7 +61,7 @@ function ComponentBar({ component }: { component: Component }) {
             style={{ width: `${widthPct}%` }}
           />
         </div>
-        {primaryEvidence ? <p className="line-clamp-1 text-[12px] text-ink-muted">{primaryEvidence}</p> : null}
+        {primaryEvidence ? <p className="break-words text-[12px] leading-5 text-ink-muted">{primaryEvidence}</p> : null}
       </div>
       <span className="text-right tabular-nums text-ink">
         {component.missingData ? '—' : `${Math.round(component.score * 100)}%`}
@@ -229,8 +229,8 @@ export function ListingDrawer({ open, listing, onClose }: ListingDrawerProps) {
             <Section title="Commute">
               <ul className="space-y-2 text-[13px] text-ink">
                 {Object.entries(detail.travelMinutesPerLocation).map(([label, commute]) => (
-                  <li key={label} className="flex items-start justify-between gap-4">
-                    <span className="text-ink-muted">{label}</span>
+                  <li key={label} className="grid grid-cols-[minmax(0,1fr)_auto] items-start gap-4">
+                    <span className="break-words text-ink-muted">{label}</span>
                     <span className="text-right">
                       {commute.minutes} min
                       <span className="block text-[12px] text-ink-muted">via {modeLabel(commute.mode)}</span>

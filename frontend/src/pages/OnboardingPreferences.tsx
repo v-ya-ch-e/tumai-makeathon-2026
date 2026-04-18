@@ -255,7 +255,7 @@ export default function OnboardingPreferences() {
       <OnboardingShell
         step={3}
         eyebrow="Preferences"
-        title="Choose your signals"
+        title="Set your preferences"
         onNext={() => undefined}
         busy
         progressSteps={progressSteps}
@@ -269,20 +269,20 @@ export default function OnboardingPreferences() {
     <OnboardingShell
       step={3}
       eyebrow="Preferences"
-      title="Choose your signals"
+      title="Set your preferences"
       hideIntro
       onBack={() => navigate('/onboarding/requirements')}
       onNext={() => void handleNext()}
       busy={busy}
-      nextLabel="Save and review leads"
+      nextLabel="Save and view matches"
       footer={footer}
       progressSteps={progressSteps}
       aside={
         <Card className="panel p-6">
-          <p className="section-kicker">Signals selected</p>
+          <p className="section-kicker">Selected now</p>
           <p className="mt-4 text-[28px] font-semibold text-ink">{selectedPreferences.length}</p>
           <p className="mt-1 text-[14px] leading-6 text-ink-muted">
-            signals shaping your shortlist.
+            preferences shaping your results.
           </p>
           {selectedPreferences.length > 0 ? (
             <div className="mt-5 space-y-5">
@@ -315,10 +315,10 @@ export default function OnboardingPreferences() {
     >
       <div>
         <div className="mb-6 max-w-3xl">
-          <p className="section-kicker text-accent">Signals</p>
-          <h1 className="page-title mt-3">Choose your signals</h1>
+          <p className="section-kicker text-accent">Preferences</p>
+          <h1 className="page-title mt-3">Set your preferences</h1>
           <p className="body-copy mt-4">
-            Only choose signals that should change the order of otherwise similar places. Use the weight slider to show what matters a little and what matters a lot.
+            Only choose preferences that should change the order of otherwise similar places. Use the weight slider to decide what matters a little and what matters a lot.
           </p>
         </div>
 
@@ -449,7 +449,7 @@ function PreferenceCard({
               <Icon className="h-5 w-5" />
             </span>
             <div className="min-w-0 text-[13px] leading-5 text-ink-muted">
-              {selected ? 'Signal is active' : shortPreferenceCopy(item.key)}
+              {selected ? 'Affects ranking' : shortPreferenceCopy(item.key)}
             </div>
           </div>
         </div>

@@ -45,10 +45,9 @@ export function OnboardingShell({
       <div className="app-shell">
         <div className="mb-8 flex flex-col gap-5 border-b border-hairline pb-5 sm:flex-row sm:items-end sm:justify-between">
           <div>
-            <span className="brand-chip">Investigate less. Belong sooner.</span>
-            <p className="brand-wordmark mt-3">Sherlock Homes</p>
+            <p className="brand-wordmark">Sherlock Homes</p>
             <p className="mt-1 max-w-xl text-[14px] text-ink-muted">
-              A sharp-eyed rental companion for sorting clues, trade-offs, and strong leads.
+              A focused rental search experience built to help you compare options with confidence.
             </p>
           </div>
           {showProgress ? <ProgressSteps current={step} steps={progressSteps} /> : null}
@@ -85,7 +84,7 @@ export function OnboardingShell({
                       Back
                     </Button>
                   ) : (
-                    <p className="text-[13px] text-ink-muted">You can revisit these details when the case evolves.</p>
+                    <p className="text-[13px] text-ink-muted">You can revisit these details later.</p>
                   )}
                 </div>
                 <div className="flex items-center justify-end gap-3">
