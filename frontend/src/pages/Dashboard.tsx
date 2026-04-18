@@ -1,6 +1,8 @@
-import { useCallback, useEffect, useState } from 'react'
+import { useCallback, useEffect, useRef, useState } from 'react'
 import { useNavigate } from 'react-router-dom'
+import { ActionLog } from '../components/ActionLog'
 import { ConnectWGDialog } from '../components/ConnectWGDialog'
+import { ListingList } from '../components/ListingList'
 import { Button, StatusPill, type StatusPillTone } from '../components/ui'
 import {
   ApiError,
@@ -9,9 +11,10 @@ import {
   getHunt,
   getSearchProfile,
   stopHunt,
+  streamHunt,
 } from '../lib/api'
 import { useSession } from '../lib/session'
-import type { CredentialsStatus, Hunt, SearchProfile } from '../types'
+import type { Action, CredentialsStatus, Hunt, Listing, SearchProfile } from '../types'
 
 const LS_HUNT_ID = 'wg-hunter.hunt-id'
 
@@ -45,10 +48,13 @@ export default function Dashboard() {
 
   const [profile, setProfile] = useState<SearchProfile | null>(null)
   const [hunt, setHunt] = useState<Hunt | null>(null)
+  const [actions, setActions] = useState<Action[]>([])
+  const [listings, setListings] = useState<Listing[]>([])
   const [uiStatus, setUiStatus] = useState<UiStatus>('idle')
   const [credStatus, setCredStatus] = useState<CredentialsStatus | null>(null)
   const [dialogOpen, setDialogOpen] = useState(false)
   const [errorMessage, setErrorMessage] = useState<string | null>(null)
+  const seenActionKeysRef = useRef<Set<string>>(new Set())
 
   const refreshCredStatus = useCallback(
     async (name: string) => {
@@ -60,6 +66,24 @@ export default function Dashboard() {
     },
     [],
   )
+
+  const actionKey = (a: Action): string => `${a.at}|${a.kind}|${a.summary}`
+
+  const applyHunt = useCallback((h: Hunt | null) => {
+    if (h === null) {
+      setHunt(null)
+      setActions([])
+      setListings([])
+      setUiStatus('idle')
+      seenActionKeysRef.current = new Set()
+      return
+    }
+    setHunt(h)
+    setListings(h.listings)
+    setActions(h.actions)
+    seenActionKeysRef.current = new Set(h.actions.map(actionKey))
+    setUiStatus(huntToUiStatus(h))
+  }, [])
 
   const refreshHunt = useCallback(async (id: string | null): Promise<Hunt | null> => {
     if (!id) return null
@@ -90,14 +114,61 @@ export default function Dashboard() {
       const storedId = localStorage.getItem(LS_HUNT_ID)
       const h = await refreshHunt(storedId)
       if (!cancelled) {
-        setHunt(h)
-        setUiStatus(huntToUiStatus(h))
+        applyHunt(h)
       }
     })()
     return () => {
       cancelled = true
     }
-  }, [isReady, username, navigate, refreshCredStatus, refreshHunt])
+  }, [isReady, username, navigate, refreshCredStatus, refreshHunt, applyHunt])
+
+  useEffect(() => {
+    const huntId = hunt?.id
+    if (!huntId) return
+    if (hunt?.status === 'done' || hunt?.status === 'failed') return
+
+    let closed = false
+    let closeFn: (() => void) | null = null
+
+    closeFn = streamHunt(
+      huntId,
+      (ev) => {
+        if ('kind' in ev && ev.kind === 'stream-end') {
+          if (!closed) {
+            closed = true
+            closeFn?.()
+          }
+          void (async () => {
+            const fresh = await refreshHunt(huntId)
+            if (fresh) applyHunt(fresh)
+          })()
+          return
+        }
+        const a = ev as Action
+        const key = actionKey(a)
+        if (seenActionKeysRef.current.has(key)) return
+        seenActionKeysRef.current.add(key)
+        setActions((prev) => [...prev, a])
+        if (a.kind === 'evaluate' || a.kind === 'new_listing') {
+          void (async () => {
+            const fresh = await refreshHunt(huntId)
+            if (!fresh) return
+            setListings(fresh.listings)
+            setHunt(fresh)
+            setUiStatus(huntToUiStatus(fresh))
+          })()
+        }
+      },
+    )
+
+    return () => {
+      closed = true
+      closeFn?.()
+    }
+    // Intentionally only depends on hunt?.id so the EventSource stays alive
+    // across hunt.status transitions (pending -> running -> done).
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [hunt?.id])
 
   const onStart = async () => {
     if (!username || !profile) return
@@ -106,8 +177,7 @@ export default function Dashboard() {
     try {
       const h = await createHunt(username, { schedule: profile.schedule })
       localStorage.setItem(LS_HUNT_ID, h.id)
-      setHunt(h)
-      setUiStatus(huntToUiStatus(h))
+      applyHunt(h)
     } catch (err) {
       setErrorMessage(err instanceof ApiError ? err.message : String(err))
       setUiStatus('error')
@@ -120,8 +190,7 @@ export default function Dashboard() {
     setUiStatus('stopping')
     try {
       const h = await stopHunt(hunt.id)
-      setHunt(h)
-      setUiStatus(huntToUiStatus(h))
+      applyHunt(h)
     } catch (err) {
       setErrorMessage(err instanceof ApiError ? err.message : String(err))
       setUiStatus('error')
@@ -179,11 +248,33 @@ export default function Dashboard() {
       </header>
 
       <main className="mx-auto max-w-6xl px-12 py-12">
-        <p className="text-[15px] text-ink-muted">
-          {hunt === null
-            ? 'Press Start agent to begin scanning wg-gesucht for listings that match your search profile.'
-            : `Hunt ${hunt.id} · started ${new Date(hunt.startedAt).toLocaleString()}.`}
-        </p>
+        {hunt === null ? (
+          <p className="text-[15px] text-ink-muted">
+            Press Start agent to begin scanning wg-gesucht for listings that match your search profile.
+          </p>
+        ) : (
+          <div className="grid gap-8 lg:grid-cols-[minmax(0,1fr)_minmax(0,1.4fr)]">
+            <section className="space-y-4">
+              <header className="flex items-baseline justify-between border-b border-hairline pb-2">
+                <h2 className="text-[15px] font-semibold text-ink">Agent log</h2>
+                <p className="font-mono text-[12px] text-ink-muted">Hunt {hunt.id}</p>
+              </header>
+              <ActionLog actions={actions} />
+            </section>
+            <section className="space-y-4">
+              <header className="flex items-baseline justify-between border-b border-hairline pb-2">
+                <h2 className="text-[15px] font-semibold text-ink">Listings</h2>
+                <p className="font-mono text-[12px] text-ink-muted">{listings.length} total</p>
+              </header>
+              <ListingList
+                listings={listings}
+                onOpen={() => {
+                  /* listing drawer wires up in the next todo */
+                }}
+              />
+            </section>
+          </div>
+        )}
       </main>
 
       {username ? (
