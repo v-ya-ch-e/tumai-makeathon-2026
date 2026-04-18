@@ -21,7 +21,7 @@ services:
       - "443:443"
     volumes:
       - ./fullchain.crt:/etc/nginx/certs/fullchain.crt:ro
-      - ./privkey.key:/etc/nginx/certs/privkey.key:ro
+      - ./doubleu_team.key:/etc/nginx/certs/privkey.key:ro
     depends_on:
       - backend
     restart: unless-stopped

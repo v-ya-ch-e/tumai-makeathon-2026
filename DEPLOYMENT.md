@@ -123,16 +123,16 @@ The nginx container terminates TLS for `doubleu.team` (and `www.doubleu.team`) a
 | File | What it is |
 |------|------------|
 | `fullchain.crt` | Leaf certificate + intermediates concatenated (leaf first, then the Sectigo CA bundle). |
-| `privkey.key` | Private key that pairs with the certificate. |
+| `doubleu_team.key` | Private key that pairs with the certificate. |
 
 Upload both files to the repo root on the EC2 host (e.g. `~/tumai-makeathon-2026/`) with permissions readable by the `docker` user. They are mounted read-only at `/etc/nginx/certs/` inside the frontend container by [`docker-compose.yml`](./docker-compose.yml) and are git-ignored (`*.crt`, `*.key`).
 
 ```bash
 # from your local machine, assuming you already have the cert + key locally
-scp -i /path/to/your-key-pair.pem fullchain.crt privkey.key <USERNAME>@<EC2_PUBLIC_IP>:~/tumai-makeathon-2026/
+scp -i /path/to/your-key-pair.pem fullchain.crt doubleu_team.key <USERNAME>@<EC2_PUBLIC_IP>:~/tumai-makeathon-2026/
 ```
 
-If your private key file is named differently, either rename it to `privkey.key` or update the volume mount in `docker-compose.yml` to match.
+If your private key file is named differently, either rename it to `doubleu_team.key` or update the volume mount in `docker-compose.yml` to match.
 
 ## Step 6: Run the Application
 
@@ -207,7 +207,7 @@ Once configured, the workflow will SSH into your server and run the update comma
 - Check logs: `docker compose logs` (or `docker compose logs backend` / `docker compose logs frontend`)
 
 **TLS / HTTPS errors?**
-- Make sure `fullchain.crt` and `privkey.key` exist in the repo root on the EC2 host and are readable by Docker
+- Make sure `fullchain.crt` and `doubleu_team.key` exist in the repo root on the EC2 host and are readable by Docker
 - `fullchain.crt` must be leaf-first (the leaf certificate, then the Sectigo intermediate chain); if the browser reports an incomplete chain, concatenate the bundle: `cat doubleu_team.crt doubleu_team.ca-bundle > fullchain.crt`
 - Inspect the served chain from your laptop: `openssl s_client -connect doubleu.team:443 -servername doubleu.team -showcerts </dev/null`
 - Check that DNS for `doubleu.team` points at the EC2 public IP (`dig +short doubleu.team`)
