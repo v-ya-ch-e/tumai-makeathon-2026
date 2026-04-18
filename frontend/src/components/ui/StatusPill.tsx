@@ -26,7 +26,7 @@ export function StatusPill({ tone, children, className }: StatusPillProps) {
   return (
     <span
       className={clsx(
-        'inline-flex h-7 items-center gap-2 rounded-full border border-hairline bg-surface px-3 text-[13px] text-ink',
+        'inline-flex min-h-8 items-center gap-2 rounded-full border border-hairline bg-surface-raised px-3 py-1 text-[12px] uppercase tracking-[0.14em] text-ink',
         className,
       )}
     >

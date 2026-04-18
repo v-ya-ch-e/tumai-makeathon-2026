@@ -74,6 +74,15 @@ function ComponentBar({ c }: { c: Component }) {
   )
 }
 
+function Stat({ label, value }: { label: string; value: string }) {
+  return (
+    <>
+      <dt className="text-[12px] uppercase tracking-[0.14em] text-ink-muted">{label}</dt>
+      <dd className="text-[14px] font-medium text-ink">{value}</dd>
+    </>
+  )
+}
+
 export function ListingDrawer({ open, listing, onClose }: ListingDrawerProps) {
   const [detail, setDetail] = useState<ListingDetail | null>(null)
   const [loading, setLoading] = useState(false)
@@ -121,37 +130,36 @@ export function ListingDrawer({ open, listing, onClose }: ListingDrawerProps) {
       {active ? (
         <div className="space-y-8">
           {detail && detail.photos.length > 0 ? (
-            <img
-              src={detail.photos[0]}
-              alt={active.title ?? active.id}
-              className="w-full rounded-card border border-hairline object-cover"
-              style={{ maxHeight: 360 }}
-            />
+            <div className="overflow-hidden rounded-[24px] border border-hairline/80 bg-surface shadow-[0_18px_42px_rgba(39,33,29,0.08)]">
+              <img
+                src={detail.photos[0]}
+                alt={active.title ?? active.id}
+                className="w-full object-cover"
+                style={{ maxHeight: 360 }}
+              />
+            </div>
           ) : null}
 
-          <dl className="grid grid-cols-2 gap-y-3 text-[14px]">
-            <dt className="text-ink-muted">Price</dt>
-            <dd className="text-ink">{active.priceEur !== null ? `${active.priceEur} €` : '—'}</dd>
-            <dt className="text-ink-muted">Size</dt>
-            <dd className="text-ink">{active.sizeM2 !== null ? `${active.sizeM2} m²` : '—'}</dd>
-            <dt className="text-ink-muted">WG size</dt>
-            <dd className="text-ink">{active.wgSize !== null ? `${active.wgSize} people` : '—'}</dd>
-            <dt className="text-ink-muted">District</dt>
-            <dd className="text-ink">{active.district ?? '—'}</dd>
-            <dt className="text-ink-muted">Available</dt>
-            <dd className="text-ink">
-              {active.availableFrom ?? '—'}
-              {active.availableTo ? ` → ${active.availableTo}` : ''}
-            </dd>
-          </dl>
+          <section className="rounded-[24px] border border-hairline/80 bg-surface p-5 shadow-[0_14px_32px_rgba(39,33,29,0.05)]">
+            <dl className="grid grid-cols-2 gap-x-4 gap-y-4 text-[14px]">
+              <Stat label="Price" value={active.priceEur !== null ? `${active.priceEur} €` : '—'} />
+              <Stat label="Size" value={active.sizeM2 !== null ? `${active.sizeM2} m²` : '—'} />
+              <Stat label="WG size" value={active.wgSize !== null ? `${active.wgSize} people` : '—'} />
+              <Stat label="District" value={active.district ?? '—'} />
+              <Stat
+                label="Available"
+                value={`${active.availableFrom ?? '—'}${active.availableTo ? ` → ${active.availableTo}` : ''}`}
+              />
+            </dl>
+          </section>
 
           {active.vetoReason ? (
-            <section className="space-y-1 rounded-card border border-bad/40 bg-bad/5 p-3">
+            <section className="space-y-2 rounded-[22px] border border-bad/40 bg-bad/5 p-4">
               <h3 className="text-[14px] font-semibold text-bad">Rejected</h3>
               <p className="text-[13px] text-ink">{active.vetoReason}</p>
             </section>
           ) : active.components.length > 0 ? (
-            <section className="space-y-3">
+            <section className="space-y-3 rounded-[24px] border border-hairline/80 bg-surface p-5 shadow-[0_14px_32px_rgba(39,33,29,0.05)]">
               <h3 className="text-[15px] font-semibold text-ink">Score breakdown</h3>
               {active.scoreReason ? (
                 <p className="text-[13px] text-ink-muted">{active.scoreReason}</p>
@@ -163,7 +171,7 @@ export function ListingDrawer({ open, listing, onClose }: ListingDrawerProps) {
               </ul>
             </section>
           ) : active.scoreReason ? (
-            <section className="space-y-2">
+            <section className="space-y-2 rounded-[24px] border border-hairline/80 bg-surface p-5 shadow-[0_14px_32px_rgba(39,33,29,0.05)]">
               <h3 className="text-[15px] font-semibold text-ink">Why the agent flagged it</h3>
               <p className="text-[14px] text-ink">{active.scoreReason}</p>
               {active.matchReasons.length > 0 ? (
@@ -185,7 +193,7 @@ export function ListingDrawer({ open, listing, onClose }: ListingDrawerProps) {
 
           {detail?.travelMinutesPerLocation &&
           Object.keys(detail.travelMinutesPerLocation).length > 0 ? (
-            <section className="space-y-2">
+            <section className="space-y-2 rounded-[24px] border border-hairline/80 bg-surface p-5 shadow-[0_14px_32px_rgba(39,33,29,0.05)]">
               <h3 className="text-[15px] font-semibold text-ink">Commute</h3>
               <ul className="text-[13px] text-ink">
                 {Object.entries(detail.travelMinutesPerLocation).map(([label, minutes]) => (
@@ -199,7 +207,7 @@ export function ListingDrawer({ open, listing, onClose }: ListingDrawerProps) {
           ) : null}
 
           {active.description ? (
-            <section className="space-y-2">
+            <section className="space-y-2 rounded-[24px] border border-hairline/80 bg-surface p-5 shadow-[0_14px_32px_rgba(39,33,29,0.05)]">
               <h3 className="text-[15px] font-semibold text-ink">Description</h3>
               <p className="whitespace-pre-wrap text-[14px] leading-relaxed text-ink">
                 {active.description}
@@ -208,7 +216,7 @@ export function ListingDrawer({ open, listing, onClose }: ListingDrawerProps) {
           ) : null}
 
           {detail && detail.photos.length > 1 ? (
-            <section className="space-y-2">
+            <section className="space-y-3 rounded-[24px] border border-hairline/80 bg-surface p-5 shadow-[0_14px_32px_rgba(39,33,29,0.05)]">
               <h3 className="text-[15px] font-semibold text-ink">More photos</h3>
               <div className="grid grid-cols-2 gap-2">
                 {detail.photos.slice(1).map((url, i) => (
@@ -216,7 +224,7 @@ export function ListingDrawer({ open, listing, onClose }: ListingDrawerProps) {
                     key={i}
                     src={url}
                     alt=""
-                    className="h-32 w-full rounded border border-hairline object-cover"
+                    className="h-32 w-full rounded-[16px] border border-hairline object-cover"
                   />
                 ))}
               </div>

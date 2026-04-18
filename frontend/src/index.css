@@ -4,31 +4,37 @@
 
 :root {
   /* Surfaces */
-  --canvas: #F5F0E6;
-  --surface: #FAF6EE;
-  --surface-raised: #FFFCF6;
-  --hairline: #E6DECF;
+  --canvas: #f2ebde;
+  --surface: #f8f1e5;
+  --surface-raised: #fffaf2;
+  --hairline: #dfd2bf;
 
   /* Text */
-  --ink: #2B2623;
-  --ink-muted: #7A6E60;
+  --ink: #27211d;
+  --ink-muted: #766858;
 
   /* Accent */
-  --accent: #8A5A3B;
-  --accent-muted: #C8A586;
+  --accent: #8c5534;
+  --accent-muted: #d8baa0;
 
   /* Signal */
-  --good: #6B8E5A;
-  --warn: #C08A3E;
-  --bad: #A85C4A;
+  --good: #708b57;
+  --warn: #ba8442;
+  --bad: #a45a45;
 }
 
 html {
   min-height: 100%;
-  background:
-    radial-gradient(circle at top left, rgba(138, 90, 59, 0.12), transparent 30%),
-    radial-gradient(circle at bottom right, rgba(107, 142, 90, 0.08), transparent 24%),
-    var(--canvas);
+  background-color: var(--canvas);
+  background-image:
+    linear-gradient(rgba(255, 250, 242, 0.78), rgba(255, 250, 242, 0.78)),
+    repeating-linear-gradient(
+      90deg,
+      rgba(140, 85, 52, 0.03) 0,
+      rgba(140, 85, 52, 0.03) 1px,
+      transparent 1px,
+      transparent 32px
+    );
 }
 
 body {
@@ -38,12 +44,18 @@ body {
   font-family: Geist, ui-sans-serif, system-ui, sans-serif;
   font-size: 15px;
   line-height: 1.5;
+  text-rendering: optimizeLegibility;
 }
 
 * {
+  box-sizing: border-box;
   scrollbar-color: rgba(122, 110, 96, 0.45) transparent;
 }
 
 ::selection {
   background: rgba(138, 90, 59, 0.18);
+}
+
+#root {
+  isolation: isolate;
 }

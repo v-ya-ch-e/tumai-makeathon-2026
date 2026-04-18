@@ -57,5 +57,5 @@ export function ProgressSteps({
       </span>,
     )
   }
-  return <p className={clsx('font-sans', className)}>{parts}</p>
+  return <p className={clsx('font-sans text-[13px] tracking-[0.08em]', className)}>{parts}</p>
 }
