@@ -28,7 +28,7 @@ export function ActionLog({ actions, emptyLabel }: ActionLogProps) {
   if (actions.length === 0) {
     return (
       <p className="text-[13px] text-ink-muted">
-        {emptyLabel ?? 'Agent actions will stream here as the hunt runs.'}
+        {emptyLabel ?? 'Updates will appear here once your search starts.'}
       </p>
     )
   }

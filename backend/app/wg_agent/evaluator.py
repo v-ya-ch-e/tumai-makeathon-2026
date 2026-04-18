@@ -36,6 +36,10 @@ from .models import ComponentScore, Listing, NearbyPlace, SearchProfile
 logger = logging.getLogger(__name__)
 
 
+def _pct(value: float) -> str:
+    return f"{round(value * 100)}%"
+
+
 # -----------------------------------------------------------------------------
 # Configuration (weights + keyword table)
 # -----------------------------------------------------------------------------
@@ -693,7 +697,7 @@ def _summary_from_components(
     """One-sentence paraphrase of the breakdown for `score_reason`."""
     live = [c for c in components if not c.missing_data]
     if not live:
-        return f"Scored {final:.2f} (no data)"
+        return f"Scored {_pct(final)} (no data)"
     top_positive = max(live, key=lambda c: c.score)
     top_negative = min(live, key=lambda c: c.score)
     bits: list[str] = []
@@ -704,7 +708,7 @@ def _summary_from_components(
     if capped:
         bits.append("capped by must-have rule")
     detail = "; ".join(bits) if bits else "mixed fit across components"
-    return f"Score {final:.2f}: {detail}"
+    return f"Score {_pct(final)}: {detail}"
 
 
 def breakdown_detail(components: list[ComponentScore]) -> Optional[str]:
@@ -712,7 +716,7 @@ def breakdown_detail(components: list[ComponentScore]) -> Optional[str]:
     live = [c for c in components if not c.missing_data]
     if not live:
         return None
-    return " · ".join(f"{c.key} {c.score:.2f}" for c in live)
+    return " · ".join(f"{c.key} {_pct(c.score)}" for c in live)
 
 
 # -----------------------------------------------------------------------------

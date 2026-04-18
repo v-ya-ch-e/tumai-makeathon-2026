@@ -237,7 +237,7 @@ class UserAgent:
                     ev_detail_parts.append(nearby_detail)
                 ev = AgentAction(
                     kind=ActionKind.evaluate,
-                    summary=f"Scored {listing.id}: {listing.score:.2f}",
+                    summary=f"Scored {listing.id}: {round((listing.score or 0.0) * 100)}%",
                     detail=" | ".join(ev_detail_parts) or None,
                     listing_id=listing.id,
                 )

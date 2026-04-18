@@ -77,6 +77,11 @@ export type NearbyPlace = {
   category: string | null
 }
 
+export type CommuteInfo = {
+  minutes: number
+  mode: string
+}
+
 export type Listing = {
   id: string
   username: string | null
@@ -94,6 +99,8 @@ export type Listing = {
   description: string | null
   coverPhotoUrl: string | null
   bestCommuteMinutes: number | null
+  bestCommuteLabel: string | null
+  bestCommuteMode: string | null
   score: number | null
   scoreReason: string | null
   matchReasons: string[]
@@ -106,7 +113,7 @@ export type ListingDetail = {
   listing: Listing
   photos: string[]
   score: number | null
-  travelMinutesPerLocation: Record<string, number> | null
+  travelMinutesPerLocation: Record<string, CommuteInfo> | null
   nearbyPreferencePlaces: NearbyPlace[]
 }
 

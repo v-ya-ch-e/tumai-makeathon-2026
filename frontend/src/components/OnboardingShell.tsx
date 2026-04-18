@@ -79,7 +79,7 @@ export function OnboardingShell({
                       Back
                     </Button>
                   ) : (
-                    <p className="text-[13px] text-ink-muted">We only store what the hunt needs.</p>
+                    <p className="text-[13px] text-ink-muted">You can update these details later.</p>
                   )}
                 </div>
                 <div className="flex items-center justify-end gap-3">

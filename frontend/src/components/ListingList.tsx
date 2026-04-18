@@ -1,4 +1,5 @@
 import clsx from 'clsx'
+import { useState } from 'react'
 import type { Listing } from '../types'
 import { StatusPill, type StatusPillTone } from './ui'
 
@@ -17,7 +18,7 @@ function scoreTone(score: number | null): StatusPillTone {
 
 function scoreLabel(score: number | null): string {
   if (score === null) return 'Pending'
-  return score.toFixed(2)
+  return `${Math.round(score * 100)}%`
 }
 
 function priceLabel(listing: Listing): string {
@@ -31,7 +32,10 @@ function sizeLabel(listing: Listing): string {
 }
 
 function distanceLabel(listing: Listing): string {
-  if (listing.bestCommuteMinutes !== null) return `${listing.bestCommuteMinutes} min commute`
+  if (listing.bestCommuteMinutes !== null) {
+    const target = listing.bestCommuteLabel ? `to ${listing.bestCommuteLabel}` : 'to your best anchor'
+    return `${listing.bestCommuteMinutes} min ${target}`
+  }
   return 'Route pending'
 }
 
@@ -60,10 +64,12 @@ function listingNote(listing: Listing): string | null {
 }
 
 export function ListingList({ listings, onOpen, emptyLabel }: ListingListProps) {
+  const [expandedNotes, setExpandedNotes] = useState<Set<string>>(new Set())
+
   if (listings.length === 0) {
     return (
       <p className="text-[13px] text-ink-muted">
-        {emptyLabel ?? 'Matching listings will appear here once the agent has finished its first scoring pass.'}
+        {emptyLabel ?? 'Matches will appear here as soon as the first results are ready.'}
       </p>
     )
   }
@@ -84,6 +90,8 @@ export function ListingList({ listings, onOpen, emptyLabel }: ListingListProps) 
       {sorted.map((listing) => {
         const state = listingState(listing, strongMatchIds)
         const note = listingNote(listing)
+        const noteExpanded = expandedNotes.has(listing.id)
+        const canExpand = note !== null && note.length > 140
         return (
           <li key={listing.id}>
             <button
@@ -130,9 +138,39 @@ export function ListingList({ listings, onOpen, emptyLabel }: ListingListProps) 
                 </dl>
 
                 {note ? (
-                  <p className={clsx('mt-4 text-[14px] leading-6', listing.vetoReason ? 'text-bad' : 'text-ink-muted')}>
-                    {note}
-                  </p>
+                  <div className="mt-4">
+                    <div className="relative">
+                      <p
+                        className={clsx(
+                          'text-[14px] leading-6',
+                          !noteExpanded && 'max-h-[4.5rem] overflow-hidden',
+                          listing.vetoReason ? 'text-bad' : 'text-ink-muted',
+                        )}
+                      >
+                        {note}
+                      </p>
+                      {!noteExpanded && canExpand ? (
+                        <div className="pointer-events-none absolute inset-x-0 bottom-0 h-8 bg-gradient-to-t from-surface-raised to-transparent" />
+                      ) : null}
+                    </div>
+                    {canExpand ? (
+                      <button
+                        type="button"
+                        onClick={(event) => {
+                          event.stopPropagation()
+                          setExpandedNotes((prev) => {
+                            const next = new Set(prev)
+                            if (next.has(listing.id)) next.delete(listing.id)
+                            else next.add(listing.id)
+                            return next
+                          })
+                        }}
+                        className="mt-2 text-[12px] font-medium text-ink-muted transition-colors hover:text-ink"
+                      >
+                        {noteExpanded ? 'Show less' : 'Read full analysis'}
+                      </button>
+                    ) : null}
+                  </div>
                 ) : null}
 
                 <div className="mt-4 flex items-center justify-between border-t border-hairline pt-3 text-[13px] text-ink-muted">

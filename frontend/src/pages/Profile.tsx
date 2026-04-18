@@ -18,14 +18,15 @@ export default function Profile() {
   const { username, user, isReady, refreshUser, setUsername } = useSession()
   const [ageInput, setAgeInput] = useState('')
   const [gender, setGender] = useState<Gender | ''>('')
-  const [emailInput, setEmailInput] = useState('')
+  const [notificationEmailInput, setNotificationEmailInput] = useState('')
   const [profile, setProfile] = useState<SearchProfile | null>(null)
   const [busy, setBusy] = useState(false)
   const [hydrated, setHydrated] = useState(false)
   const [footer, setFooter] = useState<ReactNode>(null)
-  const [errors, setErrors] = useState<{ age?: string; gender?: string; email?: string }>({})
+  const [errors, setErrors] = useState<{ age?: string; gender?: string; notificationEmail?: string }>({})
 
   const handleLogout = useCallback(() => {
+    localStorage.removeItem('wg-hunter.hunt-id')
     setUsername(null)
     navigate('/onboarding/profile', { replace: true })
   }, [navigate, setUsername])
@@ -54,14 +55,14 @@ export default function Profile() {
     if (!user) return
     setAgeInput(String(user.age))
     setGender(user.gender)
-    setEmailInput(user.email ?? '')
+    setNotificationEmailInput(user.notificationEmail ?? '')
   }, [user])
 
   const handleSave = async () => {
     if (!username || !user) return
     setFooter(null)
 
-    const nextErrors: { age?: string; gender?: string; email?: string } = {}
+    const nextErrors: { age?: string; gender?: string; notificationEmail?: string } = {}
     const age = Number(ageInput)
     if (!Number.isInteger(age) || age < 16 || age > 99) {
       nextErrors.age = 'Age must be a whole number between 16 and 99.'
@@ -69,9 +70,9 @@ export default function Profile() {
     if (!gender) {
       nextErrors.gender = 'Select the current profile value.'
     }
-    const email = emailInput.trim()
-    if (email && !/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email)) {
-      nextErrors.email = 'Enter a valid email address or leave it blank.'
+    const notificationEmail = notificationEmailInput.trim()
+    if (notificationEmail && !/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(notificationEmail)) {
+      nextErrors.notificationEmail = 'Enter a valid email address or leave it blank.'
     }
 
     setErrors(nextErrors)
@@ -82,10 +83,10 @@ export default function Profile() {
       await updateUser(username, {
         age,
         gender: gender as Gender,
-        email: email || null,
+        notificationEmail: notificationEmail || null,
       })
       await refreshUser()
-      setFooter(<p className="text-[15px] text-good">Profile updated.</p>)
+      setFooter(<p className="text-[15px] text-good">Changes saved.</p>)
     } catch (error) {
       if (error instanceof ApiError) {
         setFooter(<p className="text-[15px] text-bad">{error.message}</p>)
@@ -111,14 +112,13 @@ export default function Profile() {
         <div className="flex flex-wrap items-center justify-between gap-4 border-b border-hairline pb-4">
           <div>
             <p className="section-kicker text-accent">WG Hunter</p>
-            <p className="mt-1 text-[14px] text-ink-muted">Dashboard and profile</p>
+            <p className="mt-1 text-[14px] text-ink-muted">Results and profile</p>
           </div>
           <div className="flex flex-wrap items-center justify-end gap-3">
             <AppTabs
               current="/profile"
               tabs={[
                 { label: 'Dashboard', href: '/dashboard' },
-                { label: 'Timeline', href: '/timeline' },
                 { label: 'Profile', href: '/profile' },
               ]}
             />
@@ -131,22 +131,22 @@ export default function Profile() {
         <header className="page-frame overflow-hidden">
           <div className="px-6 py-8 lg:px-8">
             <p className="section-kicker text-accent">Profile</p>
-              <h1 className="page-title mt-4">Maintain the saved account</h1>
-              <p className="body-copy mt-4 max-w-3xl">
-                This page only covers the account fields stored with the local demo profile. Search constraints still live in the onboarding steps.
-              </p>
+            <h1 className="page-title mt-4">Your profile</h1>
+            <p className="body-copy mt-4 max-w-3xl">
+              Update the personal details tied to your saved search. Your search settings stay in the next steps.
+            </p>
           </div>
         </header>
 
         <section className="grid gap-8 lg:grid-cols-[minmax(0,1fr)_320px]">
           <div className="overflow-hidden rounded-card border border-hairline bg-surface">
-            <FieldRow label="Username" hint="Fixed because it keys the stored hunt data for this browser session.">
+            <FieldRow label="Username" hint="This stays the same so you can find your saved search again.">
               <div className="rounded border border-hairline bg-surface-raised px-3 py-3 text-[15px] text-ink">
                 {user.username}
               </div>
             </FieldRow>
 
-            <FieldRow label="Age" hint={errors.age ?? 'Used in the saved account profile.'} error={Boolean(errors.age)}>
+            <FieldRow label="Age" hint={errors.age ?? 'Helpful when listings mention a preferred age range.'} error={Boolean(errors.age)}>
               <Input
                 type="number"
                 min={16}
@@ -162,22 +162,22 @@ export default function Profile() {
 
             <FieldRow
               label="Notification email"
-              hint={errors.email ?? 'Optional. Used later once alerting exists.'}
-              error={Boolean(errors.email)}
+              hint={errors.notificationEmail ?? 'Optional. Helpful if updates are added later.'}
+              error={Boolean(errors.notificationEmail)}
             >
               <Input
                 type="email"
-                value={emailInput}
+                value={notificationEmailInput}
                 onChange={(event) => {
-                  setEmailInput(event.target.value)
-                  if (errors.email) setErrors((prev) => ({ ...prev, email: undefined }))
+                  setNotificationEmailInput(event.target.value)
+                  if (errors.notificationEmail) setErrors((prev) => ({ ...prev, notificationEmail: undefined }))
                 }}
-                aria-invalid={Boolean(errors.email)}
+                aria-invalid={Boolean(errors.notificationEmail)}
                 placeholder="you@example.com"
               />
             </FieldRow>
 
-            <FieldRow label="Gender" hint={errors.gender ?? 'Matches the current backend model.'} error={Boolean(errors.gender)}>
+            <FieldRow label="Gender" hint={errors.gender ?? 'Used when a listing mentions a preferred fit.'} error={Boolean(errors.gender)}>
               <Select
                 id="profile-gender"
                 value={gender}
@@ -201,7 +201,7 @@ export default function Profile() {
             <div className="flex flex-wrap items-center justify-between gap-3 border-t border-hairline px-5 py-5 md:px-6">
               <p className="text-[13px] text-ink-muted">Created {new Date(user.createdAt).toLocaleDateString()}</p>
               <Button variant="primary" onClick={() => void handleSave()} disabled={busy}>
-                {busy ? 'Saving…' : 'Save profile'}
+                {busy ? 'Saving…' : 'Save changes'}
               </Button>
             </div>
             {footer ? <div className="px-5 pb-5 md:px-6">{footer}</div> : null}
@@ -213,13 +213,13 @@ export default function Profile() {
               <div className="mt-5 space-y-4">
                 <JumpRow
                   title="Requirements"
-                  detail={profile ? 'Budget, commute anchors, and search cadence.' : 'Finish the profile first to unlock the search brief.'}
+                  detail={profile ? 'Budget, key destinations, and search mode.' : 'Finish your profile first to set up the search.'}
                   disabled={!profile}
                   onClick={() => navigate('/onboarding/requirements')}
                 />
                 <JumpRow
                   title="Preferences"
-                  detail={profile ? 'Weighted ranking signals.' : 'Requirements come first so preference weights stay grounded.'}
+                  detail={profile ? 'Details that help sort similar places.' : 'Set your requirements first so preferences stay useful.'}
                   disabled={!profile}
                   onClick={() => navigate('/onboarding/preferences')}
                 />

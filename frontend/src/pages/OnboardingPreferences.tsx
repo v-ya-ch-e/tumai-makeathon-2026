@@ -1,4 +1,5 @@
-import { useEffect, useMemo, useState, type ReactNode } from 'react'
+import clsx from 'clsx'
+import { useEffect, useMemo, useState, type KeyboardEvent, type ReactNode } from 'react'
 import { useNavigate } from 'react-router-dom'
 import { OnboardingShell } from '../components/OnboardingShell'
 import { Button, Card, WeightSlider } from '../components/ui'
@@ -41,7 +42,7 @@ const GROUPS: PreferenceGroup[] = [
   {
     id: 'place-features',
     title: 'Place features',
-    intro: 'These are physical details the agent can reward when they appear in the listing.',
+    intro: 'Use these when the space itself should noticeably affect which places rise to the top.',
     items: [
       { key: 'furnished', label: 'Furnished', detail: 'Important if you want to move in with minimal setup.' },
       { key: 'balcony', label: 'Balcony', detail: 'Useful if outdoor private space matters.' },
@@ -56,7 +57,7 @@ const GROUPS: PreferenceGroup[] = [
   {
     id: 'living-style',
     title: 'Living style',
-    intro: 'Use these when the household setup matters as much as the room itself.',
+    intro: 'Use these when the people and household feel matter as much as the room itself.',
     items: [
       { key: 'pet_friendly', label: 'Pet-friendly', detail: 'Relevant if pets need to be welcome.' },
       { key: 'non_smoking', label: 'Non-smoking', detail: 'Use this when smoking rules should strongly affect ranking.' },
@@ -144,6 +145,17 @@ export default function OnboardingPreferences() {
     [selected],
   )
 
+  const selectedByGroup = useMemo(
+    () =>
+      GROUPS.map((group) => ({
+        ...group,
+        items: group.items
+          .filter((item) => selected.has(item.key))
+          .map((item) => ({ ...item, weight: selected.get(item.key) ?? DEFAULT_WEIGHT })),
+      })).filter((group) => group.items.length > 0),
+    [selected],
+  )
+
   const toggle = (key: string) => {
     setSelected((prev) => {
       const next = new Map(prev)
@@ -216,7 +228,7 @@ export default function OnboardingPreferences() {
       <OnboardingShell
         step={3}
         eyebrow="Preferences"
-        title="Teach the ranking"
+        title="Set your preferences"
         onNext={() => undefined}
         busy
         progressSteps={progressSteps}
@@ -230,12 +242,12 @@ export default function OnboardingPreferences() {
     <OnboardingShell
       step={3}
       eyebrow="Preferences"
-      title="Teach the ranking"
-      description="Only add preferences that should change the order of otherwise similar listings. The weight slider decides whether each detail is a small bonus or almost a requirement."
+      title="Set your preferences"
+      description="Only choose preferences that should change the order of otherwise similar places. Use the weight slider to decide what matters a little and what matters a lot."
       onBack={() => navigate('/onboarding/requirements')}
       onNext={() => void handleNext()}
       busy={busy}
-      nextLabel="Save and start hunt"
+      nextLabel="Save and view matches"
       footer={footer}
       progressSteps={progressSteps}
       aside={
@@ -243,14 +255,26 @@ export default function OnboardingPreferences() {
           <p className="section-kicker">Selected now</p>
           <p className="mt-4 text-[28px] font-semibold text-ink">{selectedPreferences.length}</p>
           <p className="mt-1 text-[14px] leading-6 text-ink-muted">
-            preferences that will influence the first ranking pass.
+            preferences shaping your results.
           </p>
           {selectedPreferences.length > 0 ? (
-            <div className="mt-5 space-y-3">
-              {selectedPreferences.slice(0, 8).map((item) => (
-                <div key={item.key} className="flex items-start justify-between gap-4 border-t border-hairline pt-3 first:border-t-0 first:pt-0">
-                  <span className="text-[14px] text-ink">{item.label}</span>
-                  <span className="data-label">{weightLabel(item.weight)}</span>
+            <div className="mt-5 space-y-5">
+              {selectedByGroup.map((group) => (
+                <div key={group.id} className="border-t border-hairline pt-4 first:border-t-0 first:pt-0">
+                  <p className="data-label">{group.title}</p>
+                  <div className="mt-3 flex flex-wrap gap-2">
+                    {group.items.map((item) => (
+                      <span
+                        key={item.key}
+                        className="inline-flex items-center gap-2 rounded-full border border-hairline bg-surface-raised px-3 py-1.5 text-[13px] text-ink"
+                      >
+                        <span>{item.label}</span>
+                        <span className="text-[11px] uppercase tracking-[0.12em] text-ink-muted">
+                          {weightShortLabel(item.weight)}
+                        </span>
+                      </span>
+                    ))}
+                  </div>
                 </div>
               ))}
             </div>
@@ -297,12 +321,12 @@ export default function OnboardingPreferences() {
                 <h2 className="text-[15px] font-semibold text-ink">{group.title}</h2>
                 <p className="mt-1 text-[13px] leading-6 text-ink-muted">{group.intro}</p>
               </div>
-              <div className="divide-y divide-hairline">
+              <div className="grid gap-3 sm:grid-cols-2">
                 {group.items.map((item) => {
                   const weight = selected.get(item.key)
                   const isSelected = weight !== undefined
                   return (
-                    <PreferenceRow
+                    <PreferenceCard
                       key={item.key}
                       item={item}
                       selected={isSelected}
@@ -321,7 +345,7 @@ export default function OnboardingPreferences() {
   )
 }
 
-function PreferenceRow({
+function PreferenceCard({
   item,
   selected,
   weight,
@@ -335,41 +359,113 @@ function PreferenceRow({
   onWeightChange: (next: number) => void
 }) {
   const sliderId = `weight-${item.key}`
+  const badge = preferenceBadge(item.label)
+
+  const handleKeyDown = (event: KeyboardEvent<HTMLDivElement>) => {
+    if (event.key !== 'Enter' && event.key !== ' ') return
+    event.preventDefault()
+    onToggle()
+  }
 
   return (
-    <div className="grid gap-4 py-4 md:grid-cols-[minmax(0,1fr)_220px] md:items-start">
-      <div className="flex items-start gap-3">
-        <span className={`mt-2 h-2 w-2 rounded-full ${selected ? 'bg-accent' : 'bg-hairline'}`} aria-hidden />
-        <div>
-          <h3 className="text-[15px] font-medium text-ink">{item.label}</h3>
-          <p className="mt-1 text-[13px] leading-6 text-ink-muted">{item.detail}</p>
+    <div
+      role="button"
+      tabIndex={0}
+      aria-pressed={selected}
+      onClick={onToggle}
+      onKeyDown={handleKeyDown}
+      className={clsx(
+        'rounded-card border p-4 transition-colors duration-150 ease-out focus:outline-none focus:ring-2 focus:ring-accent focus:ring-offset-2 focus:ring-offset-canvas',
+        selected
+          ? 'border-accent bg-[#f3e5d6]'
+          : 'border-hairline bg-surface-raised hover:border-[#cdbca9] hover:bg-surface',
+      )}
+    >
+      <div className="flex items-start justify-between gap-4">
+        <div className="flex items-start gap-3">
+          <span
+            className={clsx(
+              'flex h-10 w-10 shrink-0 items-center justify-center rounded-full border text-[11px] font-semibold uppercase tracking-[0.16em]',
+              selected
+                ? 'border-accent bg-surface text-accent'
+                : 'border-hairline bg-surface text-ink-muted',
+            )}
+            aria-hidden
+          >
+            {badge}
+          </span>
+          <div>
+            <div className="flex flex-wrap items-center gap-2">
+              <h3 className="text-[15px] font-medium text-ink">{item.label}</h3>
+              <span
+                className={clsx(
+                  'rounded-full px-2 py-1 text-[10px] uppercase tracking-[0.16em]',
+                  selected ? 'bg-surface text-accent' : 'bg-canvas text-ink-muted',
+                )}
+              >
+                {selected ? weightLabel(weight) : 'Optional'}
+              </span>
+            </div>
+            <p className="mt-2 text-[13px] leading-6 text-ink-muted">{item.detail}</p>
+          </div>
         </div>
+        <Button
+          variant="secondary"
+          size="sm"
+          onClick={(event) => {
+            event.stopPropagation()
+            onToggle()
+          }}
+          className={clsx(selected ? 'border-accent text-accent hover:border-accent' : undefined)}
+        >
+          {selected ? 'Selected' : 'Add'}
+        </Button>
       </div>
-
-      <div className="space-y-3">
-        <div className="flex items-center justify-between gap-3">
-          <span className="text-[13px] text-ink-muted">{selected ? weightLabel(weight) : 'Not used in ranking'}</span>
-          <Button variant="secondary" size="sm" onClick={onToggle}>
-            {selected ? 'Remove' : 'Add'}
-          </Button>
-        </div>
-        {selected ? (
-          <div className="rounded border border-hairline bg-surface-raised px-3 py-3">
+      {selected ? (
+        <div
+          className="mt-4 rounded border border-hairline bg-surface px-3 py-3"
+          onClick={(event) => event.stopPropagation()}
+        >
+          <div className="flex items-center justify-between gap-3">
             <label htmlFor={sliderId} className="data-label">
               Importance
             </label>
-            <WeightSlider
-              id={sliderId}
-              ariaLabel={`Importance of ${item.label}`}
-              value={weight}
-              onChange={onWeightChange}
-              className="mt-3"
-            />
+            <span className="text-[12px] text-ink-muted">{weightLabel(weight)}</span>
           </div>
-        ) : null}
-      </div>
+          <WeightSlider
+            id={sliderId}
+            ariaLabel={`Importance of ${item.label}`}
+            value={weight}
+            onChange={onWeightChange}
+            className="mt-3"
+          />
+        </div>
+      ) : (
+        <div className="mt-4 flex items-center justify-between border-t border-hairline pt-3">
+          <span className="data-label">Ranking impact</span>
+          <span className="text-[13px] text-ink-muted">Only used if you add it</span>
+        </div>
+      )}
     </div>
   )
+}
+
+function preferenceBadge(label: string): string {
+  const initials = label
+    .split(/[\s-]+/)
+    .filter(Boolean)
+    .slice(0, 2)
+    .map((part) => part[0]?.toUpperCase() ?? '')
+    .join('')
+
+  return initials || 'P'
+}
+
+function weightShortLabel(weight: number): string {
+  if (weight >= 5) return 'Core'
+  if (weight >= 4) return 'High'
+  if (weight <= 2) return 'Light'
+  return 'Mid'
 }
 
 function clampWeight(value: number): number {
