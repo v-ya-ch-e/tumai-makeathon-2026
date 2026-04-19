@@ -229,6 +229,11 @@ class Listing(BaseModel):
     # NOT a `ListingRow` column — `repo.upsert_global_listing` ignores it.
     posted_at: Optional[datetime] = None
 
+    # Mirrors `ListingRow.first_seen_at`. Surfaced to the UI so the client can
+    # render a "new" badge and sort by freshness (a listing counts as new when
+    # `first_seen_at > user.created_at` and is within the 24h display window).
+    first_seen_at: Optional[datetime] = None
+
     # Populated by the evaluator after scoring.
     score: Optional[float] = Field(default=None, ge=0, le=1)
     score_reason: Optional[str] = None

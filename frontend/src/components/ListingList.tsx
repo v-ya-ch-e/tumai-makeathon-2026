@@ -6,6 +6,19 @@ export type ListingListProps = {
   listings: Listing[]
   onOpen: (listing: Listing) => void
   emptyLabel?: string
+  /** Optional predicate used to highlight freshly-scraped listings with a
+   * "NEW" badge. Defaults to flagging listings whose `firstSeenAt` is
+   * within the last 24 hours. */
+  isNew?: (listing: Listing) => boolean
+}
+
+const NEW_BADGE_TTL_MS = 24 * 60 * 60 * 1000
+
+function defaultIsNew(listing: Listing): boolean {
+  if (!listing.firstSeenAt) return false
+  const seenMs = Date.parse(listing.firstSeenAt)
+  if (Number.isNaN(seenMs)) return false
+  return Date.now() - seenMs < NEW_BADGE_TTL_MS
 }
 
 function scoreTone(score: number | null): StatusPillTone {
@@ -55,19 +68,20 @@ function subline(listing: Listing): string {
   return parts.join(' · ')
 }
 
-export function ListingList({ listings, onOpen, emptyLabel }: ListingListProps) {
+export function ListingList({ listings, onOpen, emptyLabel, isNew }: ListingListProps) {
   if (listings.length === 0) {
     return (
-      <p className="text-[13px] text-ink-muted">
+      <p className="px-6 py-8 text-[13px] text-ink-muted sm:px-8 lg:px-10">
         {emptyLabel ?? 'Matches will appear here as soon as the first results are ready.'}
       </p>
     )
   }
 
-  const sorted = [...listings].sort((a, b) => (b.score ?? -1) - (a.score ?? -1))
+  const flagAsNew = isNew ?? defaultIsNew
   return (
     <ul className="divide-y divide-hairline">
-      {sorted.map((listing) => {
+      {listings.map((listing) => {
+        const fresh = flagAsNew(listing)
         return (
           <li key={listing.id}>
             <button
@@ -75,7 +89,16 @@ export function ListingList({ listings, onOpen, emptyLabel }: ListingListProps) 
               onClick={() => onOpen(listing)}
               className="group grid w-full gap-4 px-5 py-5 text-left transition-colors duration-150 ease-out hover:bg-surface-raised sm:grid-cols-[176px_minmax(0,1fr)]"
             >
-              <div className="overflow-hidden rounded border border-hairline bg-surface-raised">
+              <div className="relative overflow-hidden rounded border border-hairline bg-surface-raised">
+                {fresh ? (
+                  <span
+                    className="absolute left-2 top-2 z-10 inline-flex items-center gap-1 rounded-full bg-accent px-2 py-0.5 text-[10px] font-semibold uppercase tracking-[0.14em] text-white shadow-sm"
+                    aria-label="New listing"
+                  >
+                    <span aria-hidden className="inline-block h-1.5 w-1.5 rounded-full bg-white/90" />
+                    New
+                  </span>
+                ) : null}
                 {listing.coverPhotoUrl ? (
                   <img
                     src={listing.coverPhotoUrl}

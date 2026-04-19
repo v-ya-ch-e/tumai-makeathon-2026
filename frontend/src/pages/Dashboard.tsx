@@ -1,8 +1,15 @@
 import clsx from 'clsx'
-import { useCallback, useEffect, useRef, useState } from 'react'
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { useLocation, useNavigate } from 'react-router-dom'
 import { AppTabs } from '../components/AppTabs'
 import { ListingDrawer } from '../components/ListingDrawer'
+import {
+  DEFAULT_LISTING_FILTERS,
+  ListingFilterBar,
+  applyListingFilters,
+  isListingNew,
+  type ListingFilters,
+} from '../components/ListingFilterBar'
 import { ListingList } from '../components/ListingList'
 import { ListingMap } from '../components/ListingMap'
 import { Button, StatusPill, type StatusPillTone } from '../components/ui'
@@ -68,7 +75,7 @@ function moveInNote(profile: SearchProfile): string {
 export default function Dashboard() {
   const navigate = useNavigate()
   const location = useLocation()
-  const { username, isReady, setUsername } = useSession()
+  const { username, isReady, setUsername, user } = useSession()
 
   const [profile, setProfile] = useState<SearchProfile | null>(null)
   const [hunt, setHunt] = useState<Hunt | null>(null)
@@ -78,6 +85,21 @@ export default function Dashboard() {
   const [errorMessage, setErrorMessage] = useState<string | null>(null)
   const [openListing, setOpenListing] = useState<Listing | null>(null)
   const [viewMode, setViewMode] = useState<'list' | 'map'>('list')
+  const [filters, setFilters] = useState<ListingFilters>(DEFAULT_LISTING_FILTERS)
+
+  const userCreatedAt = user?.createdAt ?? null
+  const isNewListing = useCallback(
+    (listing: Listing) => isListingNew(listing, userCreatedAt),
+    [userCreatedAt],
+  )
+  const newCount = useMemo(
+    () => listings.filter((listing) => isNewListing(listing)).length,
+    [listings, isNewListing],
+  )
+  const visibleListings = useMemo(
+    () => applyListingFilters(listings, filters, userCreatedAt),
+    [listings, filters, userCreatedAt],
+  )
   const seenActionKeysRef = useRef<Set<string>>(new Set())
   const autoStartTriggeredRef = useRef(false)
   const refreshTimerRef = useRef<number | null>(null)
@@ -345,13 +367,29 @@ export default function Dashboard() {
             <h2 className="text-[30px] font-semibold text-ink">Best matches</h2>
             <ViewToggle value={viewMode} onChange={setViewMode} />
           </div>
+          <ListingFilterBar
+            value={filters}
+            onChange={setFilters}
+            newCount={newCount}
+            totalCount={listings.length}
+            visibleCount={visibleListings.length}
+          />
           {viewMode === 'list' ? (
             <div className="max-h-[820px] overflow-y-auto">
-              <ListingList listings={listings} onOpen={(listing) => setOpenListing(listing)} />
+              <ListingList
+                listings={visibleListings}
+                onOpen={(listing) => setOpenListing(listing)}
+                isNew={isNewListing}
+                emptyLabel={
+                  listings.length === 0
+                    ? undefined
+                    : 'No listings match the current filters. Try loosening them.'
+                }
+              />
             </div>
           ) : (
             <div className="p-4">
-              <ListingMap listings={listings} onOpen={(listing) => setOpenListing(listing)} />
+              <ListingMap listings={visibleListings} onOpen={(listing) => setOpenListing(listing)} />
             </div>
           )}
         </section>

@@ -28,9 +28,13 @@ async def lifespan(app: FastAPI):
 
     wg_periodic.set_runtime_loop(asyncio.get_running_loop())
     await wg_periodic.resume_user_agents()
+    from .wg_agent import scraper_watcher as wg_watcher
+
+    wg_watcher.start()
     try:
         yield
     finally:
+        wg_watcher.stop()
         wg_periodic.set_runtime_loop(None)
 
 

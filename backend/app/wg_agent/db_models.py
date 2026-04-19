@@ -110,3 +110,36 @@ class UserActionRow(SQLModel, table=True):
     detail: Optional[str] = None
     listing_id: Optional[str] = Field(default=None, foreign_key="listingrow.id")
     at: datetime
+
+
+class UserAgentStateRow(SQLModel, table=True):
+    """Persisted per-user agent lifecycle flag.
+
+    Written only when the user explicitly pauses or resumes their agent
+    (`POST /agent/pause` / `/agent/start`). Absence of a row means the
+    agent is running (the default for newly-onboarded users). When
+    `paused=True`, `resume_user_agents` skips the user on backend boot —
+    so a user who pressed "Stop" stays stopped across restarts until they
+    press "Resume" in the dashboard.
+    """
+
+    __tablename__ = "useragentstaterow"
+    username: str = Field(primary_key=True, foreign_key="userrow.username")
+    paused: bool = False
+    updated_at: datetime
+
+
+class ScraperEventRow(SQLModel, table=True):
+    """Append-only outbox the scraper writes on a newly persisted full listing.
+
+    The backend's `scraper_watcher` tails this table (id-ordered) and wakes
+    every per-user matcher so high-scoring matches surface without waiting
+    for the next polled rescan. Rows are never deleted; the watermark is
+    held in memory by the watcher.
+    """
+
+    __tablename__ = "scrapereventrow"
+    id: Optional[int] = Field(default=None, primary_key=True)
+    listing_id: str = Field(foreign_key="listingrow.id", index=True)
+    kind: str = Field(default="new_listing", index=True)
+    created_at: datetime

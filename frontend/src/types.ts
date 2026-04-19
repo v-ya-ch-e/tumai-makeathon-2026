@@ -84,10 +84,13 @@ export type NearbyPlace = {
   category: string | null
 }
 
-export type CommuteInfo = {
-  minutes: number
-  mode: string
-}
+/**
+ * Per-location commute payload as shipped by the backend DTO
+ * (`travel_minutes_per_location`): a map from mode name (e.g.
+ * `"transit"`, `"bicycle"`, `"drive"`) to minutes for that mode.
+ * Mirrors `dict[str, dict[str, int]]` in `wg_agent/dto.py`.
+ */
+export type CommuteByMode = Record<string, number>
 
 export type Listing = {
   id: string
@@ -111,6 +114,10 @@ export type Listing = {
   bestCommuteMinutes: number | null
   bestCommuteLabel: string | null
   bestCommuteMode: string | null
+  /** Mirrors backend `first_seen_at`. Used (together with
+   * `User.createdAt`) to flag listings as "new" in the dashboard for the
+   * 24h window after they first appear in the global catalogue. */
+  firstSeenAt: string | null
   score: number | null
   scoreReason: string | null
   matchReasons: string[]
@@ -123,7 +130,7 @@ export type ListingDetail = {
   listing: Listing
   photos: string[]
   score: number | null
-  travelMinutesPerLocation: Record<string, CommuteInfo> | null
+  travelMinutesPerLocation: Record<string, CommuteByMode> | null
   nearbyPreferencePlaces: NearbyPlace[]
 }
 

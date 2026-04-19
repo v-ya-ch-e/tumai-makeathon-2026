@@ -72,10 +72,24 @@ function ComponentBar({ component }: { component: Component }) {
 }
 
 function modeLabel(mode: string): string {
-  if (mode === 'drive') return 'car'
-  if (mode === 'bicycle') return 'bike'
-  if (mode === 'transit') return 'public transit'
-  return mode
+  const normalized = mode.toLowerCase()
+  if (normalized === 'drive') return 'car'
+  if (normalized === 'bicycle') return 'bike'
+  if (normalized === 'transit') return 'public transit'
+  return normalized
+}
+
+function fastestMode(
+  modes: Record<string, number>,
+): { mode: string; minutes: number } | null {
+  let best: { mode: string; minutes: number } | null = null
+  for (const [mode, minutes] of Object.entries(modes)) {
+    if (typeof minutes !== 'number' || Number.isNaN(minutes)) continue
+    if (best === null || minutes < best.minutes) {
+      best = { mode, minutes }
+    }
+  }
+  return best
 }
 
 function Stat({ label, value }: { label: string; value: string }) {
@@ -170,6 +184,18 @@ export function ListingDrawer({ open, listing, onClose }: ListingDrawerProps) {
     >
       {activeListing ? (
         <div className="space-y-6">
+          <div className="flex flex-wrap items-center gap-3">
+            <Button
+              variant="primary"
+              size="sm"
+              onClick={() => {
+                window.open(activeListing.url, '_blank', 'noopener,noreferrer')
+              }}
+            >
+              Open on WG-Gesucht
+            </Button>
+          </div>
+
           {detail && detail.photos.length > 0 ? (
             <div className="overflow-hidden rounded-card border border-hairline bg-surface">
               <img
@@ -232,15 +258,26 @@ export function ListingDrawer({ open, listing, onClose }: ListingDrawerProps) {
           {detail?.travelMinutesPerLocation && Object.keys(detail.travelMinutesPerLocation).length > 0 ? (
             <Section title="Commute">
               <ul className="space-y-2 text-[13px] text-ink">
-                {Object.entries(detail.travelMinutesPerLocation).map(([label, commute]) => (
-                  <li key={label} className="grid grid-cols-[minmax(0,1fr)_auto] items-start gap-4">
-                    <span className="break-words text-ink-muted">{label}</span>
-                    <span className="text-right">
-                      {commute.minutes} min
-                      <span className="block text-[12px] text-ink-muted">via {modeLabel(commute.mode)}</span>
-                    </span>
-                  </li>
-                ))}
+                {Object.entries(detail.travelMinutesPerLocation).map(([label, modes]) => {
+                  const best = fastestMode(modes)
+                  return (
+                    <li key={label} className="grid grid-cols-[minmax(0,1fr)_auto] items-start gap-4">
+                      <span className="break-words text-ink-muted">{label}</span>
+                      <span className="text-right">
+                        {best ? (
+                          <>
+                            {best.minutes} min
+                            <span className="block text-[12px] text-ink-muted">
+                              via {modeLabel(best.mode)}
+                            </span>
+                          </>
+                        ) : (
+                          <span className="text-[12px] text-ink-muted">no data</span>
+                        )}
+                      </span>
+                    </li>
+                  )
+                })}
               </ul>
             </Section>
           ) : null}
@@ -289,18 +326,6 @@ export function ListingDrawer({ open, listing, onClose }: ListingDrawerProps) {
               </div>
             </Section>
           ) : null}
-
-          <div className="flex flex-wrap items-center gap-3 border-t border-hairline pt-4">
-            <Button
-              variant="primary"
-              size="sm"
-              onClick={() => {
-                window.open(activeListing.url, '_blank', 'noopener,noreferrer')
-              }}
-            >
-              Open on WG-Gesucht
-            </Button>
-          </div>
 
           {loading ? <p className="text-[13px] text-ink-muted">Loading…</p> : null}
           {error ? <p className="text-[13px] text-bad">{error}</p> : null}

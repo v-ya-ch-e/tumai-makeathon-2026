@@ -121,9 +121,12 @@ async def put_search_profile(
     sp = upsert_body_to_search_profile(body)
     out = repo.upsert_search_profile(session, username=username, sp=sp)
     # Boot (or refresh) the per-user agent. spawn_user_agent is idempotent.
-    periodic.spawn_user_agent(
-        username, interval_minutes=FIXED_RESCAN_INTERVAL_MINUTES
-    )
+    # Respect an explicit prior "Stop" — editing the profile must not silently
+    # resume an agent the user paused; they have to press "Resume" in the UI.
+    if not repo.is_user_agent_paused(session, username=username):
+        periodic.spawn_user_agent(
+            username, interval_minutes=FIXED_RESCAN_INTERVAL_MINUTES
+        )
     return search_profile_to_dto(out)
 
 
@@ -196,6 +199,10 @@ async def start_agent(
     sp = repo.get_search_profile(session, username=username)
     if sp is None:
         raise HTTPException(status_code=400, detail="User has no search profile yet")
+    # Clear the persisted pause flag FIRST so a crash between here and the
+    # spawn leaves the user in a "will auto-resume on next boot" state,
+    # matching what they asked for when they clicked "Resume".
+    repo.set_user_agent_paused(session, username=username, paused=False)
     periodic.spawn_user_agent(
         username, interval_minutes=FIXED_RESCAN_INTERVAL_MINUTES
     )
@@ -208,6 +215,10 @@ def pause_agent(
 ) -> Response:
     if repo.get_user(session, username=username) is None:
         raise HTTPException(status_code=404, detail="User not found")
+    # Persist the "stopped" decision BEFORE cancelling the task so a crash
+    # in-between does not leave a stopped user with `paused=False` (which
+    # would auto-resume on the next boot).
+    repo.set_user_agent_paused(session, username=username, paused=True)
     periodic.cancel_user_agent(username)
     return Response(status_code=204)
 
@@ -386,6 +397,7 @@ def _get_listing_detail(
         mismatch_reasons=mismatch_reasons,
         components=components_dto,
         veto_reason=veto_reason,
+        first_seen_at=row.first_seen_at,
     )
     nearby_preference_places = _nearby_places_from_row(match_row)
     return ListingDetailDTO(

@@ -34,28 +34,51 @@ def _notify_threshold() -> float:
 
 
 def _notify_cooldown() -> timedelta:
-    raw = os.environ.get("WG_NOTIFY_COOLDOWN_MINUTES", "5")
+    raw = os.environ.get("WG_NOTIFY_COOLDOWN_MINUTES", "30")
     try:
         minutes = float(raw)
     except ValueError:
-        minutes = 5.0
+        minutes = 30.0
     return timedelta(minutes=max(0.0, minutes))
 
 
+def _notify_fresh_window() -> Optional[timedelta]:
+    """Max age (first_seen_at) for a listing to still count as "new" for email.
+
+    Returns `None` when `WG_NOTIFY_FRESH_WINDOW_MINUTES` is unset or `0`, in
+    which case only the `first_seen_at > user.created_at` gate applies.
+    """
+    raw = os.environ.get("WG_NOTIFY_FRESH_WINDOW_MINUTES", "60")
+    try:
+        minutes = float(raw)
+    except ValueError:
+        minutes = 60.0
+    if minutes <= 0:
+        return None
+    return timedelta(minutes=minutes)
+
+
 class _NotifyState:
-    """Per-user, in-process digest queue + last-send timestamp.
+    """Per-user, in-process digest queue + last-send timestamp + dedup set.
 
     Kept in memory only: a backend restart resets everyone's cooldown and
-    drops their pending digest. That is acceptable for a demo — the matcher
-    will rediscover any still-new (`first_seen_at > user.created_at`) listing
-    on its next pass and requeue it.
+    drops their pending digest. That is acceptable — `list_scorable_listings_for_user`
+    already excludes any listing that is in `UserListingRow`, so a post-restart
+    pass cannot re-score (and therefore cannot re-queue) a listing that was
+    already delivered before the restart.
+
+    `emailed_ids` guards against duplicates *within* a single process
+    lifetime: even if a listing somehow re-enters `_maybe_queue_digest_item`
+    (bug, retry, cooldown-held pending spanning multiple passes), the set
+    prevents it from being put into two different outbound digests.
     """
 
-    __slots__ = ("pending", "last_sent_at")
+    __slots__ = ("pending", "last_sent_at", "emailed_ids")
 
     def __init__(self) -> None:
         self.pending: list[notifier.DigestItem] = []
         self.last_sent_at: Optional[datetime] = None
+        self.emailed_ids: set[str] = set()
 
 
 _NOTIFY_STATE: dict[str, _NotifyState] = {}
@@ -95,6 +118,7 @@ def _try_flush_digest(username: str, to_email: Optional[str]) -> int:
     if sent:
         state.pending.clear()
         state.last_sent_at = now
+        state.emailed_ids.update(item.listing_id for item in items)
         return len(items)
     return 0
 
@@ -168,6 +192,9 @@ def _nearby_places_detail(
 
 
 _ACTIVE_AGENTS: dict[str, asyncio.Task[None]] = {}
+# Parallel to `_ACTIVE_AGENTS`: lets the scraper watcher wake a specific
+# matcher out of its sleep when the scraper outbox emits a new-listing event.
+_ACTIVE_MATCHERS: dict[str, "PeriodicUserMatcher"] = {}
 # Per-user fan-out: every active SSE connection for a username appends its own
 # queue here, and every action is published to *all* of them. An asyncio.Queue
 # delivers each item to exactly one waiter, so a single shared queue would
@@ -386,10 +413,17 @@ class UserAgent:
         A listing is only queued when:
         * the user has a notification email configured,
         * its score passes `WG_NOTIFY_THRESHOLD`,
-        * the scraper first-saw it *after* the user's account was created —
-          this is what excludes the initial-evaluation backlog and is the
-          single source of truth for "is this a new listing?" regardless of
-          whether the scraper runs on the server or on a developer laptop.
+        * the scraper first-saw it *after* the user's account was created
+          (single source of truth for "post-signup new"; works the same
+          whether the scraper runs on the server or on a laptop),
+        * and — if `WG_NOTIFY_FRESH_WINDOW_MINUTES` is set (default 60) —
+          the scraper first-saw it within that sliding window, so backlog
+          evaluated long after it was posted does not produce an email.
+
+        The `emailed_ids` set + `pending` scan additionally ensure the
+        same listing is never queued into two different digests, defending
+        against the cooldown holding items across multiple passes and any
+        hypothetical re-entry into this method.
         """
         if not user_email:
             return
@@ -400,9 +434,19 @@ class UserAgent:
             return
         if row.first_seen_at <= user_created_at:
             return
+        fresh_window = _notify_fresh_window()
+        if fresh_window is not None:
+            now = datetime.utcnow()
+            if row.first_seen_at < now - fresh_window:
+                return
         state = _notify_state(self._username)
+        if row.id in state.emailed_ids:
+            return
+        if any(item.listing_id == row.id for item in state.pending):
+            return
         state.pending.append(
             notifier.DigestItem(
+                listing_id=row.id,
                 listing_title=listing.title or "",
                 listing_url=str(listing.url),
                 score=score,
@@ -412,7 +456,12 @@ class UserAgent:
 
 
 class PeriodicUserMatcher:
-    """Runs `UserAgent.run_match_pass` in a continuous loop per user."""
+    """Runs `UserAgent.run_match_pass` in a continuous loop per user.
+
+    Between passes it sleeps until either `interval_minutes` elapses OR the
+    scraper-watcher calls `wake()` because a new listing landed. The wake
+    signal is a plain `asyncio.Event` that is reset on each wake.
+    """
 
     def __init__(
         self,
@@ -431,9 +480,19 @@ class PeriodicUserMatcher:
             except ValueError:
                 pass
         self._agent = UserAgent(username)
+        self._wake: asyncio.Event = asyncio.Event()
 
     def _sleep_seconds(self) -> float:
         return float(max(self._interval, 1)) * 60.0
+
+    def wake(self) -> None:
+        """Signal the matcher to cut its between-pass sleep short.
+
+        Called by the scraper watcher when a new listing is appended to
+        the outbox. Safe to call from the same event loop; no-op when the
+        matcher is already in a pass.
+        """
+        self._wake.set()
 
     async def _emit_rescan(self) -> None:
         act = AgentAction(
@@ -443,6 +502,15 @@ class PeriodicUserMatcher:
         with Session(db_module.engine) as session:
             _append(session, self._username, act)
         _publish(self._username, act)
+
+    async def _sleep_or_wake(self) -> None:
+        """Wait up to `_sleep_seconds()` for either the timer or a wake signal."""
+        try:
+            await asyncio.wait_for(self._wake.wait(), timeout=self._sleep_seconds())
+        except asyncio.TimeoutError:
+            pass
+        finally:
+            self._wake.clear()
 
     async def start(self) -> None:
         while True:
@@ -472,7 +540,7 @@ class PeriodicUserMatcher:
                 _publish(self._username, err)
 
             try:
-                await asyncio.sleep(self._sleep_seconds())
+                await self._sleep_or_wake()
             except asyncio.CancelledError:
                 raise
             await self._emit_rescan()
@@ -498,14 +566,33 @@ def spawn_user_agent(username: str, *, interval_minutes: int = 30) -> None:
     )
     task = _create_task(matcher.start())
     _ACTIVE_AGENTS[username] = task
+    _ACTIVE_MATCHERS[username] = matcher
 
 
 def cancel_user_agent(username: str) -> bool:
     task = _ACTIVE_AGENTS.get(username)
+    _ACTIVE_MATCHERS.pop(username, None)
     if task is None or task.done():
         return False
     task.cancel()
     return True
+
+
+def wake_all_user_agents() -> int:
+    """Wake every active matcher from its between-pass sleep.
+
+    Called by the scraper watcher when the outbox table advances. Returns
+    the number of matchers signalled (dead tasks are ignored).
+    """
+    n = 0
+    for username, matcher in list(_ACTIVE_MATCHERS.items()):
+        task = _ACTIVE_AGENTS.get(username)
+        if task is None or task.done():
+            _ACTIVE_MATCHERS.pop(username, None)
+            continue
+        matcher.wake()
+        n += 1
+    return n
 
 
 def subscribe(username: str) -> asyncio.Queue[AgentAction]:
@@ -538,8 +625,15 @@ def is_agent_running(username: str) -> bool:
 
 
 async def resume_user_agents() -> None:
+    """Auto-start matchers for every user who has not explicitly paused.
+
+    Users who pressed "Stop" are persisted with `UserAgentStateRow.paused=True`
+    and are filtered out here so a backend restart does not silently revive an
+    agent the user asked us to kill. They resume only when they visit the site
+    and press "Resume" (which hits `POST /agent/start`).
+    """
     with Session(db_module.engine) as session:
-        usernames = repo.list_usernames_with_search_profile(session)
+        usernames = repo.list_usernames_to_resume_on_boot(session)
     for username in usernames:
         spawn_user_agent(
             username, interval_minutes=FIXED_USER_AGENT_INTERVAL_MINUTES
