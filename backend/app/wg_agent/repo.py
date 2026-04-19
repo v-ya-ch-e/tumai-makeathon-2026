@@ -51,20 +51,28 @@ def _user_row_to_profile(row: UserRow) -> UserProfile:
         age=row.age,
         gender=Gender(row.gender),
         created_at=row.created_at,
+        backfill_baseline_at=row.backfill_baseline_at,
     )
 
 
 def create_user(session: Session, *, profile: UserProfile) -> UserProfile:
+    # On signup the baseline equals `created_at`, so the initial silent
+    # backfill never produces "new" badges or email digests for listings
+    # that predate the account — while any listing scraped AFTER signup
+    # naturally passes `first_seen_at > baseline_at` and gets surfaced.
+    baseline = profile.backfill_baseline_at or profile.created_at
     row = UserRow(
         username=profile.username,
         email=profile.email,
         age=profile.age,
         gender=profile.gender.value,
         created_at=profile.created_at,
+        backfill_baseline_at=baseline,
     )
     session.add(row)
     session.commit()
     session.refresh(row)
+    profile.backfill_baseline_at = baseline
     return profile
 
 
@@ -106,13 +114,92 @@ def _parse_preference(raw: object) -> Optional[PreferenceWeight]:
     return None
 
 
+def _search_profile_material_snapshot(
+    row: SearchProfileRow,
+) -> tuple:
+    """Normalized tuple of every field that affects listing scoring.
+
+    Changes to `schedule` / `rescan_interval_minutes` / `updated_at` are
+    intentionally excluded — they do not require re-scoring existing listings,
+    so they must not trigger a wipe + re-backfill.
+    """
+    return (
+        int(row.price_min_eur or 0),
+        int(row.price_max_eur) if row.price_max_eur is not None else None,
+        tuple(
+            (
+                str(ml.get("place_id") or ""),
+                float(ml.get("lat") or 0.0),
+                float(ml.get("lng") or 0.0),
+                ml.get("max_commute_minutes"),
+            )
+            for ml in (row.main_locations or [])
+        ),
+        bool(row.has_car),
+        bool(row.has_bike),
+        str(row.mode or "wg"),
+        row.move_in_from,
+        row.move_in_until,
+        tuple(
+            (
+                str(p.get("key") or "") if isinstance(p, dict) else str(p),
+                int(p.get("weight", 3)) if isinstance(p, dict) else 3,
+            )
+            for p in (row.preferences or [])
+        ),
+    )
+
+
 def upsert_search_profile(
     session: Session, *, username: str, sp: SearchProfile
-) -> SearchProfile:
+) -> tuple[SearchProfile, bool]:
+    """Create or update the user's search profile.
+
+    Returns `(profile, baseline_bumped)`. When a pre-existing row is
+    materially changed — anything that affects how a listing would be
+    scored — we wipe every `UserListingRow` for this user and bump
+    `UserRow.backfill_baseline_at` to `utcnow()`. The caller is expected
+    to kick the matcher so the silent re-backfill starts immediately.
+    Signup (row was None) never bumps: the baseline is already set to
+    `created_at` by `create_user`.
+    """
     row = session.get(SearchProfileRow, username)
+    bumped = False
     if row is None:
         row = SearchProfileRow(username=username)
         session.add(row)
+    else:
+        before = _search_profile_material_snapshot(row)
+        # Project the incoming SearchProfile through the same snapshot
+        # shape so equal inputs produce equal tuples (the persisted row
+        # stores Pydantic .model_dump() payloads; we replicate that here).
+        after = _search_profile_material_snapshot(
+            SearchProfileRow(
+                username=username,
+                price_min_eur=sp.price_min_eur,
+                price_max_eur=sp.price_max_eur,
+                main_locations=[ml.model_dump() for ml in sp.main_locations],
+                has_car=sp.has_car,
+                has_bike=sp.has_bike,
+                mode=sp.mode,
+                move_in_from=sp.move_in_from,
+                move_in_until=sp.move_in_until,
+                preferences=[p.model_dump() for p in sp.preferences],
+                rescan_interval_minutes=sp.rescan_interval_minutes,
+                schedule=sp.schedule,
+                updated_at=sp.updated_at,
+            )
+        )
+        if before != after:
+            for match_row in session.exec(
+                select(UserListingRow).where(UserListingRow.username == username)
+            ).all():
+                session.delete(match_row)
+            user_row = session.get(UserRow, username)
+            if user_row is not None:
+                user_row.backfill_baseline_at = datetime.utcnow()
+                session.add(user_row)
+            bumped = True
     row.price_min_eur = sp.price_min_eur
     row.price_max_eur = sp.price_max_eur
     row.main_locations = [ml.model_dump() for ml in sp.main_locations]
@@ -127,7 +214,7 @@ def upsert_search_profile(
     row.updated_at = sp.updated_at
     session.commit()
     session.refresh(row)
-    return get_search_profile(session, username=username) or sp
+    return (get_search_profile(session, username=username) or sp, bumped)
 
 
 def get_search_profile(session: Session, *, username: str) -> Optional[SearchProfile]:

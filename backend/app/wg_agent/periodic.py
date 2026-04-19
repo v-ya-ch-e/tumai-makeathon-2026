@@ -8,11 +8,12 @@ action-log entries to `UserListingRow` / `UserActionRow` for the user.
 from __future__ import annotations
 
 import asyncio
+import json
 import logging
 import os
 from concurrent.futures import Future
 from datetime import datetime, timedelta
-from typing import Optional
+from typing import Callable, Optional
 
 from sqlmodel import Session
 
@@ -23,6 +24,21 @@ from .models import ActionKind, AgentAction, NearbyPlace, SearchProfile
 
 logger = logging.getLogger(__name__)
 FIXED_USER_AGENT_INTERVAL_MINUTES = 30
+
+
+def _backfill_concurrency() -> int:
+    """How many listings a backfill pass may score in parallel.
+
+    Defaults to 8 — matches the Google Maps global rate-limiter budget so
+    parallel scoring saturates the external quota instead of idling. Override
+    via `WG_BACKFILL_CONCURRENCY`.
+    """
+    raw = os.environ.get("WG_BACKFILL_CONCURRENCY", "8")
+    try:
+        n = int(raw)
+    except ValueError:
+        return 8
+    return max(1, n)
 
 
 def _notify_threshold() -> float:
@@ -265,7 +281,7 @@ class UserAgent:
         if sp is None:
             sp = SearchProfile(city="München", max_rent_eur=2000)
         user_email = user_row.email if user_row is not None else None
-        user_created_at = user_row.created_at if user_row is not None else None
+        baseline_at = _baseline_at(user_row)
 
         with Session(db_module.engine) as session:
             candidate_rows = repo.list_scorable_listings_for_user(
@@ -303,124 +319,254 @@ class UserAgent:
                         len(candidate_rows) - candidate_rows.index(row),
                     )
                     return new_count
-            listing = repo.row_to_domain_listing(row)
-            nl = AgentAction(
-                kind=ActionKind.new_listing,
-                summary=f"New listing: {listing.title or listing.id}",
+            await self._score_one(
+                row=row,
+                sp=sp,
+                user_email=user_email,
+                baseline_at=baseline_at,
+                silent=False,
+            )
+
+        _try_flush_digest(self._username, user_email)
+        return new_count
+
+    async def run_backfill_pass(
+        self,
+        *,
+        on_progress: Optional[Callable[[int, int], None]] = None,
+    ) -> int:
+        """Silently score every scorable listing for this user in parallel.
+
+        Called once after signup (or after a material profile edit wipes
+        the user's `UserListingRow`s) to catch up the shortlist as fast as
+        possible. "Silent" means two things:
+        * `_maybe_queue_digest_item` is skipped — no email notifications.
+        * The dashboard "new" badge never fires for these listings because
+          every row's `first_seen_at <= baseline_at` by construction (the
+          baseline was just stamped at signup / profile-edit time).
+
+        Parallelism is capped at `WG_BACKFILL_CONCURRENCY` (default 8); the
+        Google Maps global rate limiter further throttles external calls
+        to keep us inside quota. Each task gets its own `Session` — we do
+        NOT share sessions across tasks.
+
+        Publishes one `ActionKind.backfill_progress` SSE event with
+        `detail = '{"done":0,"total":N}'` up front and one more after every
+        listing finishes. The `on_progress(done, total)` callback — if
+        provided — is invoked on the event-loop thread after every step so
+        the owning matcher can update `backfill_state` for the status API.
+        """
+        with Session(db_module.engine) as session:
+            if repo.is_user_agent_paused(session, username=self._username):
+                return 0
+            sp = repo.get_search_profile(session, username=self._username)
+            user_row = session.get(UserRow, self._username)
+        if sp is None:
+            sp = SearchProfile(city="München", max_rent_eur=2000)
+        user_email = user_row.email if user_row is not None else None
+        baseline_at = _baseline_at(user_row)
+
+        with Session(db_module.engine) as session:
+            candidate_rows = repo.list_scorable_listings_for_user(
+                session,
+                username=self._username,
+                status="full",
+                limit=None,
+                mode=sp.mode,
+            )
+
+        total = len(candidate_rows)
+        if total == 0:
+            if on_progress is not None:
+                on_progress(0, 0)
+            return 0
+
+        done = 0
+        lock = asyncio.Lock()
+        semaphore = asyncio.Semaphore(_backfill_concurrency())
+
+        def _progress_action(d: int, t: int) -> AgentAction:
+            return AgentAction(
+                kind=ActionKind.backfill_progress,
+                summary=f"Evaluating listings: {d} / {t}",
+                detail=json.dumps({"done": d, "total": t}),
+            )
+
+        # Initial 0/total heartbeat so the client can show the bar before
+        # the first listing even finishes scoring.
+        start_event = _progress_action(0, total)
+        _publish(self._username, start_event)
+        if on_progress is not None:
+            on_progress(0, total)
+
+        async def _run_one(row: ListingRow) -> None:
+            nonlocal done
+            async with semaphore:
+                try:
+                    await self._score_one(
+                        row=row,
+                        sp=sp,
+                        user_email=user_email,
+                        baseline_at=baseline_at,
+                        silent=True,
+                    )
+                except Exception:  # noqa: BLE001
+                    logger.exception(
+                        "Backfill _score_one failed for %s / %s",
+                        self._username,
+                        row.id,
+                    )
+            async with lock:
+                done += 1
+                progress = _progress_action(done, total)
+                _publish(self._username, progress)
+                if on_progress is not None:
+                    try:
+                        on_progress(done, total)
+                    except Exception:  # noqa: BLE001
+                        logger.exception(
+                            "on_progress callback raised for %s",
+                            self._username,
+                        )
+
+        await asyncio.gather(
+            *(_run_one(row) for row in candidate_rows),
+            return_exceptions=False,
+        )
+
+        return total
+
+    async def _score_one(
+        self,
+        *,
+        row: ListingRow,
+        sp: SearchProfile,
+        user_email: Optional[str],
+        baseline_at: Optional[datetime],
+        silent: bool,
+    ) -> None:
+        """Score a single listing end-to-end and persist the match.
+
+        Emits the `new_listing` + `evaluate` SSE events so the dashboard
+        refresh picks the result up, and — unless `silent` — queues the
+        listing into the email digest buffer via `_maybe_queue_digest_item`.
+        """
+        listing = repo.row_to_domain_listing(row)
+        nl = AgentAction(
+            kind=ActionKind.new_listing,
+            summary=f"New listing: {listing.title or listing.id}",
+            listing_id=listing.id,
+        )
+        with Session(db_module.engine) as session:
+            _append(session, self._username, nl)
+        _publish(self._username, nl)
+
+        try:
+            travel_times: dict[tuple[str, str], int] = {}
+            nearby_places: dict[str, NearbyPlace] = {}
+            if (
+                listing.lat is not None
+                and listing.lng is not None
+                and sp.main_locations
+            ):
+                travel_times = await commute.travel_times(
+                    origin=(listing.lat, listing.lng),
+                    destinations=sp.main_locations,
+                    modes=commute.modes_for(sp),
+                )
+            if (
+                listing.lat is not None
+                and listing.lng is not None
+                and sp.preferences
+            ):
+                nearby_places = await places.nearby_places(
+                    origin=(listing.lat, listing.lng),
+                    preferences=sp.preferences,
+                )
+            result = await evaluator.evaluate(
+                listing,
+                sp,
+                travel_times=travel_times,
+                nearby_places=nearby_places,
+            )
+            listing.score = result.score
+            listing.score_reason = result.summary
+            listing.match_reasons = list(result.match_reasons)
+            listing.mismatch_reasons = list(result.mismatch_reasons)
+            listing.components = list(result.components)
+            listing.veto_reason = result.veto_reason
+        except Exception as exc:  # noqa: BLE001
+            err = AgentAction(
+                kind=ActionKind.error,
+                summary=f"Score failed for {listing.id}: {exc}",
+                detail=str(exc),
                 listing_id=listing.id,
             )
             with Session(db_module.engine) as session:
-                _append(session, self._username, nl)
-            _publish(self._username, nl)
+                _append(session, self._username, err)
+            _publish(self._username, err)
+            return
 
-            try:
-                travel_times: dict[tuple[str, str], int] = {}
-                nearby_places: dict[str, NearbyPlace] = {}
-                if (
-                    listing.lat is not None
-                    and listing.lng is not None
-                    and sp.main_locations
-                ):
-                    travel_times = await commute.travel_times(
-                        origin=(listing.lat, listing.lng),
-                        destinations=sp.main_locations,
-                        modes=commute.modes_for(sp),
-                    )
-                if (
-                    listing.lat is not None
-                    and listing.lng is not None
-                    and sp.preferences
-                ):
-                    nearby_places = await places.nearby_places(
-                        origin=(listing.lat, listing.lng),
-                        preferences=sp.preferences,
-                    )
-                result = await evaluator.evaluate(
-                    listing,
-                    sp,
-                    travel_times=travel_times,
-                    nearby_places=nearby_places,
-                )
-                listing.score = result.score
-                listing.score_reason = result.summary
-                listing.match_reasons = list(result.match_reasons)
-                listing.mismatch_reasons = list(result.mismatch_reasons)
-                listing.components = list(result.components)
-                listing.veto_reason = result.veto_reason
-            except Exception as exc:  # noqa: BLE001
-                err = AgentAction(
-                    kind=ActionKind.error,
-                    summary=f"Score failed for {listing.id}: {exc}",
-                    detail=str(exc),
-                    listing_id=listing.id,
-                )
-                with Session(db_module.engine) as session:
-                    _append(session, self._username, err)
-                _publish(self._username, err)
-                continue
-
-            travel_minutes = (
-                _all_modes_min_per_location(travel_times) if travel_times else None
+        travel_minutes = (
+            _all_modes_min_per_location(travel_times) if travel_times else None
+        )
+        with Session(db_module.engine) as session:
+            repo.save_user_match(
+                session,
+                username=self._username,
+                listing_id=listing.id,
+                score=float(listing.score or 0.0),
+                reason=listing.score_reason,
+                match_reasons=list(listing.match_reasons),
+                mismatch_reasons=list(listing.mismatch_reasons),
+                travel_minutes=travel_minutes,
+                nearby_places=nearby_places,
+                components=list(listing.components),
+                veto_reason=listing.veto_reason,
+                scored_against_scraped_at=row.scraped_at,
             )
-            with Session(db_module.engine) as session:
-                repo.save_user_match(
-                    session,
-                    username=self._username,
-                    listing_id=listing.id,
-                    score=float(listing.score or 0.0),
-                    reason=listing.score_reason,
-                    match_reasons=list(listing.match_reasons),
-                    mismatch_reasons=list(listing.mismatch_reasons),
-                    travel_minutes=travel_minutes,
-                    nearby_places=nearby_places,
-                    components=list(listing.components),
-                    veto_reason=listing.veto_reason,
-                    scored_against_scraped_at=row.scraped_at,
-                )
 
+        if not silent:
             self._maybe_queue_digest_item(
                 row=row,
                 listing=listing,
                 user_email=user_email,
-                user_created_at=user_created_at,
+                baseline_at=baseline_at,
             )
 
-            if result.veto_reason is not None:
-                ev = AgentAction(
-                    kind=ActionKind.evaluate,
-                    summary=f"Rejected {listing.id}: {result.veto_reason}",
-                    listing_id=listing.id,
-                )
-            else:
-                ev_detail_parts: list[str] = []
-                breakdown = evaluator.breakdown_detail(result.components)
-                if breakdown:
-                    ev_detail_parts.append(breakdown)
-                commute_detail = (
-                    _evaluate_detail(travel_minutes, list(sp.main_locations))
-                    if travel_minutes
-                    else None
-                )
-                if commute_detail:
-                    ev_detail_parts.append(commute_detail)
-                nearby_detail = _nearby_places_detail(
-                    nearby_places,
-                    list(sp.preferences),
-                )
-                if nearby_detail:
-                    ev_detail_parts.append(nearby_detail)
-                ev = AgentAction(
-                    kind=ActionKind.evaluate,
-                    summary=f"Scored {listing.id}: {round((listing.score or 0.0) * 100)}%",
-                    detail=" | ".join(ev_detail_parts) or None,
-                    listing_id=listing.id,
-                )
-            with Session(db_module.engine) as session:
-                _append(session, self._username, ev)
-            _publish(self._username, ev)
-
-        _try_flush_digest(self._username, user_email)
-        return new_count
+        if result.veto_reason is not None:
+            ev = AgentAction(
+                kind=ActionKind.evaluate,
+                summary=f"Rejected {listing.id}: {result.veto_reason}",
+                listing_id=listing.id,
+            )
+        else:
+            ev_detail_parts: list[str] = []
+            breakdown = evaluator.breakdown_detail(result.components)
+            if breakdown:
+                ev_detail_parts.append(breakdown)
+            commute_detail = (
+                _evaluate_detail(travel_minutes, list(sp.main_locations))
+                if travel_minutes
+                else None
+            )
+            if commute_detail:
+                ev_detail_parts.append(commute_detail)
+            nearby_detail = _nearby_places_detail(
+                nearby_places,
+                list(sp.preferences),
+            )
+            if nearby_detail:
+                ev_detail_parts.append(nearby_detail)
+            ev = AgentAction(
+                kind=ActionKind.evaluate,
+                summary=f"Scored {listing.id}: {round((listing.score or 0.0) * 100)}%",
+                detail=" | ".join(ev_detail_parts) or None,
+                listing_id=listing.id,
+            )
+        with Session(db_module.engine) as session:
+            _append(session, self._username, ev)
+        _publish(self._username, ev)
 
     def _maybe_queue_digest_item(
         self,
@@ -428,16 +574,16 @@ class UserAgent:
         row: ListingRow,
         listing,
         user_email: Optional[str],
-        user_created_at: Optional[datetime],
+        baseline_at: Optional[datetime],
     ) -> None:
         """Queue a listing for the next digest flush, applying all gates.
 
         A listing is only queued when:
         * the user has a notification email configured,
         * its score passes `WG_NOTIFY_THRESHOLD`,
-        * the scraper first-saw it *after* the user's account was created
-          (single source of truth for "post-signup new"; works the same
-          whether the scraper runs on the server or on a laptop),
+        * the scraper first-saw it *after* the user's `backfill_baseline_at`
+          (single source of truth for "post-signup / post-profile-edit new";
+          falls back to `created_at` when the column is NULL),
         * and — if `WG_NOTIFY_FRESH_WINDOW_MINUTES` is set (default 60) —
           the scraper first-saw it within that sliding window, so backlog
           evaluated long after it was posted does not produce an email.
@@ -452,9 +598,9 @@ class UserAgent:
         score = float(listing.score or 0.0)
         if score < _notify_threshold():
             return
-        if user_created_at is None or row.first_seen_at is None:
+        if baseline_at is None or row.first_seen_at is None:
             return
-        if row.first_seen_at <= user_created_at:
+        if row.first_seen_at <= baseline_at:
             return
         fresh_window = _notify_fresh_window()
         if fresh_window is not None:
@@ -475,6 +621,13 @@ class UserAgent:
                 match_reasons=list(listing.match_reasons),
             )
         )
+
+
+def _baseline_at(user_row: Optional[UserRow]) -> Optional[datetime]:
+    """Prefer `backfill_baseline_at`; fall back to `created_at` for pre-migration rows."""
+    if user_row is None:
+        return None
+    return user_row.backfill_baseline_at or user_row.created_at
 
 
 class PeriodicUserMatcher:
@@ -503,6 +656,16 @@ class PeriodicUserMatcher:
                 pass
         self._agent = UserAgent(username)
         self._wake: asyncio.Event = asyncio.Event()
+        # In-memory "have we run the one-shot silent backfill yet?" flag.
+        # Flipped True after `run_backfill_pass` completes. Reset to False
+        # externally via `request_backfill(username)` when the user edits
+        # their search profile materially; the matcher then re-runs the
+        # backfill on its next loop iteration.
+        self._backfill_complete: bool = False
+        # Mutable dict the API status endpoint reads via `backfill_state`.
+        # Populated while backfill is in flight (`{"done": X, "total": N}`)
+        # and cleared back to None after it finishes.
+        self.backfill_state: Optional[dict[str, int]] = None
 
     def _sleep_seconds(self) -> float:
         return float(max(self._interval, 1)) * 60.0
@@ -534,6 +697,12 @@ class PeriodicUserMatcher:
         finally:
             self._wake.clear()
 
+    def _on_backfill_progress(self, done: int, total: int) -> None:
+        if total <= 0 or done >= total:
+            self.backfill_state = None
+        else:
+            self.backfill_state = {"done": done, "total": total}
+
     async def start(self) -> None:
         while True:
             # Self-terminate if the persisted pause flag was flipped (e.g.
@@ -548,6 +717,45 @@ class PeriodicUserMatcher:
                         self._username,
                     )
                     return
+            # One-shot silent backfill runs before the normal 15/pass loop.
+            # A profile edit resets `_backfill_complete` to False via
+            # `request_backfill(username)`, which re-enters this branch on
+            # the next loop iteration.
+            if not self._backfill_complete:
+                try:
+                    await self._agent.run_backfill_pass(
+                        on_progress=self._on_backfill_progress
+                    )
+                    self._backfill_complete = True
+                    self.backfill_state = None
+                except asyncio.CancelledError:
+                    raise
+                except Exception as exc:  # noqa: BLE001
+                    logger.error(
+                        "Backfill pass failed for %s: %s",
+                        self._username,
+                        exc,
+                        exc_info=True,
+                    )
+                    err = AgentAction(
+                        kind=ActionKind.error,
+                        summary=f"Backfill failed: {exc}",
+                        detail=str(exc),
+                    )
+                    try:
+                        with Session(db_module.engine) as session:
+                            _append(session, self._username, err)
+                    except Exception:  # noqa: BLE001
+                        logger.exception(
+                            "Failed to persist backfill error for %s",
+                            self._username,
+                        )
+                    _publish(self._username, err)
+                    # Mark complete anyway so we don't retry forever; the
+                    # next normal pass will still try to score any rows
+                    # the backfill skipped.
+                    self._backfill_complete = True
+                    self.backfill_state = None
             try:
                 await self._agent.run_match_pass()
             except asyncio.CancelledError:
@@ -610,6 +818,36 @@ def cancel_user_agent(username: str) -> bool:
         return False
     task.cancel()
     return True
+
+
+def request_backfill(username: str) -> bool:
+    """Ask the matcher for `username` to re-run its silent backfill pass.
+
+    Used by the profile-edit flow: after a material change wipes every
+    `UserListingRow` for the user and bumps `backfill_baseline_at`, the
+    matcher must re-score every listing in the pool without emitting "new"
+    badges or emails. We flip the in-memory flag and wake the matcher so
+    the backfill starts immediately instead of waiting out the rescan
+    interval. No-op when no matcher is currently live for the user.
+    """
+    matcher = _ACTIVE_MATCHERS.get(username)
+    if matcher is None:
+        return False
+    matcher._backfill_complete = False
+    matcher.backfill_state = None
+    matcher.wake()
+    return True
+
+
+def get_matcher_backfill_state(username: str) -> Optional[dict[str, int]]:
+    """Return the live `{done, total}` snapshot for the user's backfill, if any."""
+    matcher = _ACTIVE_MATCHERS.get(username)
+    if matcher is None:
+        return None
+    state = matcher.backfill_state
+    if state is None:
+        return None
+    return dict(state)
 
 
 def wake_all_user_agents() -> int:

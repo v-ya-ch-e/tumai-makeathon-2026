@@ -119,7 +119,16 @@ async def put_search_profile(
     if repo.get_user(session, username=username) is None:
         raise HTTPException(status_code=404, detail="User not found")
     sp = upsert_body_to_search_profile(body)
-    out = repo.upsert_search_profile(session, username=username, sp=sp)
+    out, baseline_bumped = repo.upsert_search_profile(
+        session, username=username, sp=sp
+    )
+    # A material-field diff wipes every `UserListingRow` for the user and
+    # bumps the backfill baseline — notify the matcher so it treats the
+    # next pass as a fresh (silent) backfill instead of reusing the
+    # "already backfilled" flag from the previous profile. The helper is
+    # a no-op if no matcher is live for this user.
+    if baseline_bumped:
+        periodic.request_backfill(username)
     # Boot (or refresh) the per-user agent. spawn_user_agent is idempotent.
     # Respect an explicit prior "Stop" — editing the profile must not silently
     # resume an agent the user paused; they have to press "Resume" in the UI.
@@ -229,7 +238,14 @@ def get_agent_status(
 ) -> dict:
     if repo.get_user(session, username=username) is None:
         raise HTTPException(status_code=404, detail="User not found")
-    return {"running": periodic.is_agent_running(username)}
+    state = periodic.get_matcher_backfill_state(username)
+    backfill_total = state["total"] if state else None
+    backfill_done = state["done"] if state else None
+    return {
+        "running": periodic.is_agent_running(username),
+        "backfill_total": backfill_total,
+        "backfill_done": backfill_done,
+    }
 
 
 # --- Listings, actions, stream --------------------------------------------

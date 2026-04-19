@@ -16,6 +16,13 @@ class UserRow(SQLModel, table=True):
     age: int
     gender: str
     created_at: datetime
+    # Per-user cutoff for "new" classification in the dashboard badge and the
+    # email digest gate. Initialized to `created_at` on signup, bumped to
+    # `utcnow()` every time the user materially changes their search profile
+    # so the ensuing silent re-backfill never produces "new" badges or email
+    # notifications. Nullable so pre-migration rows keep working; call sites
+    # fall back to `created_at` when the column is NULL.
+    backfill_baseline_at: Optional[datetime] = None
 
 
 class WgCredentialsRow(SQLModel, table=True):

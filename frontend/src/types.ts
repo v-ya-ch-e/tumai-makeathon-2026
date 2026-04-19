@@ -12,6 +12,10 @@ export type User = {
   gender: Gender
   email: string | null
   createdAt: string
+  /** Timestamp the dashboard "new" badge compares `Listing.firstSeenAt`
+   * against. Populated by the backend as `backfill_baseline_at`; clients
+   * fall back to `createdAt` when it is null (pre-migration rows). */
+  backfillBaselineAt: string | null
 }
 
 export type HuntStatus = 'pending' | 'running' | 'done' | 'failed'
@@ -64,6 +68,12 @@ export type Hunt = {
   listings: Listing[]
   actions: Action[]
   error: string | null
+  /** Total number of listings scheduled for the silent backfill pass. Null
+   * when no backfill is currently running. */
+  backfillTotal: number | null
+  /** Listings the backfill has already finished. Null when no backfill is
+   * currently running, `0..backfillTotal` during a run. */
+  backfillDone: number | null
 }
 
 export type Component = {

@@ -29,6 +29,11 @@ class UserDTO(BaseModel):
     age: int
     gender: str
     created_at: datetime
+    # Cutoff the dashboard "new" badge compares against. Surfaced to the UI so
+    # the client can swap the badge predicate from `created_at` to this value
+    # after a profile-edit re-backfill. Falls back to `created_at` when the
+    # backend has not populated it (pre-migration rows).
+    backfill_baseline_at: Optional[datetime] = None
 
 
 class CreateUserBody(BaseModel):
@@ -238,6 +243,7 @@ def user_to_dto(u: UserProfile) -> UserDTO:
         age=u.age,
         gender=u.gender.value,
         created_at=u.created_at,
+        backfill_baseline_at=u.backfill_baseline_at,
     )
 
 

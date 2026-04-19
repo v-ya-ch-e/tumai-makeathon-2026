@@ -240,6 +240,8 @@ async function buildHunt(username: string): Promise<Hunt> {
     listings,
     actions,
     error: null,
+    backfillTotal: status.backfillTotal ?? null,
+    backfillDone: status.backfillDone ?? null,
   }
 }
 
@@ -281,11 +283,22 @@ export async function getUserActions(
   return data as Action[]
 }
 
-export async function getAgentStatus(username: string): Promise<{ running: boolean }> {
+export type AgentStatusDTO = {
+  running: boolean
+  backfillTotal: number | null
+  backfillDone: number | null
+}
+
+export async function getAgentStatus(username: string): Promise<AgentStatusDTO> {
   const data = await requestJson(
     `/api/users/${encodeURIComponent(username)}/agent`,
   )
-  return data as { running: boolean }
+  const payload = (data ?? {}) as Partial<AgentStatusDTO>
+  return {
+    running: Boolean(payload.running),
+    backfillTotal: payload.backfillTotal ?? null,
+    backfillDone: payload.backfillDone ?? null,
+  }
 }
 
 export async function startAgent(username: string): Promise<void> {
