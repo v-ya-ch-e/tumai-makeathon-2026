@@ -5,9 +5,8 @@ script is **idempotent** — every step inspects the current schema /
 data state first and skips work that's already done, so it's safe to
 re-run after a partial failure.
 
-Four steps, ordered per the rollout plan
-(`docs/MULTI_SOURCE_SCRAPER_PLAN.md` D-2 + D-11; step 4 added per
-`docs/SCRAPER_LOCAL_AND_FRESHNESS_PLAN.md` §4):
+Four steps, ordered per the multi-source rollout (cross-source contract
+in `docs/SCRAPER.md`; ADR-020 + ADR-021 in `docs/DECISIONS.md`):
 
   1. Widen `listingrow` text columns (`url`, `title`, `city`, `district`,
      `address`, `description`, `scrape_error`) from `VARCHAR(255)` to
@@ -34,7 +33,7 @@ Four steps, ordered per the rollout plan
 
 The backend container MUST be stopped while this runs (so it doesn't
 race the namespacing UPDATE on `listingrow.id`). The scraper is no
-longer a cloud service (per `docs/SCRAPER_LOCAL_AND_FRESHNESS_PLAN.md`)
+longer a cloud service (see `docs/SCRAPER.md` § "Local scraper run")
 — just confirm no laptop pass is running, then restart the backend
 after the script returns.
 
@@ -271,9 +270,8 @@ def step_3_force_rescrape(session: Session, *, dry_run: bool) -> None:
 def step_4_wipe_listings(session: Session, *, dry_run: bool) -> None:
     """Wipe the global listing pool so the relaunched scraper reseeds it.
 
-    Per `docs/SCRAPER_LOCAL_AND_FRESHNESS_PLAN.md` G4: zero rows in
-    `listingrow` / `photorow` / `userlistingrow` and every
-    `useractionrow.listing_id` set to NULL (rows preserved). Children
+    Goal: zero rows in `listingrow` / `photorow` / `userlistingrow` and
+    every `useractionrow.listing_id` set to NULL (rows preserved). Children
     nulled / deleted before the parent so no FK constraint is violated
     mid-transaction. Idempotent: a no-op when `listingrow` is already
     empty.

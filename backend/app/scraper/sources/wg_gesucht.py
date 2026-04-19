@@ -7,7 +7,7 @@ its job is to expose the existing wg-gesucht code path through the
 `Source` protocol so `ScraperAgent` can dispatch to it the same way
 as `tum-living` and `kleinanzeigen`.
 
-Recipe + DOM selectors: `../SOURCE_WG_GESUCHT.md`.
+Recipe + DOM selectors: `docs/SCRAPER.md` § "Source: wg-gesucht".
 """
 
 from __future__ import annotations
@@ -22,7 +22,7 @@ from .base import Kind
 class WgGesuchtSource:
     """Anonymous httpx + bs4 source. Iterates the WG vertical only.
 
-    Flat-vertical category id is unverified (see `SOURCE_WG_GESUCHT.md`
+    Flat-vertical category id is unverified (see `docs/SCRAPER.md` § "Source: wg-gesucht"
     TODO #3); `kind_supported` is therefore `{'wg'}` until live recon
     pins down the right slug. Kleinanzeigen and TUM Living already
     cover the flat vertical so users with `mode='flat'` still get

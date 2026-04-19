@@ -216,9 +216,9 @@ def test_dry_run_does_not_mutate(monkeypatch) -> None:
 
 
 def test_step_4_wipes_listings_and_nulls_action_fk(monkeypatch) -> None:
-    """G4 (SCRAPER_LOCAL_AND_FRESHNESS_PLAN.md): listingrow / photorow /
-    userlistingrow are emptied; useractionrow rows survive with listing_id
-    nulled; user / search-profile / credentials rows are untouched."""
+    """Step 4 wipe: listingrow / photorow / userlistingrow are emptied;
+    useractionrow rows survive with listing_id nulled; user / search-profile /
+    credentials rows are untouched."""
     from app.wg_agent.db_models import (
         SearchProfileRow,
         WgCredentialsRow,

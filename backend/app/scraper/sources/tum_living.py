@@ -1,6 +1,6 @@
 """TUM Living (living.tum.de) GraphQL source plugin.
 
-Verified queries and field notes: `../SOURCE_TUM_LIVING.md`.
+Verified queries and field notes: `docs/SCRAPER.md` § "Source: tum-living".
 """
 
 from __future__ import annotations

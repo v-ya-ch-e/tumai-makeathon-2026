@@ -32,7 +32,7 @@ def test_parse_listings_response() -> None:
         assert str(stub.url).startswith("https://living.tum.de/listings/")
         assert str(stub.url).endswith("/view")
         assert stub.price_eur is not None and stub.price_eur > 0
-    # Per SOURCE_TUM_LIVING.md (D-8 in MULTI_SOURCE_SCRAPER_PLAN.md):
+    # Per docs/SCRAPER.md § "Source: tum-living" (recon summary):
     # individual listings can lack `coordinates`; we leave `lat=lng=None` and
     # let `commute_fit` short-circuit. Most listings *should* have them, so
     # assert at least one stub has both.

@@ -8,7 +8,7 @@ Background reading for each item is linked inline. The evaluator pipeline is def
 
 ### wg-gesucht flat-vertical scraping (close the `mode='flat'` gap on wg-gesucht)
 
-**Why:** Per [MULTI_SOURCE_SCRAPER_PLAN](./MULTI_SOURCE_SCRAPER_PLAN.md) and [SOURCE_WG_GESUCHT.md](../backend/app/scraper/SOURCE_WG_GESUCHT.md) TODO #3, the wg-gesucht plugin currently advertises `kind_supported = {'wg'}` because the URL slug + numeric category id for the flat verticals (`Wohnungen`, `1-Zimmer-Wohnungen`, `Häuser`) are not verified anywhere in this repo. Users with `mode='flat'` already get flats from Kleinanzeigen + TUM Living, but wg-gesucht is the largest pool in Munich, so closing this gap roughly doubles the flat candidate count.
+**Why:** Per [SCRAPER.md "Source: wg-gesucht"](./SCRAPER.md#url-schema-wg-gesucht), the wg-gesucht plugin currently advertises `kind_supported = {'wg'}` because the URL slug + numeric category id for the flat verticals (`Wohnungen`, `1-Zimmer-Wohnungen`, `Häuser`) are not verified anywhere in this repo. Users with `mode='flat'` already get flats from Kleinanzeigen + TUM Living, but wg-gesucht is the largest pool in Munich, so closing this gap roughly doubles the flat candidate count.
 
 **Shape of the change:**
 
@@ -17,7 +17,7 @@ Background reading for each item is linked inline. The evaluator pipeline is def
 - Extend `WgGesuchtSource` ([`backend/app/scraper/sources/wg_gesucht.py`](../backend/app/scraper/sources/wg_gesucht.py)) to `kind_supported = frozenset({"wg", "flat"})` and dispatch on `kind` to either `build_search_url` or `build_flat_search_url` inside `search`.
 - Add a `parse_search_page` test fixture for one captured flat-vertical search page; assert id namespacing + `kind == "flat"`.
 
-**Touches:** `backend/app/wg_agent/browser.py`, `backend/app/scraper/sources/wg_gesucht.py`, `backend/app/scraper/SOURCE_WG_GESUCHT.md` (move TODO #3 to Done), `backend/tests/test_wg_parser.py` (or a sibling fixture-driven test).
+**Touches:** `backend/app/wg_agent/browser.py`, `backend/app/scraper/sources/wg_gesucht.py`, [`docs/SCRAPER.md`](./SCRAPER.md) (update the wg-gesucht flat-vertical note), `backend/tests/test_wg_parser.py` (or a sibling fixture-driven test).
 
 ### Deterministic pre-filter on search results
 
@@ -51,7 +51,7 @@ Instead of one `vibe_fit` LLM call, ask the LLM to rate each soft component (`pr
 
 Track what's shipped so reviewers and demo judges can spot-check the history without spelunking git.
 
-- **2026-04-18** — ADR-020 + ADR-021: multi-source scraper. Generalized `ScraperAgent` from a hard-coded wg-gesucht loop into a `Source` plugin registry under [`backend/app/scraper/sources/`](../backend/app/scraper/sources/) (wg-gesucht, TUM Living, Kleinanzeigen — selectable via `SCRAPER_ENABLED_SOURCES`). Every `ListingRow.id` is now namespaced (`f"{source}:{external_id}"`); every row carries a `kind` (`'wg'` | `'flat'`); the matcher honors `SearchProfile.mode` for the first time. Per-source-scoped deletion sweep so a wg-gesucht-only pass cannot tombstone Kleinanzeigen rows. New [`backend/app/scraper/migrate_multi_source.py`](../backend/app/scraper/migrate_multi_source.py) one-shot DB migration (idempotent, transactional, `--dry-run`). Plan: [`MULTI_SOURCE_SCRAPER_PLAN.md`](./MULTI_SOURCE_SCRAPER_PLAN.md). 11 new tests across parsers, mode filter (G3), and per-source sweep scoping (G4).
+- **2026-04-18** — ADR-020 + ADR-021: multi-source scraper. Generalized `ScraperAgent` from a hard-coded wg-gesucht loop into a `Source` plugin registry under [`backend/app/scraper/sources/`](../backend/app/scraper/sources/) (wg-gesucht, TUM Living, Kleinanzeigen — selectable via `SCRAPER_ENABLED_SOURCES`). Every `ListingRow.id` is now namespaced (`f"{source}:{external_id}"`); every row carries a `kind` (`'wg'` | `'flat'`); the matcher honors `SearchProfile.mode` for the first time. Per-source-scoped deletion sweep so a wg-gesucht-only pass cannot tombstone Kleinanzeigen rows. New [`backend/app/scraper/migrate_multi_source.py`](../backend/app/scraper/migrate_multi_source.py) one-shot DB migration (idempotent, transactional, `--dry-run`). Recon + contract: [`docs/SCRAPER.md`](./SCRAPER.md).
 - **2026-04-18** — ADR-019: dropped Alembic in favour of `SQLModel.metadata.create_all` on startup; deleted `backend/alembic/` + `backend/alembic.ini` + the `alembic` dependency. See [BACKEND.md "Schema evolution"](./BACKEND.md#schema-evolution).
 - **2026-04-18** — ADR-018: split scraper into its own container, global `ListingRow` pool, MySQL-only persistence. See [DECISIONS.md](./DECISIONS.md#adr-018-separate-scraper-container--global-listingrow-mysql-only).
 - **2026-04-18** — ADR-015: scorecard evaluator with deterministic components + narrow LLM vibe. Replaces the single-LLM-call scoring path. 50 new tests in `[test_evaluator.py](../backend/tests/test_evaluator.py)`; component-breakdown bars in `[ListingDrawer](../frontend/src/components/ListingDrawer.tsx)`.

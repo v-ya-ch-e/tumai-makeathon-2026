@@ -1,6 +1,6 @@
 """kleinanzeigen.de scraper plugin (Source protocol implementation).
 
-Recipe + DOM selectors: `../SOURCE_KLEINANZEIGEN.md`.
+Recipe + DOM selectors: `docs/SCRAPER.md` § "Source: kleinanzeigen".
 """
 
 from __future__ import annotations
@@ -363,8 +363,8 @@ def parse_listing_page_ka(html: str, listing: Listing) -> Listing:
     # Posting date lives on the detail page only — search cards don't
     # expose it on Kleinanzeigen. The agent's freshness gate consumes
     # `posted_at` after `scrape_detail` returns, so a stale ad costs us
-    # one detail fetch but never a write. Selector pinned per the plan
-    # (`docs/SCRAPER_LOCAL_AND_FRESHNESS_PLAN.md` §3.2): the date sits
+    # one detail fetch but never a write. Selector pinned per
+    # `docs/SCRAPER.md` § "Source: kleinanzeigen": the date sits
     # in the FIRST `<div>` child of `#viewad-extra-info`; `#viewad-cntr`
     # (the view counter) is a sibling div we must NOT match.
     date_span = soup.select_one("#viewad-extra-info > div:first-child > span")

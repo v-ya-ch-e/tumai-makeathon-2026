@@ -38,13 +38,11 @@ Full runtime diagram: [`docs/ARCHITECTURE.md`](./docs/ARCHITECTURE.md).
 │   ├── SETUP.md ──────────── clone-to-running in ~30 min + first-contribution recipes
 │   ├── ARCHITECTURE.md ──── runtime shape, request flow, why each piece exists
 │   ├── DATA_MODEL.md ─────── every table + DTO + the three-layer rule
-│   ├── BACKEND.md ────────── file-by-file tour of backend/app/wg_agent/
+│   ├── BACKEND.md ────────── file-by-file tour of backend/app/wg_agent/ + agent loop end-to-end
 │   ├── FRONTEND.md ───────── file-by-file tour of frontend/src/
-│   ├── AGENT_LOOP.md ────── one HuntEngine.run_find_only pass end-to-end
-│   ├── DESIGN.md ─────────── palette, typography, primitives, enforced rules
-│   ├── WG_GESUCHT.md ────── live recon notes + DOM selectors we depend on
-│   ├── DECISIONS.md ─────── ADR log (ADR-001 … ADR-021)
-│   ├── MULTI_SOURCE_SCRAPER_PLAN.md  rollout plan for the multi-source scraper
+│   ├── DESIGN.md ─────────── Sherlock Homes brand, palette, typography, primitives, copywriting
+│   ├── SCRAPER.md ────────── multi-source scraper contract + per-source recon (wg-gesucht / tum-living / kleinanzeigen)
+│   ├── DECISIONS.md ─────── ADR log
 │   ├── ROADMAP.md ────────── queued / later / done-recently
 │   └── _generated/openapi.json   committed OpenAPI spec
 │
@@ -58,8 +56,7 @@ Full runtime diagram: [`docs/ARCHITECTURE.md`](./docs/ARCHITECTURE.md).
 │   ├── README.md ─────────── pointer back to docs/
 │   ├── app/main.py ───────── lifespan: init_db → resume_user_agents → API (no Alembic)
 │   ├── app/wg_agent/ ────── agent package (see docs/BACKEND.md for file-by-file)
-│   ├── app/scraper/ ─────── scraper container + sources/ plugins (wg-gesucht / tum-living / kleinanzeigen) + per-site recon (README.md, SOURCE_*.md) + migrate_multi_source.py one-shot DB migration
-│   ├── alembic/versions/ ── 0001_initial … 0007_nearby_places (see docs/DATA_MODEL.md)
+│   ├── app/scraper/ ─────── scraper container + sources/ plugins (wg-gesucht / tum-living / kleinanzeigen) + migrate_multi_source.py one-shot DB migration (see docs/SCRAPER.md)
 │   └── tests/ ────────────── pytest suite (parser, repo, evaluator, periodic, commute, …)
 │
 └── frontend/                Vite + React SPA
@@ -75,12 +72,11 @@ Full runtime diagram: [`docs/ARCHITECTURE.md`](./docs/ARCHITECTURE.md).
 1. [`docs/README.md`](./docs/README.md) — doc index, what the agent does, stack-at-a-glance, three-layer rule.
 2. [`docs/ARCHITECTURE.md`](./docs/ARCHITECTURE.md) — runtime shape of the WG Hunter stack.
 3. [`docs/DATA_MODEL.md`](./docs/DATA_MODEL.md) — the **three-layer rule** (UI ↔ DTO ↔ domain ↔ row) that every API change must respect.
-4. [`docs/BACKEND.md`](./docs/BACKEND.md) and [`docs/FRONTEND.md`](./docs/FRONTEND.md) — file maps.
-5. [`docs/AGENT_LOOP.md`](./docs/AGENT_LOOP.md) — one hunt iteration in detail.
-6. [`docs/DECISIONS.md`](./docs/DECISIONS.md) — ADR log; add an entry for any new architecture decision.
-7. [`docs/ROADMAP.md`](./docs/ROADMAP.md) — queued work and explicit non-goals.
+4. [`docs/BACKEND.md`](./docs/BACKEND.md) and [`docs/FRONTEND.md`](./docs/FRONTEND.md) — file maps; BACKEND covers the agent loop end-to-end.
+5. [`docs/DECISIONS.md`](./docs/DECISIONS.md) — ADR log; add an entry for any new architecture decision.
+6. [`docs/ROADMAP.md`](./docs/ROADMAP.md) — queued work and explicit non-goals.
 
-When touching the agent scoring surface, also skim [`docs/WG_GESUCHT.md`](./docs/WG_GESUCHT.md) for the DOM selectors and rate-limit notes we depend on.
+When touching the scraper or scoring surface, also skim [`docs/SCRAPER.md`](./docs/SCRAPER.md) for the DOM selectors, GraphQL queries, and rate-limit notes we depend on.
 
 ## Behavioral guidelines
 

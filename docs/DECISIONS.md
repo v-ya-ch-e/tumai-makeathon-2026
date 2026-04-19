@@ -52,7 +52,7 @@ ADR index for WG Hunter. Each entry lists context, decision, consequences, and t
 ## ADR-004: Per-hunt listings (composite primary key)
 
 - **Date:** 2026-04-18  
-- **Status:** Accepted  
+- **Status:** Superseded by [ADR-018](#adr-018-separate-scraper-container--global-listingrow-mysql-only)
 
 **Context:** Two users (or two hunts) can target the same wg-gesucht numeric listing id; a global listing table would collide or leak scores across hunts.
 
@@ -97,7 +97,7 @@ ADR index for WG Hunter. Each entry lists context, decision, consequences, and t
 ## ADR-007: SSE hybrid queue + DB poll
 
 - **Date:** 2026-04-18  
-- **Status:** Accepted  
+- **Status:** Superseded by [ADR-018](#adr-018-separate-scraper-container--global-listingrow-mysql-only) (per-user `/api/users/{username}/stream` replaces per-hunt route; MySQL replaces SQLite). The hybrid-queue + DB-replay pattern itself is still in force — see [BACKEND.md "Agent loop"](./BACKEND.md#agent-loop).
 
 **Context:** The dashboard wants near-live updates, but in-process queues alone would miss actions after a reload or if producers/consumers differ.
 

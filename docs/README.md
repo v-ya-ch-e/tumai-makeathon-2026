@@ -8,7 +8,7 @@ Autonomous WG-Gesucht room hunter for the TUM.ai Makeathon 2026 ("Campus Co-Pilo
 
 Two cooperating agents sit on top of a shared MySQL database.
 
-**Scraper container** ([`app/scraper/`](../backend/app/scraper/)) — Runs continuously, independent of any user. Queries `wg-gesucht.de` search pages via **httpx** (anonymous), deep-scrapes every new listing, and writes one global `ListingRow` per wg-gesucht id (with description, `(lat, lng)` from the embedded map config, photos, etc.). Refreshes listings whose `scraped_at` is older than `SCRAPER_REFRESH_HOURS`.
+**Scraper container** ([`app/scraper/`](../backend/app/scraper/)) — Runs continuously, independent of any user. Drives a registry of `Source` plugins ([`backend/app/scraper/sources/`](../backend/app/scraper/sources/)) — wg-gesucht (default), TUM Living, Kleinanzeigen — selectable via `SCRAPER_ENABLED_SOURCES`. Each source emits namespaced ids (`f"{source}:{external_id}"`) and a `kind` (`'wg'` | `'flat'`); the scraper deep-scrapes every new listing and writes one global `ListingRow` per id (with description, `(lat, lng)`, photos, etc.). Refreshes listings whose `scraped_at` is older than `SCRAPER_REFRESH_HOURS`. See [SCRAPER.md](./SCRAPER.md).
 
 **Backend container** — A student fills a short wizard (demographics, rent/size/commute requirements, weighted preferences) and saves the search profile. The backend spawns a per-user background task (`UserAgent`) that runs continuously and *matches* — never scrapes:
 
@@ -39,13 +39,11 @@ docs/
 ├── SETUP.md ──────────────── clone-to-running in ~30 min + first-contribution recipes
 ├── ARCHITECTURE.md ──────── runtime shape, request flow, why each piece exists
 ├── DATA_MODEL.md ─────────── every table with columns + JSON example + ER diagram
-├── BACKEND.md ────────────── file-by-file tour of backend/app/wg_agent/
+├── BACKEND.md ────────────── file-by-file tour of backend/app/wg_agent/ + agent loop end-to-end
 ├── FRONTEND.md ───────────── file-by-file tour of frontend/src/
-├── AGENT_LOOP.md ─────────── one UserAgent.run_match_pass end-to-end
-├── DESIGN.md ─────────────── palette, typography, UI primitives, enforced rules
-├── WG_GESUCHT.md ─────────── live recon notes + DOM selectors we depend on
-├── DECISIONS.md ──────────── ADR log (ADR-001 … ADR-021)
-├── MULTI_SOURCE_SCRAPER_PLAN.md  rollout plan for the multi-source scraper (wg-gesucht / tum-living / kleinanzeigen)
+├── DESIGN.md ─────────────── Sherlock Homes brand, palette, typography, UI primitives, copywriting
+├── SCRAPER.md ───────────── multi-source scraper contract + per-source recon (wg-gesucht / tum-living / kleinanzeigen)
+├── DECISIONS.md ──────────── ADR log
 ├── ROADMAP.md ────────────── queued / later / done-recently
 └── _generated/openapi.json   committed OpenAPI spec (regenerate after API changes)
 ```
@@ -56,21 +54,19 @@ Related files outside `docs/`:
 - [`../CLAUDE.md`](../CLAUDE.md) / [`../AGENTS.md`](../AGENTS.md) — behavioral guidelines + doc tree for coding agents.
 - [`../DEPLOYMENT.md`](../DEPLOYMENT.md) / [`../CI-CONFIGURATION.md`](../CI-CONFIGURATION.md) — EC2 + GitHub Actions recipes.
 - [`../context/`](../context/) — hackathon background: challenge brief, TUM systems inventory, code samples.
-- [`../backend/app/scraper/README.md`](../backend/app/scraper/README.md) — multi-source scraper contract + per-site recon docs (`SOURCE_WG_GESUCHT.md`, `SOURCE_TUM_LIVING.md`, `SOURCE_KLEINANZEIGEN.md`).
 
 ## Read in order
 
 1. [**SETUP.md**](./SETUP.md) — clone to running locally in ~30 minutes.
 2. [**ARCHITECTURE.md**](./ARCHITECTURE.md) — process shape, request flow, why each piece exists.
 3. [**DATA_MODEL.md**](./DATA_MODEL.md) — every table with columns + JSON example, the three-layer rule, ER diagram.
-4. [**BACKEND.md**](./BACKEND.md) — file-by-file tour of `backend/app/wg_agent/`.
+4. [**BACKEND.md**](./BACKEND.md) — file-by-file tour of `backend/app/wg_agent/`, including the agent loop (`UserAgent.run_match_pass`) end-to-end.
 5. [**FRONTEND.md**](./FRONTEND.md) — file-by-file tour of `frontend/src/`.
-6. [**AGENT_LOOP.md**](./AGENT_LOOP.md) — one `UserAgent.run_match_pass` end-to-end (happy path + error paths + rescan + resumption).
-7. [**DESIGN.md**](./DESIGN.md) — warm-cream palette, primitives, enforced rules.
-8. [**WG_GESUCHT.md**](./WG_GESUCHT.md) — live recon notes and DOM selectors we depend on.
-9. [**DECISIONS.md**](./DECISIONS.md) — ADR log. Every non-trivial architecture decision has a record here.
-10. [**ROADMAP.md**](./ROADMAP.md) — what's next and what we deliberately left out.
-11. [**_generated/openapi.json**](./_generated/openapi.json) — committed OpenAPI spec. Regenerate after API changes (see [below](#regenerating-the-openapi-spec)).
+6. [**DESIGN.md**](./DESIGN.md) — Sherlock Homes brand identity, palette, primitives, copywriting principles.
+7. [**SCRAPER.md**](./SCRAPER.md) — multi-source scraper contract + per-source recon notes (DOM selectors, GraphQL queries, anti-bot posture).
+8. [**DECISIONS.md**](./DECISIONS.md) — ADR log. Every non-trivial architecture decision has a record here.
+9. [**ROADMAP.md**](./ROADMAP.md) — what's next and what we deliberately left out.
+10. [**_generated/openapi.json**](./_generated/openapi.json) — committed OpenAPI spec. Regenerate after API changes (see [below](#regenerating-the-openapi-spec)).
 
 ## The three-layer rule
 

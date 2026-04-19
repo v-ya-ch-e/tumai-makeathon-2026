@@ -5,15 +5,15 @@ Our submission for Reply's **The Campus Co-Pilot Suite** challenge: autonomous a
 The active workstream is **WG Hunter** — a fully autonomous `wg-gesucht.de` room hunt that searches, ranks, and surfaces listings via a live React dashboard.
 
 ```text
-┌──────────────┐          ┌──────────────────────────┐          ┌────────────────┐
-│ React SPA    │ ──fetch──▶ FastAPI (/api + SPA)     │ ──httpx──▶ Google Maps    │
-│ (Vite, TS)   │ ◀── SSE ──│ HuntEngine → evaluator   │ ──httpx──▶ OpenAI (vibe)  │
-└──────────────┘          └──────────────────────────┘          └────────────────┘
-                                       │                         ┌────────────────┐
-                                       ▼                         │ wg-gesucht.de  │
-                                  ┌─────────┐    ┌──────────┐    └────────────────┘
-                                  │ MySQL   │◀───│ Scraper  │───httpx──────▲
-                                  │ (AWS)   │    │ container│
+┌──────────────┐          ┌──────────────────────────┐          ┌──────────────────────────┐
+│ React SPA    │ ──fetch──▶ FastAPI (/api + SPA)     │ ──httpx──▶ Google Maps + OpenAI    │
+│ (Vite, TS)   │ ◀── SSE ──│ matcher → evaluator     │                                    │
+└──────────────┘          └──────────────────────────┘          ┌──────────────────────────┐
+                                       │                         │ wg-gesucht.de            │
+                                       ▼                         │ living.tum.de (GraphQL)  │
+                                  ┌─────────┐    ┌──────────┐    │ kleinanzeigen.de         │
+                                  │ MySQL   │◀───│ Scraper  │───▶└──────────────────────────┘
+                                  │ (AWS)   │    │ (laptop) │
                                   └─────────┘    └──────────┘
 ```
 
@@ -54,7 +54,7 @@ Prerequisites (details in [`docs/SETUP.md`](./docs/SETUP.md)):
    npm run build
    ```
 
-3. Run the backend — it creates any missing tables on the shared AWS MySQL, resumes any `running` hunts, and serves the built SPA at `/`:
+3. Run the backend — it creates any missing tables on the shared AWS MySQL, resumes per-user matcher loops for every saved search profile, and serves the built SPA at `/`:
 
    ```bash
    cd ../backend
@@ -114,9 +114,9 @@ The short version:
    docker compose up -d --build
    ```
 
-   The root [`docker-compose.yml`](./docker-compose.yml) starts an nginx frontend (port 80, with the built Vite SPA and a reverse proxy to `/api/*`) and a FastAPI backend that persists its SQLite database to the `wg_data` named volume.
+   The root [`docker-compose.yml`](./docker-compose.yml) starts an nginx frontend (port 80, with the built Vite SPA and a reverse proxy to `/api/*`) and a FastAPI backend that talks to the shared AWS RDS MySQL using the `DB_*` env vars.
 
-   > The scraper runs **locally** (laptop) against the shared MySQL — it is no longer a cloud service. The cloud deploy is backend + frontend only. See [`backend/app/scraper/README.md`](./backend/app/scraper/README.md#local-scraper-run-laptop).
+   > The scraper runs **locally** (laptop) against the shared MySQL — it is no longer a cloud service. The cloud deploy is backend + frontend only. See [`docs/SCRAPER.md`](./docs/SCRAPER.md#local-scraper-run-laptop).
 
 5. Verify: `curl http://<EC2_PUBLIC_IP>/api/health` → `{"status":"ok"}`. Open `http://<EC2_PUBLIC_IP>/` for the app and `/docs` for interactive API docs.
 
@@ -147,7 +147,7 @@ From [`.env.example`](./.env.example). Vite reads the same file via [`envDir: '.
 | `WG_SECRET_KEY` | no | backend | Pin the Fernet key used to encrypt credentials (else auto-generated at `~/.wg_hunter/secret.key`) |
 | `WG_RESCAN_INTERVAL_MINUTES` | no | backend | Global floor on how often each per-user matcher re-checks the listing pool (minutes). Overrides the per-profile value when set. Default `3` in `.env.example` so new matches email within a few minutes of scraping |
 | `WG_STATE_FILE` | no | backend | Playwright `storage_state.json` for authenticated flows (reserved for post-v1) |
-| `SCRAPER_ENABLED_SOURCES` | no | scraper | Comma-separated source names. Default `wg-gesucht`. Valid: `wg-gesucht`, `tum-living`, `kleinanzeigen`. See [`docs/MULTI_SOURCE_SCRAPER_PLAN.md`](./docs/MULTI_SOURCE_SCRAPER_PLAN.md) |
+| `SCRAPER_ENABLED_SOURCES` | no | scraper | Comma-separated source names. Default `wg-gesucht`. Valid: `wg-gesucht`, `tum-living`, `kleinanzeigen`. See [`docs/SCRAPER.md`](./docs/SCRAPER.md) |
 | `SCRAPER_CITY` / `SCRAPER_MAX_RENT` / `SCRAPER_MAX_PAGES` / `SCRAPER_INTERVAL_SECONDS` / `SCRAPER_REFRESH_HOURS` / `SCRAPER_DELETION_PASSES` | no | scraper | Tune the scraper loop. Defaults: `München` / `2000` / `2` / `300` / `24` / `2` |
 | `AWS_ACCESS_KEY_ID` / `AWS_SECRET_ACCESS_KEY` / `AWS_DEFAULT_REGION` | no | backend | IAM user credentials + region for Amazon SES. Used by [`notifier.py`](./backend/app/wg_agent/notifier.py) to email users when a new match scores at/above `WG_NOTIFY_THRESHOLD`. See [`DEPLOYMENT.md`](./DEPLOYMENT.md#email-notifications-amazon-ses) for the one-time SES setup. Blank values silently disable notifications |
 | `SES_FROM_EMAIL` | no | backend | Sender identity for score-alert emails (must be a verified SES identity in `AWS_DEFAULT_REGION`). Default `noreply@doubleu.team` |
@@ -172,13 +172,11 @@ All developer docs live under **[`docs/`](./docs/README.md)**. Layout:
 │   ├── SETUP.md ───────────── clone-to-running in ~30 min
 │   ├── ARCHITECTURE.md ───── runtime shape + request flow
 │   ├── DATA_MODEL.md ─────── tables, DTOs, ER diagram, three-layer rule
-│   ├── BACKEND.md ──────────  file-by-file tour of backend/app/wg_agent/
+│   ├── BACKEND.md ──────────  file-by-file tour of backend/app/wg_agent/ + agent loop
 │   ├── FRONTEND.md ────────── file-by-file tour of frontend/src/
-│   ├── AGENT_LOOP.md ─────── one HuntEngine.run_find_only pass end-to-end
-│   ├── DESIGN.md ──────────── palette, typography, UI primitives
-│   ├── WG_GESUCHT.md ─────── DOM selectors and rate-limit notes
-│   ├── DECISIONS.md ──────── ADR log (ADR-001 … ADR-021)
-│   ├── MULTI_SOURCE_SCRAPER_PLAN.md  rollout plan for the multi-source scraper
+│   ├── DESIGN.md ──────────── Sherlock Homes brand, palette, typography, copywriting, UI primitives
+│   ├── SCRAPER.md ────────── multi-source scraper contract + per-source recon
+│   ├── DECISIONS.md ──────── ADR log
 │   ├── ROADMAP.md ─────────── queued / later / done-recently
 │   └── _generated/openapi.json   committed OpenAPI spec
 └── context/ ──────────────── hackathon background (challenge brief, TUM systems, code samples)
@@ -189,8 +187,8 @@ Suggested read order for new contributors:
 1. [`docs/SETUP.md`](./docs/SETUP.md) — clone to running in 30 min.
 2. [`docs/ARCHITECTURE.md`](./docs/ARCHITECTURE.md) — runtime shape + request flow.
 3. [`docs/DATA_MODEL.md`](./docs/DATA_MODEL.md) — entities, ER diagram, the three-layer rule.
-4. [`docs/BACKEND.md`](./docs/BACKEND.md), [`docs/FRONTEND.md`](./docs/FRONTEND.md), [`docs/AGENT_LOOP.md`](./docs/AGENT_LOOP.md) — walkthroughs.
-5. [`docs/DESIGN.md`](./docs/DESIGN.md), [`docs/DECISIONS.md`](./docs/DECISIONS.md), [`docs/WG_GESUCHT.md`](./docs/WG_GESUCHT.md).
+4. [`docs/BACKEND.md`](./docs/BACKEND.md), [`docs/FRONTEND.md`](./docs/FRONTEND.md) — walkthroughs (BACKEND covers the agent loop end-to-end).
+5. [`docs/DESIGN.md`](./docs/DESIGN.md), [`docs/SCRAPER.md`](./docs/SCRAPER.md), [`docs/DECISIONS.md`](./docs/DECISIONS.md).
 6. [`docs/ROADMAP.md`](./docs/ROADMAP.md) — what's next and what's deliberately out of scope.
 7. [`docs/_generated/openapi.json`](./docs/_generated/openapi.json) — OpenAPI spec (regenerated after API changes).
 

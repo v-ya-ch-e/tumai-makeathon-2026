@@ -73,7 +73,7 @@ One-to-one requirements/preferences schedule slice persisted for the wizard. Map
 | `title` | `Optional[str]` | `TEXT`. |
 | `price_eur` | `Optional[int]` | |
 | `size_m2` | `Optional[float]` | |
-| `wg_size` | `Optional[int]` | Total flatmates including the new tenant. wg-gesucht reads `(\d+)er WG`; Kleinanzeigen reads `Anzahl Mitbewohner` and adds 1 (per [MULTI_SOURCE_SCRAPER_PLAN D-3](./MULTI_SOURCE_SCRAPER_PLAN.md#open-design-decisions)); TUM Living leaves it `None` (the GraphQL API does not expose flatmate count). |
+| `wg_size` | `Optional[int]` | Total flatmates including the new tenant. wg-gesucht reads `(\d+)er WG`; Kleinanzeigen reads `Anzahl Mitbewohner` and adds 1; TUM Living leaves it `None` (the GraphQL API does not expose flatmate count). See [SCRAPER.md](./SCRAPER.md) for the per-source field maps. |
 | `city` | `Optional[str]` | `TEXT`. Parsed from each source's locality block; fed into `brain.vibe_score`'s listing summary. |
 | `district` | `Optional[str]` | `TEXT`. Used in `evaluator.hard_filter`'s avoid-districts veto. |
 | `address` | `Optional[str]` | `TEXT`. Street + number when the source exposes it (wg-gesucht, TUM Living); `None` for Kleinanzeigen, which only publishes PLZ + district. |
@@ -81,7 +81,7 @@ One-to-one requirements/preferences schedule slice persisted for the wizard. Map
 | `lng` | `Optional[float]` | Same per-source origin as `lat`; paired for commute-aware scoring. |
 | `available_from` | `Optional[date]` | |
 | `available_to` | `Optional[date]` | |
-| `description` | `Optional[str]` | `TEXT` (per [MULTI_SOURCE_SCRAPER_PLAN D-11](./MULTI_SOURCE_SCRAPER_PLAN.md#open-design-decisions); the prior `VARCHAR(255)` silently truncated 2 KB+ bodies). Filled after deep scrape: wg-gesucht `#ad_description_text`, TUM Living `furtherEquipmentEn`, Kleinanzeigen `#viewad-description-text`. |
+| `description` | `Optional[str]` | `TEXT` (the prior `VARCHAR(255)` silently truncated 2 KB+ bodies; widened in the multi-source rollout — see [SCRAPER.md "Migration verification"](./SCRAPER.md#migration-verification)). Filled after deep scrape: wg-gesucht `#ad_description_text`, TUM Living `furtherEquipmentEn`, Kleinanzeigen `#viewad-description-text`. |
 | `furnished` | `Optional[bool]` | `True` / `False` / `None` (unknown). Feeds `evaluator.hard_filter` (weight-5 "must-have furnished" veto) and `evaluator.preference_fit`. |
 | `pets_allowed` | `Optional[bool]` | Same shape as `furnished`; feeds the same evaluator paths for weight-5 "must-have pets" vetoes. |
 | `smoking_ok` | `Optional[bool]` | Same shape; feeds the smoking-preference evaluator paths. |
