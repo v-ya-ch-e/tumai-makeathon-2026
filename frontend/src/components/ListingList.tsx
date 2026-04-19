@@ -174,7 +174,7 @@ export function ListingList({
                 aria-pressed={hidden}
                 aria-label={hidden ? 'Unhide listing' : 'Hide listing'}
                 title={hidden ? 'Unhide listing' : 'Hide listing'}
-                className="absolute right-3 top-3 z-20 inline-flex h-8 w-8 items-center justify-center rounded-full border border-hairline bg-surface/90 text-ink-muted shadow-sm backdrop-blur transition-colors hover:border-ink hover:text-ink focus:border-ink focus:outline-none"
+                className="absolute right-7 top-7 z-20 inline-flex h-8 w-8 items-center justify-center rounded-full border border-hairline bg-surface/90 text-ink-muted shadow-sm backdrop-blur transition-colors hover:border-ink hover:text-ink focus:border-ink focus:outline-none sm:right-auto sm:left-[156px]"
               >
                 {hidden ? <EyeOffIcon /> : <EyeIcon />}
               </button>

@@ -961,3 +961,89 @@ def test_set_user_agent_paused_roundtrip(monkeypatch) -> None:
         repo.set_user_agent_paused(session, username="u-flip", paused=False)
     with Session(engine) as session:
         assert repo.is_user_agent_paused(session, username="u-flip") is False
+
+
+def test_run_match_pass_bails_on_paused_flag(monkeypatch) -> None:
+    """A `paused=True` flag observed at the top of `run_match_pass` must
+    short-circuit before any candidate is even considered, so no
+    `UserListingRow` rows are written for a user who pressed "Stop".
+    """
+    engine = _make_engine()
+    monkeypatch.setattr(db_module, "engine", engine)
+
+    with Session(engine) as session:
+        _seed_user(
+            session,
+            "u-stop-top",
+            SearchProfile(
+                city="München",
+                max_rent_eur=900,
+                rescan_interval_minutes=30,
+                schedule="one_shot",
+            ),
+        )
+        _seed_listings(session, ("x1", "x2", "x3"))
+        repo.set_user_agent_paused(session, username="u-stop-top", paused=True)
+
+    evaluate_spy = AsyncMock(side_effect=lambda *a, **kw: _stub_result(0.9))
+
+    with patch(
+        "app.wg_agent.periodic.evaluator.evaluate",
+        new=evaluate_spy,
+    ):
+        returned = asyncio.run(UserAgent("u-stop-top").run_match_pass())
+
+    assert returned == 0
+    evaluate_spy.assert_not_called()
+    with Session(engine) as session:
+        assert repo.list_user_listings(session, username="u-stop-top") == []
+
+
+def test_run_match_pass_bails_when_paused_mid_pass(monkeypatch) -> None:
+    """If `paused` flips to True during a pass, the matcher must stop
+    writing `UserListingRow` rows for the remaining candidates instead of
+    burning through the whole 15-item batch. Regression for "I pressed
+    Stop but listings grew by 9 in 40 seconds".
+    """
+    engine = _make_engine()
+    monkeypatch.setattr(db_module, "engine", engine)
+
+    with Session(engine) as session:
+        _seed_user(
+            session,
+            "u-stop-mid",
+            SearchProfile(
+                city="München",
+                max_rent_eur=900,
+                rescan_interval_minutes=30,
+                schedule="one_shot",
+            ),
+        )
+        _seed_listings(session, ("m1", "m2", "m3", "m4"))
+
+    # Flip the paused flag mid-pass on the first evaluate call — that
+    # mirrors the user pressing "Stop" while one candidate was in flight.
+    scored: list[str] = []
+
+    async def evaluate_once_then_pause(
+        listing: Listing, *args, **kwargs
+    ) -> EvaluationResult:
+        scored.append(listing.id)
+        if len(scored) == 1:
+            with Session(engine) as s:
+                repo.set_user_agent_paused(s, username="u-stop-mid", paused=True)
+        return _stub_result(0.8)
+
+    with patch(
+        "app.wg_agent.periodic.evaluator.evaluate",
+        new=AsyncMock(side_effect=evaluate_once_then_pause),
+    ):
+        asyncio.run(UserAgent("u-stop-mid").run_match_pass())
+
+    # Exactly one listing may have been fully scored (the one in flight
+    # when the flag flipped). The remaining candidates must not be scored.
+    with Session(engine) as session:
+        persisted = [l.id for l in repo.list_user_listings(session, username="u-stop-mid")]
+    assert len(persisted) == 1, f"expected 1 persisted row, got {persisted}"
+    assert persisted[0] == scored[0]
+    assert len(scored) == 1
