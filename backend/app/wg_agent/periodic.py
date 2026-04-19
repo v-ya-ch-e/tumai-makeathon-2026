@@ -253,6 +253,13 @@ class UserAgent:
 
     async def run_match_pass(self, *, max_listings: int = 15) -> int:
         with Session(db_module.engine) as session:
+            if repo.is_user_agent_paused(session, username=self._username):
+                # Persisted pause flag is the authoritative kill switch.
+                # Returning here prevents any `UserListingRow` write for a
+                # user who pressed "Stop" — even if the in-memory `cancel()`
+                # signal hasn't propagated yet, or a stale task slipped
+                # through a reload / scraper-watcher re-wake.
+                return 0
             sp = repo.get_search_profile(session, username=self._username)
             user_row = session.get(UserRow, self._username)
         if sp is None:
@@ -281,6 +288,21 @@ class UserAgent:
         _publish(self._username, search_action)
 
         for row in candidate_rows:
+            # Re-read the persisted pause flag between candidates so a user
+            # who pressed "Stop" mid-pass does not accrue 5–10 more scored
+            # rows while the current pass drains its 15-item candidate list.
+            # Costs one tiny `session.get(UserAgentStateRow, username)` per
+            # candidate (<1ms on a warmed MySQL pool) — cheap next to the
+            # Distance Matrix + LLM calls the scoring step actually makes.
+            with Session(db_module.engine) as session:
+                if repo.is_user_agent_paused(session, username=self._username):
+                    logger.info(
+                        "Agent paused mid-pass for %s; bailing out "
+                        "before writing remaining %d candidate(s).",
+                        self._username,
+                        len(candidate_rows) - candidate_rows.index(row),
+                    )
+                    return new_count
             listing = repo.row_to_domain_listing(row)
             nl = AgentAction(
                 kind=ActionKind.new_listing,
@@ -514,6 +536,18 @@ class PeriodicUserMatcher:
 
     async def start(self) -> None:
         while True:
+            # Self-terminate if the persisted pause flag was flipped (e.g.
+            # by `POST /agent/pause`) but the task's `cancel()` hasn't yet
+            # propagated — this can happen mid-pass or on a loop iteration
+            # that raced with the cancel signal. Exiting here lets the
+            # task reach `done()` so the registry entry is cleaned up.
+            with Session(db_module.engine) as session:
+                if repo.is_user_agent_paused(session, username=self._username):
+                    logger.info(
+                        "PeriodicUserMatcher for %s observed paused=True; exiting loop.",
+                        self._username,
+                    )
+                    return
             try:
                 await self._agent.run_match_pass()
             except asyncio.CancelledError:

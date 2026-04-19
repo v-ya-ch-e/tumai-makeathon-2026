@@ -375,6 +375,8 @@ While the matcher processes candidates it also calls [`UserAgent._maybe_queue_di
 
 Users who explicitly paused their agent (pressed "Stop" in the dashboard → `POST /agent/pause`) are persisted with `UserAgentStateRow.paused=True` and filtered out of `list_usernames_to_resume_on_boot`, so a backend restart does not silently revive an agent the user killed (e.g. because they already found a room). They resume only when they visit the site and press "Resume" — which hits `POST /agent/start`, clears the flag, and spawns the task. `PUT /search-profile` also respects the flag: editing the profile while paused does not re-spawn the agent, because a profile edit is not the same signal as pressing "Resume".
 
+The matcher itself also treats `UserAgentStateRow.paused` as the authoritative kill switch, independent of `task.cancel()`: both `UserAgent.run_match_pass` (at the top, and between candidates) and `PeriodicUserMatcher.start` (at the top of every loop iteration) re-read the flag from the DB and bail out early when it is `True`. This is the guard that prevents the "I pressed Stop but my listing count kept climbing" bug — in-memory `task.cancel()` only fires at the next `await`, so without this re-read the current 15-candidate batch could keep writing `UserListingRow` rows for ~30–60 seconds after Stop as its sync `save_user_match` calls between awaits ran to completion. One DB round-trip per candidate / iteration is cheap next to the Distance Matrix + LLM calls the matcher already makes.
+
 ## Tests
 
 | File | Role | Command |
