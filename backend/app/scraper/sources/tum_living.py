@@ -8,9 +8,8 @@ from __future__ import annotations
 import asyncio
 import json
 import logging
-import os
-from datetime import date, datetime, timedelta, timezone
-from typing import Any, Optional
+from datetime import date, datetime, timezone
+from typing import Any, AsyncIterator, Optional
 
 import httpx
 
@@ -29,7 +28,6 @@ name = "tum-living"
 kind_supported = frozenset({"wg", "flat"})
 search_page_delay_seconds = 2.5
 detail_delay_seconds = 2.5
-max_pages = 7
 refresh_hours = 48
 
 LISTINGS_QUERY = """\
@@ -311,7 +309,6 @@ class TumLivingSource:
     kind_supported = kind_supported
     search_page_delay_seconds = search_page_delay_seconds
     detail_delay_seconds = detail_delay_seconds
-    max_pages = max_pages
     refresh_hours = refresh_hours
 
     def looks_like_block_page(self, text: str, status: int) -> bool:
@@ -350,10 +347,12 @@ class TumLivingSource:
         resp.raise_for_status()
         return resp
 
-    async def search(self, *, kind: Kind, profile: SearchProfile) -> list[Listing]:
+    async def search_pages(
+        self, *, kind: Kind, profile: SearchProfile
+    ) -> AsyncIterator[list[Listing]]:
         del profile  # search filter is kind-only for this source
         if kind not in self.kind_supported:
-            return []
+            return
         if kind == "wg":
             filter_obj: dict[str, str] = {"type": "SHARED_APARTMENT"}
         else:
@@ -365,23 +364,15 @@ class TumLivingSource:
             "Accept-Language": "en-US,en;q=0.9",
             "Content-Type": "application/json",
         }
-        # Same env knob the agent reads. The GraphQL `MOST_RECENT` order
-        # is strictly chronological, so once the first stub on a page is
-        # older than the cutoff we can short-circuit the rest.
-        try:
-            max_age_days = int(os.environ.get("SCRAPER_MAX_AGE_DAYS", "14") or "14")
-        except ValueError:
-            max_age_days = 14
-        cutoff = datetime.utcnow() - timedelta(days=max_age_days)
 
-        out: list[Listing] = []
         async with httpx.AsyncClient(
             base_url=BASE_URL,
             headers=headers,
             timeout=20.0,
         ) as client:
             await self._mint_csrf(client)
-            for page in range(self.max_pages):
+            page = 0
+            while True:
                 payload = {
                     "operationName": "GetListings",
                     "variables": {
@@ -401,24 +392,16 @@ class TumLivingSource:
                 except httpx.HTTPError:
                     if page == 0:
                         raise
-                    break
+                    return
                 body = resp.json()
                 batch = _parse_listings_response(body)
-                out.extend(batch)
-                # Early-stop on `MOST_RECENT`-sorted pagination: the first stub
-                # being too old means every subsequent stub is too old. The
-                # agent's per-stub gate still drops the too-old tail of THIS
-                # batch; this just avoids paying for pages we already know
-                # we'll discard.
-                if batch:
-                    first_posted = batch[0].posted_at
-                    if first_posted is not None and first_posted < cutoff:
-                        break
+                if not batch:
+                    return
+                yield batch
                 if len(batch) < 25:
-                    break
-                if page + 1 < self.max_pages:
-                    await asyncio.sleep(self.search_page_delay_seconds)
-        return out
+                    return
+                await asyncio.sleep(self.search_page_delay_seconds)
+                page += 1
 
     async def scrape_detail(self, stub: Listing) -> Listing:
         if not stub.id.startswith("tum-living:"):

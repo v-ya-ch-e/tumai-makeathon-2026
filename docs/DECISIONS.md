@@ -377,3 +377,57 @@ There is also a deployment wrinkle worth naming: **the scraper may run locally f
 - **In-memory state** — A backend restart drops pending items and resets `last_sent_at`. That is acceptable: the `first_seen_at` gate requeues any still-new listing on the first post-restart pass, and the cooldown simply restarts, which only ever *reduces* the number of emails we send.
 
 **Introduced in:** this commit
+
+---
+
+## ADR-024: Scraper pagination terminates on first-stub freshness, not page count
+
+- **Date:** 2026-04-19
+- **Status:** Accepted
+- **Supersedes:** Per-source `max_pages` ceilings in [`backend/app/scraper/sources/wg_gesucht.py`](../backend/app/scraper/sources/wg_gesucht.py), [`tum_living.py`](../backend/app/scraper/sources/tum_living.py), [`kleinanzeigen.py`](../backend/app/scraper/sources/kleinanzeigen.py), and the `SCRAPER_MAX_PAGES` env knob.
+
+**Context:** Each source previously declared its own `max_pages` (`wg-gesucht=2`, `tum-living=7`, `kleinanzeigen=5`) and a `SCRAPER_MAX_PAGES` env knob existed in `agent.py` but was never plumbed through to the source plugins after the multi-source refactor (see [ADR-020](#adr-020-multi-source-listing-identifiers-via-string-namespacing)). The result: pagination depth was hard-coded per source and could not adapt to the actual posting volume on a given day. tum-living's plugin had a one-off "stop when the first stub is older than `SCRAPER_MAX_AGE_DAYS`" early-exit baked into `search`, but the same heuristic was not available to the other sources.
+
+**Decision:** Pagination is now driven by `ScraperAgent` via a generic per-page freshness probe.
+
+1. The `Source` protocol's `search` is replaced by `search_pages`, an async iterator that yields one batch of stubs per source page. Per-source `max_pages` ceilings are removed; pagination terminates only on (a) empty page, (b) block-like response, or (c) HTTP error after the first page.
+2. For each `(source, kind)` the agent walks the iterator one page at a time. Before processing each batch, it asks `_first_stub_posted_at(source, batch[0])` for the leader's posting date. wg-gesucht and tum-living return the date directly from the stub; kleinanzeigen pays one `scrape_detail` fetch per page leader. The probed leader's enriched listing is **memoized** and reused when the per-page scrape loop processes `batch[0]`, so the detail fetch is never duplicated.
+3. If the leader's date is older than `SCRAPER_MAX_AGE_DAYS` (default 7), pagination stops for that `(source, kind)`. If the date is unknown (parser regression, detail fetch failure), the agent treats the page as fresh and continues — better to over-scrape than to silently halt.
+4. The post-detail freshness gate inside `_scrape_and_save_via` stays as a defensive backstop for non-leader stubs whose detail page reveals an older date than the leader (only matters for kleinanzeigen).
+5. `SCRAPER_MAX_PAGES` is removed from `agent.py`, `.env.example`, the README env table, `docs/SETUP.md`, and `docs/SCRAPER.md`.
+
+**Consequences:**
+
+- **Uniform behavior across sources.** The 14-day rule is enforced once, in the agent, instead of being implemented (or not) inside each plugin.
+- **Adapts to posting volume.** On a slow day for wg-gesucht, the agent now stops after one page if the leader is fresh-but-the-only-fresh one (because page 1's leader will be older than `SCRAPER_MAX_AGE_DAYS`). On a busy day for tum-living, it walks more than the old `max_pages=7` ceiling without manual tuning.
+- **One extra detail fetch per page on kleinanzeigen.** The page-leader probe runs `scrape_detail` to read the posting date the search card lacks. With memoization the page-leader fetch is reused, so the net cost is "1 extra detail per page" — acceptable for the most anti-bot-sensitive source given the typical 1-3 pages of ka results in Munich.
+- **No anti-block ceiling.** A parser regression that loses `posted_at` will paginate until the source returns an empty page (or trips the block detector for kleinanzeigen). Mitigation: every source still stops on empty pages, and kleinanzeigen also stops on `looks_like_block_page`. We accepted "no caps" over "raise the caps and keep them" to keep the contract uniform; if runaway pagination ever bites in production, adding a single `SCRAPER_HARD_PAGE_LIMIT` in the agent is one trivial follow-up.
+
+**Introduced in:** this commit
+
+---
+
+## ADR-025: LLM-driven enrichment of missing structured fields (opt-in)
+
+- **Date:** 2026-04-19
+- **Status:** Accepted
+
+**Context:** Deterministic per-source parsers populate the structured `Listing` fields they can confidently extract from the search card / detail page. Many listings still carry useful structured information **only inside the description prose** (e.g. "Wir sind eine 3er-WG", "möbliert", "available 01.05.2026"), which the parsers cannot extract without a brittle per-source regex catalog. The same prose is later passed to the evaluator's narrow `vibe_score` LLM call ([ADR-015](#adr-015-scorecard-evaluator-with-deterministic-components--narrow-llm-vibe)) — a place we already pay for an LLM call — but `vibe_score` consumes the prose and produces a vibe number, not structured fields.
+
+**Decision:** Add an optional, default-off LLM enrichment step to the scraper hot path.
+
+1. New module [`backend/app/scraper/enricher.py`](../backend/app/scraper/enricher.py) exposes `enrich_listing(listing, model, client) -> EnrichmentDiff`. The system prompt enumerates strict "do not infer / do not guess" rules, lists every in-scope field with its expected type/format, and demands JSON-only output. The function never mutates its input.
+2. `EnrichmentDiff` is a Pydantic schema whose fields mirror the in-scope `Listing` fields exactly. Bad numeric values (`wg_size=-1`) and unknown keys are rejected at parse time.
+3. `ScraperAgent._apply_enrichment(listing, diff)` enforces three rules in code, independent of the prompt: (a) refuse to overwrite any non-null deterministic field, (b) skip values whose type does not match the `Listing` schema, (c) round-trip the merged listing through `Listing.model_validate` and drop the entire diff if validation fails.
+4. The agent calls `_maybe_enrich(source, listing)` between `scrape_detail` and `repo.upsert_global_listing`. Three short-circuits keep the typical per-pass cost near zero: `SCRAPER_ENRICH_ENABLED` must be on, the listing must have at least one missing in-scope field, and `len(description) >= SCRAPER_ENRICH_MIN_DESC_CHARS` (default 200).
+5. **Coordinates (`lat`, `lng`) are out of scope.** A description cannot reliably encode coordinates; we keep the existing Google Geocoding fallback in [`anonymous_scrape_listing`](../backend/app/wg_agent/browser.py) as the single coordinate path. The LLM may set `address` or `district`, which the geocoder converts to coordinates on the next refresh cycle.
+6. New env knobs: `SCRAPER_ENRICH_ENABLED` (default `false`), `SCRAPER_ENRICH_MODEL` (default reuses `OPENAI_DEFAULT_MODEL`, currently `gpt-4o-mini`), `SCRAPER_ENRICH_MIN_DESC_CHARS` (default `200`). The OpenAI client is borrowed from [`brain._client`](../backend/app/wg_agent/brain.py) so `OPENAI_BASE_URL` overrides keep working.
+
+**Consequences:**
+
+- **Cost ceiling.** Default-off + skip-when-nothing-missing + 200-char floor keeps spend near zero on the typical pass. With the cheap default model and ~30-200 listings per Munich pass (60-80% with at least one missing field), enrichment costs cents per pass when enabled.
+- **No DB schema change.** Every enrichable field already exists as a nullable column on [`ListingRow`](../backend/app/wg_agent/db_models.py); enriched values flow to MySQL through the unchanged `repo.upsert_global_listing`.
+- **No provenance column.** A field's value in the DB does not record whether it came from the parser or the LLM. If the evaluator ever wants to weight LLM-derived fields differently, that's one additional JSON column (`enriched_fields`) — explicitly out of scope here.
+- **No re-enrichment.** Once a field is set, the next refresh cycle keeps it (the missing-fields check returns false). If a landlord later edits the description, only fields the parser still leaves null get re-enriched. Acceptable for the hackathon; flagged for follow-up if the loop ever runs unattended for weeks.
+
+**Introduced in:** this commit

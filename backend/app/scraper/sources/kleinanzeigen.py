@@ -10,7 +10,7 @@ import json
 import logging
 import re
 from datetime import date, datetime, timedelta
-from typing import Optional
+from typing import AsyncIterator, Optional
 
 import httpx
 from bs4 import BeautifulSoup
@@ -24,7 +24,6 @@ name = "kleinanzeigen"
 kind_supported = frozenset({"wg", "flat"})
 search_page_delay_seconds = 2.5
 detail_delay_seconds = 3.5
-max_pages = 5
 refresh_hours = 24
 
 KA_BASE_URL = "https://www.kleinanzeigen.de"
@@ -383,7 +382,6 @@ class KleinanzeigenSource:
     kind_supported = kind_supported
     search_page_delay_seconds = search_page_delay_seconds
     detail_delay_seconds = detail_delay_seconds
-    max_pages = max_pages
     refresh_hours = refresh_hours
 
     def looks_like_block_page(self, text: str, status: int) -> bool:
@@ -395,25 +393,11 @@ class KleinanzeigenSource:
             return True
         return False
 
-    def _build_search_url(self, *, kind: Kind, page: int) -> tuple[str, str, int]:
-        vertical_slug = "s-auf-zeit-wg" if kind == "wg" else "s-mietwohnung"
-        cat_id = 199 if kind == "wg" else 203
-        city_slug = "muenchen"
-        seite_seg = "" if page <= 1 else "/seite:%d" % page
-        locality_id = KA_LOCALITY_BY_CITY["München"]
-        url = "%s/%s/%s%s/c%dl%d" % (
-            KA_BASE_URL,
-            vertical_slug,
-            city_slug,
-            seite_seg,
-            cat_id,
-            locality_id,
-        )
-        return url, city_slug, locality_id
-
-    async def search(self, *, kind: Kind, profile: SearchProfile) -> list[Listing]:
+    async def search_pages(
+        self, *, kind: Kind, profile: SearchProfile
+    ) -> AsyncIterator[list[Listing]]:
         if kind not in self.kind_supported:
-            return []
+            return
 
         resolved_city = profile.city or "München"
         locality_id = KA_LOCALITY_BY_CITY.get(resolved_city)
@@ -425,7 +409,6 @@ class KleinanzeigenSource:
             locality_id = KA_LOCALITY_BY_CITY["München"]
             resolved_city = "München"
 
-        results: list[Listing] = []
         async with httpx.AsyncClient(
             headers=KA_HEADERS,
             follow_redirects=True,
@@ -434,7 +417,8 @@ class KleinanzeigenSource:
             await client.get("%s/" % KA_BASE_URL)
             await asyncio.sleep(self.search_page_delay_seconds)
 
-            for page in range(1, self.max_pages + 1):
+            page = 1
+            while True:
                 vertical_slug = "s-auf-zeit-wg" if kind == "wg" else "s-mietwohnung"
                 cat_id = 199 if kind == "wg" else 203
                 city_slug = "muenchen"
@@ -454,7 +438,7 @@ class KleinanzeigenSource:
                     if page == 1:
                         raise
                     logger.warning("Kleinanzeigen search HTTP error on page %d, stopping", page)
-                    break
+                    return
 
                 if self.looks_like_block_page(resp.text, resp.status_code):
                     logger.warning(
@@ -463,17 +447,15 @@ class KleinanzeigenSource:
                         len(resp.text),
                         page,
                     )
-                    break
+                    return
 
                 page_listings = parse_search_page_ka(resp.text, kind=kind, city=resolved_city)
                 if not page_listings:
-                    break
-                results.extend(page_listings)
+                    return
+                yield page_listings
 
-                if page < self.max_pages:
-                    await asyncio.sleep(self.search_page_delay_seconds)
-
-        return results
+                await asyncio.sleep(self.search_page_delay_seconds)
+                page += 1
 
     async def scrape_detail(self, stub: Listing) -> Listing:
         async with httpx.AsyncClient(

@@ -1,11 +1,12 @@
-"""ScraperAgent tests (in-memory DB, mocked source plugin).
+"""ScraperAgent tests (in-memory DB, fake Source plugin).
 
-Post-multi-source-refactor: `ScraperAgent` consumes `Source` plugins from
-`app/scraper/sources/`, and the wg-gesucht plugin in turn delegates to
-`browser.anonymous_search` / `browser.anonymous_scrape_listing`. These
-tests patch the `browser.*` functions (the deepest stable seam) and use
-namespaced ids (`wg-gesucht:lx`, …) so the per-source deletion sweep
-sees them.
+Post-freshness-pagination refactor: `ScraperAgent` consumes `Source`
+plugins from `app/scraper/sources/`. Plugins now expose `search_pages`
+as an async iterator (one yield per source page); the agent decides
+when to stop based on per-page first-stub freshness instead of a fixed
+`max_pages`. These tests drive the agent through `_FakeSource`
+fixtures rather than the real wg-gesucht network seam, so the per-page
+control flow can be exercised without hitting `httpx`.
 """
 
 from __future__ import annotations
@@ -15,7 +16,8 @@ import os
 import pathlib
 import sys
 from datetime import datetime, timedelta
-from unittest.mock import AsyncMock, patch
+from typing import AsyncIterator, Optional
+from unittest.mock import AsyncMock, MagicMock
 
 from cryptography.fernet import Fernet
 from pydantic import HttpUrl
@@ -25,8 +27,9 @@ os.environ.setdefault("WG_SECRET_KEY", Fernet.generate_key().decode())
 
 sys.path.insert(0, str(pathlib.Path(__file__).resolve().parent.parent))
 
+from app.scraper import agent as agent_module  # noqa: E402
 from app.scraper.agent import ScraperAgent  # noqa: E402
-from app.scraper.sources.wg_gesucht import WgGesuchtSource  # noqa: E402
+from app.scraper.enricher import EnrichmentDiff  # noqa: E402
 from app.wg_agent import db as db_module, repo  # noqa: E402
 from app.wg_agent.db_models import ListingRow, PhotoRow  # noqa: E402
 from app.wg_agent.models import Listing  # noqa: E402
@@ -40,22 +43,16 @@ def _make_engine():
     return engine
 
 
-def _make_agent(**kwargs) -> ScraperAgent:
-    """Build a wg-gesucht-only ScraperAgent (mirrors the existing tests)."""
-    kwargs.setdefault("city", "München")
-    kwargs.setdefault("max_rent_eur", 2000)
-    kwargs.setdefault("max_pages", 1)
-    kwargs.setdefault("interval_seconds", 1)
-    kwargs.setdefault("refresh_hours", 24)
-    kwargs.setdefault("sources", [WgGesuchtSource()])
-    return ScraperAgent(**kwargs)
-
-
 def _full_listing(
-    lid: str, *, lat: float = 48.1, lng: float = 11.5, description: str = "Bright room"
+    lid: str,
+    *,
+    lat: float = 48.1,
+    lng: float = 11.5,
+    description: str = "Bright room",
+    posted_at: Optional[datetime] = None,
 ) -> Listing:
     bare = lid.split(":", 1)[1] if ":" in lid else lid
-    return Listing(
+    listing = Listing(
         id=lid,
         url=HttpUrl(f"https://www.wg-gesucht.de/{bare}.html"),
         title=f"Listing {bare}",
@@ -66,45 +63,111 @@ def _full_listing(
         description=description,
         photo_urls=[f"https://img.wg-gesucht.de/{bare}-a.jpg"],
     )
+    if posted_at is not None:
+        listing.posted_at = posted_at
+    return listing
 
 
-def _stub_listing(lid: str) -> Listing:
-    """A partial listing (no description / coords) — should persist as status='stub'."""
+def _stub_listing(lid: str, *, posted_at: Optional[datetime] = None) -> Listing:
     bare = lid.split(":", 1)[1] if ":" in lid else lid
-    return Listing(
+    listing = Listing(
         id=lid,
         url=HttpUrl(f"https://www.wg-gesucht.de/{bare}.html"),
         title=f"Partial {bare}",
         kind="wg",
     )
+    if posted_at is not None:
+        listing.posted_at = posted_at
+    return listing
+
+
+def _fresh() -> datetime:
+    return datetime.utcnow() - timedelta(days=1)
+
+
+def _stale() -> datetime:
+    return datetime.utcnow() - timedelta(days=30)
+
+
+class _FakeSource:
+    """Minimal `Source` stand-in for agent tests.
+
+    `pages` is a list of stub batches. The generator yields each batch
+    once, in order, and stops. `scrape_detail` defaults to copying the
+    stub into a fully-scraped listing; tests can override.
+    """
+
+    def __init__(
+        self,
+        *,
+        name: str = "wg-gesucht",
+        pages: Optional[list[list[Listing]]] = None,
+        kind_supported: Optional[frozenset[str]] = None,
+        scrape_detail=None,
+    ) -> None:
+        self.name = name
+        self.kind_supported = kind_supported or frozenset({"wg"})
+        self.search_page_delay_seconds = 0.0
+        self.detail_delay_seconds = 0.0
+        self.refresh_hours = 24
+        self._pages: list[list[Listing]] = pages or []
+        self._scrape_detail = scrape_detail
+        self.detail_calls: list[str] = []
+        self.search_pages_calls = 0
+        self.pages_yielded = 0
+
+    async def search_pages(
+        self, *, kind, profile  # noqa: ARG002 - signature pinned by Source protocol
+    ) -> AsyncIterator[list[Listing]]:
+        self.search_pages_calls += 1
+        for batch in self._pages:
+            self.pages_yielded += 1
+            yield batch
+
+    async def scrape_detail(self, stub: Listing) -> Listing:
+        self.detail_calls.append(stub.id)
+        if self._scrape_detail is not None:
+            return await self._scrape_detail(stub)
+        return _full_listing(
+            stub.id,
+            description=stub.description or "Bright room",
+            posted_at=stub.posted_at,
+        )
+
+    def looks_like_block_page(self, text: str, status: int) -> bool:  # noqa: ARG002
+        return False
+
+
+def _agent(
+    *,
+    sources: list[_FakeSource],
+    max_age_days: Optional[int] = None,
+    enrich_enabled: bool = False,
+    enrich_min_desc_chars: int = 200,
+) -> ScraperAgent:
+    if max_age_days is not None:
+        os.environ["SCRAPER_MAX_AGE_DAYS"] = str(max_age_days)
+    return ScraperAgent(
+        city="München",
+        max_rent_eur=2000,
+        interval_seconds=1,
+        refresh_hours=24,
+        sources=sources,
+        enrich_enabled=enrich_enabled,
+        enrich_min_desc_chars=enrich_min_desc_chars,
+    )
+
+
+# --- Existing scraper-loop coverage (now driven via _FakeSource) -------------
 
 
 def test_scraper_writes_full_listing_and_photos(monkeypatch) -> None:
     engine = _make_engine()
     monkeypatch.setattr(db_module, "engine", engine)
 
-    async def fake_search(*_a, **_kw):
-        return [
-            Listing(
-                id="wg-gesucht:lx",
-                url=HttpUrl("https://www.wg-gesucht.de/lx.html"),
-                title="stub Lx",
-                kind="wg",
-            )
-        ]
+    fake = _FakeSource(pages=[[_stub_listing("wg-gesucht:lx", posted_at=_fresh())]])
+    asyncio.run(_agent(sources=[fake]).run_once())
 
-    async def fake_scrape(lst: Listing, **_kw):
-        return _full_listing(lst.id)
-
-    agent = _make_agent()
-
-    with (
-        patch("app.wg_agent.browser.anonymous_search", new=AsyncMock(side_effect=fake_search)),
-        patch("app.wg_agent.browser.anonymous_scrape_listing", new=AsyncMock(side_effect=fake_scrape)),
-    ):
-        scraped = asyncio.run(agent.run_once())
-
-    assert scraped == 1
     with Session(engine) as session:
         row = session.get(ListingRow, "wg-gesucht:lx")
         photos = session.exec(
@@ -122,23 +185,14 @@ def test_scraper_marks_partial_listing_as_stub(monkeypatch) -> None:
     engine = _make_engine()
     monkeypatch.setattr(db_module, "engine", engine)
 
-    async def fake_search(*_a, **_kw):
-        return [_stub_listing("wg-gesucht:ly")]
+    async def partial(stub: Listing) -> Listing:
+        return stub
 
-    async def fake_scrape_partial(lst: Listing, **_kw):
-        # No description / no coords → status should be 'stub'.
-        return lst
-
-    agent = _make_agent()
-
-    with (
-        patch("app.wg_agent.browser.anonymous_search", new=AsyncMock(side_effect=fake_search)),
-        patch(
-            "app.wg_agent.browser.anonymous_scrape_listing",
-            new=AsyncMock(side_effect=fake_scrape_partial),
-        ),
-    ):
-        asyncio.run(agent.run_once())
+    fake = _FakeSource(
+        pages=[[_stub_listing("wg-gesucht:ly", posted_at=_fresh())]],
+        scrape_detail=partial,
+    )
+    asyncio.run(_agent(sources=[fake]).run_once())
 
     with Session(engine) as session:
         row = session.get(ListingRow, "wg-gesucht:ly")
@@ -150,22 +204,14 @@ def test_scraper_records_scrape_errors(monkeypatch) -> None:
     engine = _make_engine()
     monkeypatch.setattr(db_module, "engine", engine)
 
-    async def fake_search(*_a, **_kw):
-        return [_stub_listing("wg-gesucht:lz")]
-
-    async def fake_scrape_raises(lst: Listing, **_kw):
+    async def boom(_stub: Listing) -> Listing:
         raise RuntimeError("boom")
 
-    agent = _make_agent()
-
-    with (
-        patch("app.wg_agent.browser.anonymous_search", new=AsyncMock(side_effect=fake_search)),
-        patch(
-            "app.wg_agent.browser.anonymous_scrape_listing",
-            new=AsyncMock(side_effect=fake_scrape_raises),
-        ),
-    ):
-        asyncio.run(agent.run_once())
+    fake = _FakeSource(
+        pages=[[_stub_listing("wg-gesucht:lz", posted_at=_fresh())]],
+        scrape_detail=boom,
+    )
+    asyncio.run(_agent(sources=[fake]).run_once())
 
     with Session(engine) as session:
         row = session.get(ListingRow, "wg-gesucht:lz")
@@ -178,32 +224,21 @@ def test_scraper_skips_recently_scraped(monkeypatch) -> None:
     engine = _make_engine()
     monkeypatch.setattr(db_module, "engine", engine)
 
-    # Pre-seed a fully scraped listing from now (within the 24h refresh window).
     with Session(engine) as session:
-        repo.upsert_global_listing(session, listing=_full_listing("wg-gesucht:fresh"), status="full")
+        repo.upsert_global_listing(
+            session, listing=_full_listing("wg-gesucht:fresh"), status="full"
+        )
 
-    async def fake_search(*_a, **_kw):
-        return [
-            Listing(
-                id="wg-gesucht:fresh",
-                url=HttpUrl("https://www.wg-gesucht.de/fresh.html"),
-                title="fresh stub",
-                kind="wg",
-            )
-        ]
-
-    scrape_spy = AsyncMock(side_effect=lambda lst, **_kw: _full_listing(lst.id))
-
-    agent = _make_agent()
-
-    with (
-        patch("app.wg_agent.browser.anonymous_search", new=AsyncMock(side_effect=fake_search)),
-        patch("app.wg_agent.browser.anonymous_scrape_listing", new=scrape_spy),
-    ):
-        scraped = asyncio.run(agent.run_once())
+    fake = _FakeSource(
+        pages=[[_stub_listing("wg-gesucht:fresh", posted_at=_fresh())]]
+    )
+    scraped = asyncio.run(_agent(sources=[fake]).run_once())
 
     assert scraped == 0
-    scrape_spy.assert_not_called()
+    # The page leader (only stub) was probed via stub.posted_at (no detail
+    # fetch) since wg-gesucht stubs carry posted_at; and the stub was
+    # already fresh in the DB so no second detail fetch fires either.
+    assert fake.detail_calls == []
 
 
 def test_scraper_refreshes_stale_listings(monkeypatch) -> None:
@@ -211,69 +246,43 @@ def test_scraper_refreshes_stale_listings(monkeypatch) -> None:
     monkeypatch.setattr(db_module, "engine", engine)
 
     with Session(engine) as session:
-        repo.upsert_global_listing(session, listing=_full_listing("wg-gesucht:stale"), status="full")
-        # Push scraped_at back in time beyond the refresh TTL.
+        repo.upsert_global_listing(
+            session, listing=_full_listing("wg-gesucht:stale"), status="full"
+        )
         row = session.get(ListingRow, "wg-gesucht:stale")
         assert row is not None
         row.scraped_at = datetime.utcnow() - timedelta(hours=48)
         session.add(row)
         session.commit()
 
-    async def fake_search(*_a, **_kw):
-        return [
-            Listing(
-                id="wg-gesucht:stale",
-                url=HttpUrl("https://www.wg-gesucht.de/stale.html"),
-                title="stale stub",
-                kind="wg",
-            )
-        ]
-
-    scrape_spy = AsyncMock(side_effect=lambda lst, **_kw: _full_listing(lst.id))
-
-    agent = _make_agent()
-
-    with (
-        patch("app.wg_agent.browser.anonymous_search", new=AsyncMock(side_effect=fake_search)),
-        patch("app.wg_agent.browser.anonymous_scrape_listing", new=scrape_spy),
-    ):
-        scraped = asyncio.run(agent.run_once())
+    fake = _FakeSource(
+        pages=[[_stub_listing("wg-gesucht:stale", posted_at=_fresh())]]
+    )
+    scraped = asyncio.run(_agent(sources=[fake]).run_once())
 
     assert scraped == 1
-    scrape_spy.assert_awaited_once()
+    assert fake.detail_calls == ["wg-gesucht:stale"]
 
 
 def test_scraper_deletion_sweep_tombstones_missing_listings(monkeypatch) -> None:
-    """After N consecutive passes without seeing a listing, it gets tombstoned."""
     engine = _make_engine()
     monkeypatch.setattr(db_module, "engine", engine)
 
     with Session(engine) as session:
-        repo.upsert_global_listing(session, listing=_full_listing("wg-gesucht:keep"), status="full")
-        repo.upsert_global_listing(session, listing=_full_listing("wg-gesucht:gone"), status="full")
+        repo.upsert_global_listing(
+            session, listing=_full_listing("wg-gesucht:keep"), status="full"
+        )
+        repo.upsert_global_listing(
+            session, listing=_full_listing("wg-gesucht:gone"), status="full"
+        )
 
-    async def fake_search(*_a, **_kw):
-        # Only "keep" continues to appear; "gone" is missing from both passes.
-        return [
-            Listing(
-                id="wg-gesucht:keep",
-                url=HttpUrl("https://www.wg-gesucht.de/keep.html"),
-                title="keep stub",
-                kind="wg",
-            )
-        ]
+    fake = _FakeSource(
+        pages=[[_stub_listing("wg-gesucht:keep", posted_at=_fresh())]]
+    )
+    agent = _agent(sources=[fake])
 
-    agent = _make_agent()
-
-    with (
-        patch("app.wg_agent.browser.anonymous_search", new=AsyncMock(side_effect=fake_search)),
-        patch(
-            "app.wg_agent.browser.anonymous_scrape_listing",
-            new=AsyncMock(side_effect=lambda lst, **_kw: _full_listing(lst.id)),
-        ),
-    ):
-        asyncio.run(agent.run_once())
-        asyncio.run(agent.run_once())
+    asyncio.run(agent.run_once())
+    asyncio.run(agent.run_once())
 
     with Session(engine) as session:
         keep = session.get(ListingRow, "wg-gesucht:keep")
@@ -287,41 +296,30 @@ def test_scraper_deletion_sweep_tombstones_missing_listings(monkeypatch) -> None
 
 
 def test_scraper_deletion_sweep_resets_counter_when_listing_returns(monkeypatch) -> None:
-    """A listing that reappears after being missing for one pass must not be
-    tombstoned, and its miss-counter must be cleared."""
     engine = _make_engine()
     monkeypatch.setattr(db_module, "engine", engine)
 
     with Session(engine) as session:
-        repo.upsert_global_listing(session, listing=_full_listing("wg-gesucht:flaky"), status="full")
+        repo.upsert_global_listing(
+            session, listing=_full_listing("wg-gesucht:flaky"), status="full"
+        )
 
-    calls = {"n": 0}
+    flaky_stub = _stub_listing("wg-gesucht:flaky", posted_at=_fresh())
+    runs = {"n": 0}
 
-    async def fake_search(*_a, **_kw):
-        calls["n"] += 1
-        # Pass 1: missing. Pass 2: reappears.
-        if calls["n"] == 1:
-            return []
-        return [
-            Listing(
-                id="wg-gesucht:flaky",
-                url=HttpUrl("https://www.wg-gesucht.de/flaky.html"),
-                title="flaky stub",
-                kind="wg",
-            )
-        ]
+    class _AlternatingSource(_FakeSource):
+        async def search_pages(self, *, kind, profile):  # noqa: ARG002
+            self.search_pages_calls += 1
+            runs["n"] += 1
+            if runs["n"] == 1:
+                return  # first pass: nothing returned
+            yield [flaky_stub]
 
-    agent = _make_agent()
+    fake = _AlternatingSource()
+    agent = _agent(sources=[fake])
 
-    with (
-        patch("app.wg_agent.browser.anonymous_search", new=AsyncMock(side_effect=fake_search)),
-        patch(
-            "app.wg_agent.browser.anonymous_scrape_listing",
-            new=AsyncMock(side_effect=lambda lst, **_kw: _full_listing(lst.id)),
-        ),
-    ):
-        asyncio.run(agent.run_once())
-        asyncio.run(agent.run_once())
+    asyncio.run(agent.run_once())
+    asyncio.run(agent.run_once())
 
     with Session(engine) as session:
         row = session.get(ListingRow, "wg-gesucht:flaky")
@@ -332,19 +330,13 @@ def test_scraper_deletion_sweep_resets_counter_when_listing_returns(monkeypatch)
 
 
 def test_scraper_per_source_sweep_does_not_tombstone_other_sources(monkeypatch) -> None:
-    """G4 verification: a wg-gesucht-only pass does not tombstone Kleinanzeigen
-    rows that the agent never tried to see this pass."""
     engine = _make_engine()
     monkeypatch.setattr(db_module, "engine", engine)
 
     with Session(engine) as session:
         repo.upsert_global_listing(
-            session,
-            listing=_full_listing("wg-gesucht:keep"),
-            status="full",
+            session, listing=_full_listing("wg-gesucht:keep"), status="full"
         )
-        # A pre-existing Kleinanzeigen row that this wg-gesucht-only run
-        # must not tombstone, even after several passes.
         repo.upsert_global_listing(
             session,
             listing=Listing(
@@ -359,27 +351,12 @@ def test_scraper_per_source_sweep_does_not_tombstone_other_sources(monkeypatch) 
             status="full",
         )
 
-    async def fake_search(*_a, **_kw):
-        return [
-            Listing(
-                id="wg-gesucht:keep",
-                url=HttpUrl("https://www.wg-gesucht.de/keep.html"),
-                title="keep stub",
-                kind="wg",
-            )
-        ]
-
-    agent = _make_agent()
-
-    with (
-        patch("app.wg_agent.browser.anonymous_search", new=AsyncMock(side_effect=fake_search)),
-        patch(
-            "app.wg_agent.browser.anonymous_scrape_listing",
-            new=AsyncMock(side_effect=lambda lst, **_kw: _full_listing(lst.id)),
-        ),
-    ):
-        for _ in range(3):  # well beyond SCRAPER_DELETION_PASSES (default 2)
-            asyncio.run(agent.run_once())
+    fake = _FakeSource(
+        pages=[[_stub_listing("wg-gesucht:keep", posted_at=_fresh())]]
+    )
+    agent = _agent(sources=[fake])
+    for _ in range(3):
+        asyncio.run(agent.run_once())
 
     with Session(engine) as session:
         other = session.get(ListingRow, "kleinanzeigen:other")
@@ -388,208 +365,370 @@ def test_scraper_per_source_sweep_does_not_tombstone_other_sources(monkeypatch) 
     assert other.scrape_status != "deleted"
 
 
-# --- 14-day freshness filter (SCRAPER_MAX_AGE_DAYS, default 14) -------------
-
-
-class _FakeSource:
-    """Minimal `Source` stand-in for freshness tests.
-
-    Pretends to be one of the real sources so the agent's per-source
-    deletion sweep / dispatch logic treats namespaced ids the same way it
-    does in production. `.search` returns a fixed list of stubs;
-    `.scrape_detail` defaults to identity but tests can override it.
-    """
-
-    def __init__(
-        self,
-        *,
-        name: str,
-        stubs: list[Listing],
-        scrape_detail=None,
-    ) -> None:
-        self.name = name
-        self.kind_supported = frozenset({"wg"})
-        self.search_page_delay_seconds = 0.0
-        self.detail_delay_seconds = 0.0
-        self.max_pages = 1
-        self.refresh_hours = 24
-        self._stubs = stubs
-        self._scrape_detail = scrape_detail
-
-    async def search(self, *, kind, profile):  # noqa: ARG002 - unused per protocol
-        return list(self._stubs)
-
-    async def scrape_detail(self, stub: Listing) -> Listing:
-        if self._scrape_detail is not None:
-            return await self._scrape_detail(stub)
-        return stub
-
-    def looks_like_block_page(self, text: str, status: int) -> bool:  # noqa: ARG002
-        return False
-
-
-def _stub_with_posted_at(lid: str, *, posted_at) -> Listing:
-    bare = lid.split(":", 1)[1] if ":" in lid else lid
-    listing = Listing(
-        id=lid,
-        url=HttpUrl(f"https://example.invalid/{bare}.html"),
-        title=f"Stub {bare}",
-        kind="wg",
-    )
-    listing.posted_at = posted_at
-    return listing
-
-
-def test_scraper_drops_stale_tum_living_stub(monkeypatch) -> None:
-    """A stub whose `posted_at` is older than the 14-day window must be
-    dropped before we even try to deep-scrape it (no upsert)."""
-    engine = _make_engine()
-    monkeypatch.setattr(db_module, "engine", engine)
-
-    stale = _stub_with_posted_at(
-        "tum-living:abc", posted_at=datetime.utcnow() - timedelta(days=30)
-    )
-    fake_source = _FakeSource(
-        name="tum-living",
-        stubs=[stale],
-        scrape_detail=AsyncMock(),  # must NOT be called
-    )
-
-    agent = ScraperAgent(
-        city="München",
-        max_rent_eur=2000,
-        max_pages=1,
-        interval_seconds=1,
-        refresh_hours=24,
-        sources=[fake_source],
-    )
-
-    asyncio.run(agent.run_once())
-
-    fake_source._scrape_detail.assert_not_awaited()
-    with Session(engine) as session:
-        row = session.get(ListingRow, "tum-living:abc")
-    assert row is None  # nothing persisted
-
-
-def test_scraper_keeps_fresh_tum_living_stub(monkeypatch) -> None:
-    engine = _make_engine()
-    monkeypatch.setattr(db_module, "engine", engine)
-
-    fresh = _stub_with_posted_at(
-        "tum-living:fresh", posted_at=datetime.utcnow() - timedelta(days=5)
-    )
-
-    async def fake_detail(stub: Listing) -> Listing:
-        # Mimic a real detail pass: enrich enough to qualify as 'full'.
-        stub.description = "tum description"
-        stub.lat = 48.1
-        stub.lng = 11.5
-        return stub
-
-    fake_source = _FakeSource(
-        name="tum-living",
-        stubs=[fresh],
-        scrape_detail=fake_detail,
-    )
-
-    agent = ScraperAgent(
-        city="München",
-        max_rent_eur=2000,
-        max_pages=1,
-        interval_seconds=1,
-        refresh_hours=24,
-        sources=[fake_source],
-    )
-
-    asyncio.run(agent.run_once())
-
-    with Session(engine) as session:
-        row = session.get(ListingRow, "tum-living:fresh")
-    assert row is not None
-    assert row.scrape_status == "full"
-
-
-def test_scraper_drops_stale_wg_gesucht_stub(monkeypatch) -> None:
-    """wg-gesucht stubs carry `posted_at` from the search card; a stale stub
-    must be dropped before the detail scrape runs."""
-    engine = _make_engine()
-    monkeypatch.setattr(db_module, "engine", engine)
-
-    stale_posted_at = datetime.utcnow() - timedelta(days=30)
-
-    async def fake_search(*_a, **_kw):
-        stub = Listing(
-            id="wg-gesucht:stale",
-            url=HttpUrl("https://www.wg-gesucht.de/stale.html"),
-            title="stale stub",
-            kind="wg",
-        )
-        stub.posted_at = stale_posted_at
-        return [stub]
-
-    scrape_spy = AsyncMock(side_effect=lambda lst, **_kw: _full_listing(lst.id))
-
-    agent = _make_agent()
-
-    with (
-        patch("app.wg_agent.browser.anonymous_search", new=AsyncMock(side_effect=fake_search)),
-        patch("app.wg_agent.browser.anonymous_scrape_listing", new=scrape_spy),
-    ):
-        scraped = asyncio.run(agent.run_once())
-
-    assert scraped == 0
-    scrape_spy.assert_not_called()
-    with Session(engine) as session:
-        row = session.get(ListingRow, "wg-gesucht:stale")
-    assert row is None
+# --- Freshness gate (legacy backstop, now triggered by detail-page posted_at) -
 
 
 def test_scraper_drops_stale_kleinanzeigen_after_detail(monkeypatch) -> None:
-    """Kleinanzeigen stubs lack `posted_at` (search cards have no date), so
-    the freshness gate fires AFTER the detail fetch sets `posted_at`. A
-    stale ad must not be persisted even though we paid for the detail."""
+    """kleinanzeigen stubs lack `posted_at`; a stale listing must not
+    persist even though we paid for the detail fetch."""
     engine = _make_engine()
     monkeypatch.setattr(db_module, "engine", engine)
 
-    stub_without_date = Listing(
-        id="kleinanzeigen:stale",
-        url=HttpUrl("https://www.kleinanzeigen.de/s-anzeige/x/stale-199-6411"),
-        title="stale KA stub",
-        kind="wg",
-    )
+    stub_without_date = _stub_listing("kleinanzeigen:stale")
 
     async def fake_detail(stub: Listing) -> Listing:
         stub.description = "long ka description"
         stub.lat = 48.1
         stub.lng = 11.5
-        stub.posted_at = datetime.utcnow() - timedelta(days=30)
+        stub.posted_at = _stale()
         return stub
 
-    fake_source = _FakeSource(
+    fake = _FakeSource(
         name="kleinanzeigen",
-        stubs=[stub_without_date],
+        pages=[[stub_without_date]],
         scrape_detail=fake_detail,
     )
 
-    agent = ScraperAgent(
-        city="München",
-        max_rent_eur=2000,
-        max_pages=1,
-        interval_seconds=1,
-        refresh_hours=24,
-        sources=[fake_source],
-    )
+    asyncio.run(_agent(sources=[fake]).run_once())
 
-    asyncio.run(agent.run_once())
-
+    # Page-leader probe sees a stale posted_at, so we never even iterate
+    # the page; the listing is not persisted.
     with Session(engine) as session:
         row = session.get(ListingRow, "kleinanzeigen:stale")
-    assert row is None  # detail ran, but the post-detail gate dropped it
+    assert row is None
+
+
+def test_scraper_drops_stale_wg_gesucht_via_first_stub_probe(monkeypatch) -> None:
+    """wg-gesucht stubs carry `posted_at`; the page-leader probe stops
+    pagination and never fires a detail scrape for stale listings."""
+    engine = _make_engine()
+    monkeypatch.setattr(db_module, "engine", engine)
+
+    stale_stub = _stub_listing("wg-gesucht:stale", posted_at=_stale())
+    fake = _FakeSource(pages=[[stale_stub]])
+
+    scraped = asyncio.run(_agent(sources=[fake]).run_once())
+
+    assert scraped == 0
+    assert fake.detail_calls == []
+    with Session(engine) as session:
+        row = session.get(ListingRow, "wg-gesucht:stale")
+    assert row is None
+
+
+# --- New: per-page freshness pagination -------------------------------------
+
+
+def test_pagination_stops_when_first_stub_on_page_is_stale(monkeypatch) -> None:
+    """3 pages: P0 fresh + fresh, P1 fresh + fresh, P2 stale + fresh.
+
+    Expect: scraped = 4 (all of P0 and P1, none of P2). The agent reads
+    P2's leader, decides it's stale, and stops without scraping any
+    member of P2.
+    """
+    engine = _make_engine()
+    monkeypatch.setattr(db_module, "engine", engine)
+
+    p0 = [
+        _stub_listing("wg-gesucht:p0a", posted_at=_fresh()),
+        _stub_listing("wg-gesucht:p0b", posted_at=_fresh()),
+    ]
+    p1 = [
+        _stub_listing("wg-gesucht:p1a", posted_at=_fresh()),
+        _stub_listing("wg-gesucht:p1b", posted_at=_fresh()),
+    ]
+    p2 = [
+        _stub_listing("wg-gesucht:p2a", posted_at=_stale()),
+        _stub_listing("wg-gesucht:p2b", posted_at=_fresh()),  # tail ignored
+    ]
+    fake = _FakeSource(pages=[p0, p1, p2])
+
+    scraped = asyncio.run(_agent(sources=[fake]).run_once())
+
+    assert scraped == 4
+    assert set(fake.detail_calls) == {
+        "wg-gesucht:p0a",
+        "wg-gesucht:p0b",
+        "wg-gesucht:p1a",
+        "wg-gesucht:p1b",
+    }
+    with Session(engine) as session:
+        for lid in fake.detail_calls:
+            row = session.get(ListingRow, lid)
+            assert row is not None, lid
+        for lid in ("wg-gesucht:p2a", "wg-gesucht:p2b"):
+            assert session.get(ListingRow, lid) is None, lid
+
+
+def test_pagination_first_stub_probe_memoizes_kleinanzeigen_detail(monkeypatch) -> None:
+    """Kleinanzeigen stubs lack `posted_at`, so the agent runs
+    `scrape_detail` on each page leader to read the date. That same
+    detail must be reused when the per-page scrape loop processes
+    `batch[0]` — never refetched."""
+    engine = _make_engine()
+    monkeypatch.setattr(db_module, "engine", engine)
+
+    page = [
+        _stub_listing("kleinanzeigen:a"),
+        _stub_listing("kleinanzeigen:b"),
+        _stub_listing("kleinanzeigen:c"),
+    ]
+
+    detail_call_counts: dict[str, int] = {}
+
+    async def detail(stub: Listing) -> Listing:
+        detail_call_counts[stub.id] = detail_call_counts.get(stub.id, 0) + 1
+        return _full_listing(stub.id, posted_at=_fresh())
+
+    fake = _FakeSource(name="kleinanzeigen", pages=[page], scrape_detail=detail)
+
+    scraped = asyncio.run(_agent(sources=[fake]).run_once())
+
+    assert scraped == 3
+    assert detail_call_counts == {
+        "kleinanzeigen:a": 1,
+        "kleinanzeigen:b": 1,
+        "kleinanzeigen:c": 1,
+    }
+
+
+def test_pagination_skips_kleinanzeigen_detail_for_stub_with_posted_at(monkeypatch) -> None:
+    """When the first stub already has `posted_at` (from a parser that
+    learns to extract it later), the agent must not run a detail scrape
+    just to check freshness."""
+    engine = _make_engine()
+    monkeypatch.setattr(db_module, "engine", engine)
+
+    page = [_stub_listing("wg-gesucht:a", posted_at=_fresh())]
+    fake = _FakeSource(pages=[page])
+
+    asyncio.run(_agent(sources=[fake]).run_once())
+
+    # Only one detail call, and it is the normal scrape (not a probe).
+    assert fake.detail_calls == ["wg-gesucht:a"]
+
+
+def test_pagination_unknown_freshness_keeps_paginating(monkeypatch) -> None:
+    """If the freshness probe cannot determine a date (no posted_at on
+    stub AND scrape_detail also returns no posted_at), the agent must
+    treat the page as fresh and continue."""
+    engine = _make_engine()
+    monkeypatch.setattr(db_module, "engine", engine)
+
+    p0 = [_stub_listing("kleinanzeigen:a")]
+    p1 = [_stub_listing("kleinanzeigen:b")]
+
+    async def detail_no_date(stub: Listing) -> Listing:
+        # Returns a fully-scraped listing but never sets posted_at.
+        return _full_listing(stub.id, description="ok")
+
+    fake = _FakeSource(
+        name="kleinanzeigen",
+        pages=[p0, p1],
+        scrape_detail=detail_no_date,
+    )
+
+    scraped = asyncio.run(_agent(sources=[fake]).run_once())
+
+    assert scraped == 2
+    assert fake.pages_yielded == 2
+
+
+# --- Enrichment ---------------------------------------------------------------
+
+
+def test_apply_enrichment_fills_only_when_missing() -> None:
+    listing = _full_listing("wg-gesucht:e1")
+    listing.furnished = None
+    listing.languages = []  # not None — must NOT be overwritten
+
+    diff = EnrichmentDiff(furnished=True, languages=["Deutsch"])
+    agent = _agent(sources=[_FakeSource()])
+    applied = agent._apply_enrichment(listing, diff)
+
+    assert applied == ["furnished"]
+    assert listing.furnished is True
+    assert listing.languages == []
+
+
+def test_apply_enrichment_refuses_to_overwrite() -> None:
+    listing = _full_listing("wg-gesucht:e2")
+    listing.furnished = False  # explicit no
+    listing.smoking_ok = None
+
+    diff = EnrichmentDiff(furnished=True, smoking_ok=False)
+    agent = _agent(sources=[_FakeSource()])
+    applied = agent._apply_enrichment(listing, diff)
+
+    assert applied == ["smoking_ok"]
+    assert listing.furnished is False
+    assert listing.smoking_ok is False
+
+
+def test_apply_enrichment_rejects_invalid_diff(monkeypatch) -> None:
+    """If the merged candidate fails `Listing.model_validate`, the
+    entire diff is dropped and the listing is unchanged. Most schema
+    violations are caught at the diff layer (`EnrichmentDiff` rejects
+    them before they reach `_apply_enrichment`); this test simulates a
+    future schema drift by patching `Listing.model_validate` to raise."""
+    listing = _full_listing("wg-gesucht:e3")
+    listing.furnished = None
+    listing.smoking_ok = None
+
+    diff = EnrichmentDiff(furnished=True, smoking_ok=False)
+
+    from app.wg_agent import models as models_module
+
+    def _raise(_data):
+        raise ValueError("simulated future schema drift")
+
+    monkeypatch.setattr(models_module.Listing, "model_validate", _raise)
+
+    agent = _agent(sources=[_FakeSource()])
+    applied = agent._apply_enrichment(listing, diff)
+
+    assert applied == []
+    assert listing.furnished is None
+    assert listing.smoking_ok is None
+
+
+def test_enrichment_disabled_skips_call(monkeypatch) -> None:
+    engine = _make_engine()
+    monkeypatch.setattr(db_module, "engine", engine)
+
+    enrich_spy = MagicMock(return_value=EnrichmentDiff())
+    monkeypatch.setattr(agent_module, "enrich_listing", enrich_spy)
+
+    page = [_stub_listing("wg-gesucht:no-enrich", posted_at=_fresh())]
+    fake = _FakeSource(pages=[page])
+
+    asyncio.run(_agent(sources=[fake], enrich_enabled=False).run_once())
+
+    enrich_spy.assert_not_called()
+
+
+def test_enrichment_skipped_when_no_missing_fields(monkeypatch) -> None:
+    """A fully-populated listing has nothing to enrich; we must not call
+    OpenAI for it even with the feature flag on."""
+    engine = _make_engine()
+    monkeypatch.setattr(db_module, "engine", engine)
+
+    enrich_spy = MagicMock(return_value=EnrichmentDiff())
+    monkeypatch.setattr(agent_module, "enrich_listing", enrich_spy)
+
+    long_desc = "x" * 1000
+
+    async def detail(stub: Listing) -> Listing:
+        return Listing(
+            id=stub.id,
+            url=HttpUrl("https://www.wg-gesucht.de/done.html"),
+            title="Done",
+            kind="wg",
+            city="München",
+            district="Neuhausen",
+            address="Hauptstr 1",
+            price_eur=1000,
+            size_m2=18.0,
+            wg_size=3,
+            available_from=datetime.utcnow().date(),
+            available_to=datetime.utcnow().date(),
+            furnished=True,
+            pets_allowed=False,
+            smoking_ok=False,
+            languages=["Deutsch"],
+            lat=48.1,
+            lng=11.5,
+            description=long_desc,
+            posted_at=_fresh(),
+        )
+
+    page = [_stub_listing("wg-gesucht:done", posted_at=_fresh())]
+    fake = _FakeSource(pages=[page], scrape_detail=detail)
+
+    asyncio.run(
+        _agent(sources=[fake], enrich_enabled=True, enrich_min_desc_chars=200).run_once()
+    )
+
+    enrich_spy.assert_not_called()
+
+
+def test_enrichment_skipped_when_description_too_short(monkeypatch) -> None:
+    engine = _make_engine()
+    monkeypatch.setattr(db_module, "engine", engine)
+
+    enrich_spy = MagicMock(return_value=EnrichmentDiff())
+    monkeypatch.setattr(agent_module, "enrich_listing", enrich_spy)
+
+    async def detail(stub: Listing) -> Listing:
+        return _full_listing(stub.id, description="too short", posted_at=_fresh())
+
+    page = [_stub_listing("wg-gesucht:short", posted_at=_fresh())]
+    fake = _FakeSource(pages=[page], scrape_detail=detail)
+
+    asyncio.run(
+        _agent(sources=[fake], enrich_enabled=True, enrich_min_desc_chars=200).run_once()
+    )
+
+    enrich_spy.assert_not_called()
+
+
+def test_enrichment_runs_and_persists_filled_fields(monkeypatch) -> None:
+    engine = _make_engine()
+    monkeypatch.setattr(db_module, "engine", engine)
+
+    enrich_spy = MagicMock(
+        return_value=EnrichmentDiff(furnished=True, wg_size=3)
+    )
+    monkeypatch.setattr(agent_module, "enrich_listing", enrich_spy)
+
+    long_desc = "Die WG hat drei Bewohner. Das Zimmer ist möbliert. " + ("x" * 200)
+
+    async def detail(stub: Listing) -> Listing:
+        # Returns a listing with all enrichable fields set EXCEPT
+        # furnished and wg_size, plus a long-enough description.
+        return Listing(
+            id=stub.id,
+            url=HttpUrl("https://www.wg-gesucht.de/sparse.html"),
+            title="Sparse",
+            kind="wg",
+            city="München",
+            district="Neuhausen",
+            address="Hauptstr 1",
+            price_eur=1000,
+            size_m2=18.0,
+            wg_size=None,
+            available_from=datetime.utcnow().date(),
+            available_to=datetime.utcnow().date(),
+            furnished=None,
+            pets_allowed=False,
+            smoking_ok=False,
+            languages=["Deutsch"],
+            lat=48.1,
+            lng=11.5,
+            description=long_desc,
+            posted_at=_fresh(),
+        )
+
+    page = [_stub_listing("wg-gesucht:sparse", posted_at=_fresh())]
+    fake = _FakeSource(pages=[page], scrape_detail=detail)
+
+    asyncio.run(
+        _agent(sources=[fake], enrich_enabled=True, enrich_min_desc_chars=50).run_once()
+    )
+
+    enrich_spy.assert_called_once()
+    with Session(engine) as session:
+        row = session.get(ListingRow, "wg-gesucht:sparse")
+    assert row is not None
+    assert row.furnished is True
+    assert row.wg_size == 3
+
+
+# --- Existing browser-helper unit test (kept) -------------------------------
 
 
 def test_parse_wgg_online_value_relative() -> None:
-    """Table-driven: the new helper handles relative + absolute + malformed."""
+    """Table-driven: the helper handles relative + absolute + malformed."""
     from app.wg_agent.browser import _parse_wgg_online_value
 
     now = datetime.utcnow()
@@ -603,7 +742,7 @@ def test_parse_wgg_online_value_relative() -> None:
         ("", lambda r: r is None),
         ("bogus", lambda r: r is None),
         ("Online-Besichtigung", lambda r: r is None),
-        ("32.13.2026", lambda r: r is None),  # invalid date
+        ("32.13.2026", lambda r: r is None),
     ]
     for raw, predicate in cases:
         result = _parse_wgg_online_value(raw)

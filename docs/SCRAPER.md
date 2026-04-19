@@ -689,7 +689,7 @@ What was actually observed:
 
 **HTML-parser gotcha (Python 3.14):** Kleinanzeigen ships an unterminated numeric character reference `&#8203` (zero-width space, no trailing `;`). bs4's bundled `html.parser` raises `ValueError: invalid literal for int() with base 10` on it. Pre-process raw HTML with `re.sub(r"&#(\d+)(?![\d;])", r"&#\1;", html)` before feeding to BeautifulSoup. The recipe at the bottom of this section shows the fix.
 
-**Pagination:** Kleinanzeigen uses a `/seite:<N>` path segment inserted **before** the `c<cat>l<loc>` token, e.g. `https://www.kleinanzeigen.de/s-auf-zeit-wg/muenchen/seite:2/c199l6411`. **Robots.txt cap:** `Disallow: /*/seite:6*` through `/*/seite:59*` — pages 1-5 are crawl-allowed, pages 6+ are not. Use `max_pages=5`. Stop paginating when (a) page index reaches 5, (b) the `pagination-next` anchor is absent, or (c) the page contains zero `article.aditem` cards.
+**Pagination:** Kleinanzeigen uses a `/seite:<N>` path segment inserted **before** the `c<cat>l<loc>` token, e.g. `https://www.kleinanzeigen.de/s-auf-zeit-wg/muenchen/seite:2/c199l6411`. **Robots.txt cap:** `Disallow: /*/seite:6*` through `/*/seite:59*` — pages 1-5 are crawl-allowed, pages 6+ are not. The plugin no longer enforces a `max_pages` ceiling itself; pagination continues until either (a) the page contains zero `article.aditem` cards, (b) the response trips `looks_like_block_page`, or (c) the agent decides to stop because the first listing on the page is older than `SCRAPER_MAX_AGE_DAYS` (the freshness probe runs `scrape_detail` on the page leader to read its posting date — Kleinanzeigen does not expose dates on the search card). The 5-page robots cap is therefore a **soft natural ceiling** rather than a hard one: in practice the freshness gate fires well before page 5 in Munich, and reaching page 5 means the next page would be 6 (disallowed) at which point we'd stop on the empty-page condition.
 
 ### How to read one listing (kleinanzeigen detail)
 
@@ -939,11 +939,11 @@ The agent listens for these env knobs:
 - `SCRAPER_ENABLED_SOURCES` — comma-separated source names. Default `wg-gesucht`. Valid: `wg-gesucht`, `tum-living`, `kleinanzeigen`.
 - `SCRAPER_CITY` — default `München`.
 - `SCRAPER_MAX_RENT` — default `2000`.
-- `SCRAPER_MAX_PAGES` — default `2` (capped at 5 for kleinanzeigen by robots.txt).
 - `SCRAPER_INTERVAL_SECONDS` — between full passes. Default `300`.
 - `SCRAPER_REFRESH_HOURS` — re-scrape threshold for full listings. Default `24`.
 - `SCRAPER_DELETION_PASSES` — consecutive missing passes before tombstoning. Default `2`.
-- `SCRAPER_MAX_AGE_DAYS` — drops listings whose source-reported posting date is older than the cutoff before they're persisted. Default `14`.
+- `SCRAPER_MAX_AGE_DAYS` — drives both the per-page pagination stop (the agent halts when the first listing on a page is older than the cutoff) and the per-stub backstop drop. Default `7`. There is no `SCRAPER_MAX_PAGES` knob: pagination depth is freshness-driven.
+- `SCRAPER_ENRICH_ENABLED` / `SCRAPER_ENRICH_MODEL` / `SCRAPER_ENRICH_MIN_DESC_CHARS` — optional LLM enrichment of missing structured fields (`furnished`, `wg_size`, …) when the description states them clearly. Default off (`false` / `gpt-4o-mini` / `200`); requires `OPENAI_API_KEY`. Coordinates remain on the deterministic Google Geocoding fallback path. See [DECISIONS.md ADR-025](./DECISIONS.md#adr-025-llm-driven-enrichment-of-missing-structured-fields).
 
 ## Migration verification
 
