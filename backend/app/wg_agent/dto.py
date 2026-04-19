@@ -158,7 +158,7 @@ class ListingDetailDTO(BaseModel):
     listing: ListingDTO
     photos: list[str]
     score: Optional[float] = None
-    travel_minutes_per_location: Optional[dict[str, dict[str, str | int]]] = None
+    travel_minutes_per_location: Optional[dict[str, dict[str, int]]] = None
     nearby_preference_places: list[NearbyPlaceDTO] = Field(default_factory=list)
 
 
