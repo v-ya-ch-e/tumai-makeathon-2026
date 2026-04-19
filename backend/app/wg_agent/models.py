@@ -160,6 +160,15 @@ class UserProfile(BaseModel):
     # triggers a silent re-backfill. Callers fall back to `created_at` when
     # this is None (pre-migration rows).
     backfill_baseline_at: Optional[datetime] = None
+    # Optional "Information for landlord" fields. Not collected during
+    # onboarding; filled in Profile settings when the user wants
+    # personalized landlord-message drafts.
+    first_name: Optional[str] = None
+    last_name: Optional[str] = None
+    phone: Optional[str] = None
+    occupation: Optional[str] = None
+    bio: Optional[str] = None
+    landlord_languages: Optional[list[str]] = None
 
 
 class ContactInfo(BaseModel):
@@ -179,6 +188,32 @@ class ContactInfo(BaseModel):
         description="Short paragraph the agent can quote verbatim in intro messages",
     )
     languages: list[str] = Field(default_factory=lambda: ["English", "German"])
+
+
+def contact_info_from_user(u: UserProfile) -> Optional[ContactInfo]:
+    """Build a `ContactInfo` from the user's profile, or None when incomplete.
+
+    The landlord-message draft requires at minimum a first name, an
+    occupation, a short bio, and an email (used as the agent's reply
+    address in the prompt). When any of those are missing the caller
+    should route the user to Profile settings instead of calling the LLM.
+    """
+    first_name = (u.first_name or "").strip()
+    occupation = (u.occupation or "").strip()
+    bio = (u.bio or "").strip()
+    if not first_name or not occupation or not bio or not u.email:
+        return None
+    return ContactInfo(
+        first_name=first_name,
+        last_name=(u.last_name or "").strip(),
+        age=u.age,
+        gender=u.gender,
+        email=u.email,
+        phone=(u.phone or "").strip(),
+        occupation=occupation,
+        bio=bio,
+        languages=list(u.landlord_languages) if u.landlord_languages else ["English", "German"],
+    )
 
 
 # --- Output: what the agent found & did ---------------------------------------

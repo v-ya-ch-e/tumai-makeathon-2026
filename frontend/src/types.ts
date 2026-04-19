@@ -16,6 +16,17 @@ export type User = {
    * against. Populated by the backend as `backfill_baseline_at`; clients
    * fall back to `createdAt` when it is null (pre-migration rows). */
   backfillBaselineAt: string | null
+  /** Optional "Information for landlord" fields used to personalize
+   * landlord-message drafts. Filled in Profile settings (never during
+   * onboarding). The UI treats the set as "complete" only when
+   * `firstName`, `occupation`, and `bio` are all non-empty and an
+   * `email` is present on the account. */
+  firstName: string | null
+  lastName: string | null
+  phone: string | null
+  occupation: string | null
+  bio: string | null
+  landlordLanguages: string[] | null
 }
 
 export type HuntStatus = 'pending' | 'running' | 'done' | 'failed'

@@ -1,10 +1,15 @@
 import clsx from 'clsx'
-import { useEffect, useState, type ReactNode } from 'react'
-import { getListingDetail } from '../lib/api'
+import { useCallback, useEffect, useState, type ReactNode } from 'react'
+import { useNavigate } from 'react-router-dom'
+import {
+  MissingLandlordInfoError,
+  draftListingMessage,
+  getListingDetail,
+} from '../lib/api'
 import { formatGermanDateRange } from '../lib/date'
 import { useSession } from '../lib/session'
-import type { Component, Listing, ListingDetail } from '../types'
-import { Button, Drawer, StatusPill, type StatusPillTone } from './ui'
+import type { Component, Listing, ListingDetail, User } from '../types'
+import { Button, Drawer, StatusPill, Textarea, type StatusPillTone } from './ui'
 
 export type ListingDrawerProps = {
   open: boolean
@@ -118,6 +123,25 @@ function Section({
   )
 }
 
+function hasLandlordInfo(user: User | null): boolean {
+  if (!user) return false
+  const firstName = (user.firstName ?? '').trim()
+  const occupation = (user.occupation ?? '').trim()
+  const bio = (user.bio ?? '').trim()
+  const email = (user.email ?? '').trim()
+  return Boolean(firstName && occupation && bio && email)
+}
+
+type DraftStatus = 'idle' | 'loading' | 'ready' | 'error' | 'missing_info'
+
+type DraftState = {
+  status: DraftStatus
+  message: string
+  error: string | null
+}
+
+const INITIAL_DRAFT_STATE: DraftState = { status: 'idle', message: '', error: null }
+
 function nearbyCheckSummary(place: ListingDetail['nearbyPreferencePlaces'][number]): {
   status: string
   detail: string | null
@@ -135,10 +159,13 @@ function nearbyCheckSummary(place: ListingDetail['nearbyPreferencePlaces'][numbe
 }
 
 export function ListingDrawer({ open, listing, onClose }: ListingDrawerProps) {
-  const { username } = useSession()
+  const navigate = useNavigate()
+  const { username, user } = useSession()
   const [detail, setDetail] = useState<ListingDetail | null>(null)
   const [loading, setLoading] = useState(false)
   const [error, setError] = useState<string | null>(null)
+  const [draft, setDraft] = useState<DraftState>(INITIAL_DRAFT_STATE)
+  const [copied, setCopied] = useState(false)
 
   useEffect(() => {
     if (!open || !listing || !username) return
@@ -161,7 +188,61 @@ export function ListingDrawer({ open, listing, onClose }: ListingDrawerProps) {
     }
   }, [open, listing?.id, username])
 
+  // Reset the draft panel whenever the drawer switches to a different
+  // listing or closes — drafts are scoped to the currently open row.
+  useEffect(() => {
+    setDraft(INITIAL_DRAFT_STATE)
+    setCopied(false)
+  }, [listing?.id, open])
+
   const activeListing: Listing | null = detail?.listing ?? listing
+
+  const handleDraftClick = useCallback(async () => {
+    if (!activeListing || !username) return
+    if (!hasLandlordInfo(user)) {
+      setDraft({ status: 'missing_info', message: '', error: null })
+      return
+    }
+    setDraft((prev) => ({ status: 'loading', message: prev.message, error: null }))
+    setCopied(false)
+    try {
+      const { message } = await draftListingMessage(username, activeListing.id)
+      setDraft({ status: 'ready', message, error: null })
+    } catch (err) {
+      if (err instanceof MissingLandlordInfoError) {
+        setDraft({ status: 'missing_info', message: '', error: null })
+        return
+      }
+      setDraft({
+        status: 'error',
+        message: '',
+        error: err instanceof Error ? err.message : String(err),
+      })
+    }
+  }, [activeListing, username, user])
+
+  const handleCopy = useCallback(async () => {
+    if (!draft.message) return
+    try {
+      await navigator.clipboard.writeText(draft.message)
+      setCopied(true)
+      window.setTimeout(() => setCopied(false), 2000)
+    } catch {
+      setCopied(false)
+    }
+  }, [draft.message])
+
+  const goToProfileSettings = useCallback(() => {
+    onClose()
+    navigate('/profile#landlord-info')
+  }, [navigate, onClose])
+
+  const draftButtonLabel =
+    draft.status === 'loading'
+      ? 'Drafting…'
+      : draft.status === 'ready'
+        ? 'Regenerate message'
+        : 'Draft message to landlord'
 
   return (
     <Drawer
@@ -196,7 +277,85 @@ export function ListingDrawer({ open, listing, onClose }: ListingDrawerProps) {
             >
               Open on WG-Gesucht
             </Button>
+            <Button
+              variant="secondary"
+              size="sm"
+              onClick={() => void handleDraftClick()}
+              disabled={draft.status === 'loading'}
+            >
+              {draftButtonLabel}
+            </Button>
           </div>
+
+          {draft.status === 'missing_info' ? (
+            <Section title="Draft a message to the landlord">
+              <p className="text-[13px] leading-6 text-ink-muted">
+                Add your "Information for landlord" in Profile settings first — a first
+                name, occupation and a short bio is all we need to personalize the
+                message.
+              </p>
+              <div className="mt-4">
+                <Button variant="primary" size="sm" onClick={goToProfileSettings}>
+                  Go to profile settings
+                </Button>
+              </div>
+            </Section>
+          ) : null}
+
+          {draft.status === 'loading' && !draft.message ? (
+            <Section title="Draft a message to the landlord">
+              <p className="text-[13px] text-ink-muted">Drafting a personalized message…</p>
+            </Section>
+          ) : null}
+
+          {(draft.status === 'ready' || (draft.status === 'loading' && draft.message)) ? (
+            <Section title="Draft a message to the landlord">
+              <p className="text-[12px] leading-5 text-ink-muted">
+                Edit if you like, then click Copy and paste it into the WG-Gesucht
+                contact dialog.
+              </p>
+              <Textarea
+                className="mt-3"
+                rows={10}
+                value={draft.message}
+                onChange={(event) =>
+                  setDraft((prev) => ({ ...prev, message: event.target.value }))
+                }
+                disabled={draft.status === 'loading'}
+              />
+              <div className="mt-3 flex flex-wrap items-center gap-2">
+                <Button
+                  variant="primary"
+                  size="sm"
+                  onClick={() => void handleCopy()}
+                  disabled={!draft.message}
+                >
+                  {copied ? 'Copied' : 'Copy'}
+                </Button>
+                <Button
+                  variant="secondary"
+                  size="sm"
+                  onClick={() => void handleDraftClick()}
+                  disabled={draft.status === 'loading'}
+                >
+                  {draft.status === 'loading' ? 'Regenerating…' : 'Regenerate'}
+                </Button>
+              </div>
+            </Section>
+          ) : null}
+
+          {draft.status === 'error' && draft.error ? (
+            <Section title="Draft a message to the landlord" className="border-bad/35 bg-bad/5">
+              <p className="text-[13px] leading-6 text-ink">
+                Could not draft a message: {draft.error}
+              </p>
+              <div className="mt-3">
+                <Button variant="secondary" size="sm" onClick={() => void handleDraftClick()}>
+                  Try again
+                </Button>
+              </div>
+            </Section>
+          ) : null}
 
           {detail && detail.photos.length > 0 ? (
             <div className="overflow-hidden rounded-card border border-hairline bg-surface">

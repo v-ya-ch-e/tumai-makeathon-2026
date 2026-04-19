@@ -12,9 +12,11 @@ short (hackathon budget) but specific.
 
 from __future__ import annotations
 
+import hashlib
 import json
 import logging
 import os
+from functools import lru_cache
 from typing import Any, Optional
 from urllib.parse import urlparse
 
@@ -382,8 +384,11 @@ def vibe_score(
 
     Raises on HTTP / JSON / ValidationError failure. The evaluator catches
     these and sets `missing_data=True` on the component.
+
+    The actual network call is memoised by a content fingerprint so we
+    don't burn OpenAI quota re-scoring the same listing for the same
+    profile — the daily RPD limit on gpt-4o-mini is easy to hit otherwise.
     """
-    client = _client()
     nearby_block = _nearby_places_block(
         nearby_places or {},
         list(requirements.preferences),
@@ -397,6 +402,20 @@ def vibe_score(
         district=listing.district or "?",
         description=(listing.description or "").strip()[:1800],
     )
+    cache_key = hashlib.sha256(user_msg.encode("utf-8")).hexdigest()
+    return _cached_vibe_score(cache_key, user_msg)
+
+
+@lru_cache(maxsize=2048)
+def _cached_vibe_score(cache_key: str, user_msg: str) -> VibeScore:
+    """Memoised wrapper around the vibe-score LLM call.
+
+    Keyed on a sha256 of the fully rendered prompt so any change in the
+    listing description, district, or profile vibe inputs produces a
+    fresh call. `cache_key` is redundant with `user_msg` for hashing but
+    keeps the key short in the LRU.
+    """
+    client = _client()
     response = client.chat.completions.create(
         model=DEFAULT_MODEL,
         messages=[

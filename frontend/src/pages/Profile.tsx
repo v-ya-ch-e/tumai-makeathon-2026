@@ -1,7 +1,7 @@
 import { useCallback, useEffect, useState, type ReactNode } from 'react'
-import { useNavigate } from 'react-router-dom'
+import { useLocation, useNavigate } from 'react-router-dom'
 import { AppTabs } from '../components/AppTabs'
-import { Button, Card, Input, Select } from '../components/ui'
+import { Button, Card, Input, Select, Textarea } from '../components/ui'
 import { ApiError, getSearchProfile, updateUser } from '../lib/api'
 import { formatGermanDate } from '../lib/date'
 import { useSession } from '../lib/session'
@@ -16,10 +16,17 @@ const GENDER_OPTIONS: { value: Gender; label: string }[] = [
 
 export default function Profile() {
   const navigate = useNavigate()
+  const location = useLocation()
   const { username, user, isReady, refreshUser, setUsername } = useSession()
   const [ageInput, setAgeInput] = useState('')
   const [gender, setGender] = useState<Gender | ''>('')
   const [notificationEmailInput, setNotificationEmailInput] = useState('')
+  const [firstNameInput, setFirstNameInput] = useState('')
+  const [lastNameInput, setLastNameInput] = useState('')
+  const [occupationInput, setOccupationInput] = useState('')
+  const [bioInput, setBioInput] = useState('')
+  const [languagesInput, setLanguagesInput] = useState('')
+  const [phoneInput, setPhoneInput] = useState('')
   const [profile, setProfile] = useState<SearchProfile | null>(null)
   const [busy, setBusy] = useState(false)
   const [hydrated, setHydrated] = useState(false)
@@ -57,7 +64,24 @@ export default function Profile() {
     setAgeInput(String(user.age))
     setGender(user.gender)
     setNotificationEmailInput(user.email ?? '')
+    setFirstNameInput(user.firstName ?? '')
+    setLastNameInput(user.lastName ?? '')
+    setOccupationInput(user.occupation ?? '')
+    setBioInput(user.bio ?? '')
+    setLanguagesInput((user.landlordLanguages ?? []).join(', '))
+    setPhoneInput(user.phone ?? '')
   }, [user])
+
+  // Deep-link support: when the listing drawer sends the user to
+  // /profile#landlord-info, scroll the new section into view.
+  useEffect(() => {
+    if (!hydrated) return
+    if (location.hash !== '#landlord-info') return
+    const el = document.getElementById('landlord-info')
+    if (el) {
+      el.scrollIntoView({ behavior: 'smooth', block: 'start' })
+    }
+  }, [hydrated, location.hash])
 
   const handleSave = async () => {
     if (!username || !user) return
@@ -79,12 +103,23 @@ export default function Profile() {
     setErrors(nextErrors)
     if (Object.keys(nextErrors).length > 0) return
 
+    const languagesList = languagesInput
+      .split(',')
+      .map((item) => item.trim())
+      .filter(Boolean)
+
     setBusy(true)
     try {
       await updateUser(username, {
         age,
         gender: gender as Gender,
         email: notificationEmail || null,
+        firstName: firstNameInput.trim() || null,
+        lastName: lastNameInput.trim() || null,
+        phone: phoneInput.trim() || null,
+        occupation: occupationInput.trim() || null,
+        bio: bioInput.trim() || null,
+        landlordLanguages: languagesList.length > 0 ? languagesList : null,
       })
       await refreshUser()
       setFooter(<p className="text-[15px] text-good">Changes saved.</p>)
@@ -201,6 +236,82 @@ export default function Profile() {
                   ))}
                 </Select>
               </Field>
+            </div>
+
+            <div
+              id="landlord-info"
+              className="scroll-mt-24 border-t border-hairline px-6 py-6 sm:px-8"
+            >
+              <p className="section-kicker text-accent">Information for landlord</p>
+              <p className="mt-1 text-[13px] text-ink-muted">
+                Optional. Fill this in and we can draft a personalized first message for
+                any listing you like, ready to paste into the WG-Gesucht dialog.
+              </p>
+
+              <div className="mt-5 space-y-5">
+                <div className="grid gap-5 sm:grid-cols-2">
+                  <Field label="First name">
+                    <Input
+                      value={firstNameInput}
+                      onChange={(event) => setFirstNameInput(event.target.value)}
+                      placeholder="Alex"
+                    />
+                  </Field>
+                  <Field label="Last name">
+                    <Input
+                      value={lastNameInput}
+                      onChange={(event) => setLastNameInput(event.target.value)}
+                      placeholder="Müller"
+                    />
+                  </Field>
+                </div>
+
+                <Field label="Occupation">
+                  <Input
+                    value={occupationInput}
+                    onChange={(event) => setOccupationInput(event.target.value)}
+                    placeholder="MSc Informatics student at TUM"
+                  />
+                </Field>
+
+                <Field
+                  label="Short bio"
+                  hint="A couple of sentences about you — hobbies, lifestyle, what makes you a nice flatmate. Used verbatim in drafted messages."
+                >
+                  <Textarea
+                    rows={4}
+                    value={bioInput}
+                    onChange={(event) => setBioInput(event.target.value)}
+                    placeholder="Quiet during the week, love cooking on weekends, non-smoker, no pets…"
+                  />
+                </Field>
+
+                <div className="grid gap-5 sm:grid-cols-2">
+                  <Field
+                    label="Languages"
+                    hint="Comma-separated, e.g. English, German."
+                  >
+                    <Input
+                      value={languagesInput}
+                      onChange={(event) => setLanguagesInput(event.target.value)}
+                      placeholder="English, German"
+                    />
+                  </Field>
+                  <Field
+                    label={
+                      <>
+                        Phone <span className="font-normal text-ink-muted">(optional)</span>
+                      </>
+                    }
+                  >
+                    <Input
+                      value={phoneInput}
+                      onChange={(event) => setPhoneInput(event.target.value)}
+                      placeholder="+49 151 …"
+                    />
+                  </Field>
+                </div>
+              </div>
             </div>
 
             <div className="border-t border-hairline px-6 py-5 sm:px-8">

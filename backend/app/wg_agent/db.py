@@ -15,14 +15,18 @@ boots. Destructive changes require a `DROP DATABASE; CREATE DATABASE`
 
 from __future__ import annotations
 
+import logging
 import os
 from collections.abc import Iterator
 from urllib.parse import quote_plus
 
+from sqlalchemy import text
 from sqlmodel import Session, SQLModel, create_engine
 
 from . import crypto
 from . import db_models as _db_models  # noqa: F401  (registers tables on SQLModel.metadata)
+
+logger = logging.getLogger(__name__)
 
 
 _REQUIRED_DB_VARS = ("DB_HOST", "DB_PORT", "DB_USER", "DB_PASSWORD", "DB_NAME")
@@ -72,10 +76,47 @@ def describe_database() -> str:
     return f"{user}@{host}:{port}/{name}"
 
 
+_USERROW_LANDLORD_COLUMNS: tuple[tuple[str, str], ...] = (
+    ("first_name", "TEXT"),
+    ("last_name", "TEXT"),
+    ("phone", "TEXT"),
+    ("occupation", "TEXT"),
+    ("bio", "TEXT"),
+    ("languages", "JSON"),
+)
+
+
+def _ensure_userrow_landlord_columns() -> None:
+    """Idempotently add the optional landlord-intro columns on `userrow`.
+
+    `SQLModel.metadata.create_all` does not alter existing tables, so new
+    columns on an already-provisioned MySQL database require hand-coded
+    `ALTER TABLE`. Each column is gated on a fresh `information_schema`
+    check so this is safe to call on every boot.
+    """
+    with Session(engine) as session:
+        for column, sql_type in _USERROW_LANDLORD_COLUMNS:
+            present = session.exec(
+                text(
+                    "SELECT COUNT(*) FROM information_schema.columns "
+                    "WHERE table_schema = DATABASE() "
+                    "AND table_name = 'userrow' "
+                    "AND column_name = :c"
+                ).bindparams(c=column)
+            ).first()
+            count = present[0] if present is not None else 0
+            if int(count or 0) > 0:
+                continue
+            logger.info("userrow: adding column %s %s", column, sql_type)
+            session.exec(text(f"ALTER TABLE userrow ADD COLUMN {column} {sql_type}"))
+        session.commit()
+
+
 def init_db() -> None:
     """Ensure the Fernet key + schema exist. Safe to call repeatedly."""
     crypto.ensure_key()
     SQLModel.metadata.create_all(engine)
+    _ensure_userrow_landlord_columns()
 
 
 def get_session() -> Iterator[Session]:

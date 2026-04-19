@@ -28,6 +28,7 @@ import logging
 from dataclasses import dataclass
 from typing import Optional
 
+from openai import RateLimitError
 from pydantic import ValidationError
 
 from . import brain, places
@@ -576,6 +577,29 @@ def _nearby_place_curve(distance_m: int) -> float:
     return 0.0
 
 
+def _has_vibe_signal(
+    profile: SearchProfile,
+    nearby_places: Optional[dict[str, NearbyPlace]],
+) -> bool:
+    """Return True when the profile carries anything the LLM could judge.
+
+    The vibe prompt explicitly tells the model to return 0.5 with
+    "not enough vibe information" when the student has no notes, no
+    district preferences, and no nearby-place context. We do that check
+    in code so we don't spend an OpenAI request (and a slice of the daily
+    RPD quota) on listings where the answer is already determined.
+    """
+    if (profile.notes or "").strip():
+        return True
+    if profile.preferred_districts or profile.avoid_districts:
+        return True
+    if profile.preferences:
+        return True
+    if nearby_places and any(p.searched for p in nearby_places.values()):
+        return True
+    return False
+
+
 async def vibe_fit(
     listing: Listing,
     profile: SearchProfile,
@@ -584,12 +608,29 @@ async def vibe_fit(
 ) -> ComponentScore:
     """Run `brain.vibe_score` off the event loop; degrade gracefully."""
     weight = COMPONENT_WEIGHTS["vibe"]
+    if not _has_vibe_signal(profile, nearby_places) or not (listing.description or "").strip():
+        return ComponentScore(
+            key="vibe",
+            score=0.5,
+            weight=weight,
+            evidence=["not enough vibe information"],
+            missing_data=True,
+        )
     try:
         out = await asyncio.to_thread(
             brain.vibe_score,
             listing,
             profile,
             nearby_places=nearby_places or {},
+        )
+    except RateLimitError as exc:
+        logger.warning("vibe_fit: LLM rate-limited: %s", exc)
+        return ComponentScore(
+            key="vibe",
+            score=0.0,
+            weight=weight,
+            evidence=["vibe check skipped: LLM rate limit"],
+            missing_data=True,
         )
     except (ValidationError, ValueError) as exc:
         logger.warning("vibe_fit: bad JSON from LLM: %s", exc)

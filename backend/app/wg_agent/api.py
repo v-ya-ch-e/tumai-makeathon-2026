@@ -22,6 +22,7 @@ from .dto import (
     CreateUserBody,
     CredentialsBody,
     CredentialsStatusDTO,
+    DraftMessageDTO,
     ListingDetailDTO,
     ListingDTO,
     NearbyPlaceDTO,
@@ -41,6 +42,7 @@ from .models import (
     Gender,
     UserProfile,
     WGCredentials,
+    contact_info_from_user,
 )
 
 router = APIRouter(prefix="/api", tags=["wg-hunter"])
@@ -82,6 +84,22 @@ def get_user(username: str, session: Session = Depends(get_session)) -> UserDTO:
     return user_to_dto(u)
 
 
+def _normalize_optional_text(value: Optional[str]) -> Optional[str]:
+    """Collapse empty/whitespace-only strings to None so clearing a field stores NULL."""
+    if value is None:
+        return None
+    stripped = value.strip()
+    return stripped or None
+
+
+def _normalize_languages(value: Optional[list[str]]) -> Optional[list[str]]:
+    if value is None:
+        return None
+    cleaned = [item.strip() for item in value if isinstance(item, str)]
+    cleaned = [item for item in cleaned if item]
+    return cleaned or None
+
+
 @router.put("/users/{username}", response_model=UserDTO)
 def update_user(
     username: str,
@@ -104,6 +122,13 @@ def update_user(
             age=body.age,
             gender=Gender(body.gender),
             created_at=existing.created_at,
+            backfill_baseline_at=existing.backfill_baseline_at,
+            first_name=_normalize_optional_text(body.first_name),
+            last_name=_normalize_optional_text(body.last_name),
+            phone=_normalize_optional_text(body.phone),
+            occupation=_normalize_optional_text(body.occupation),
+            bio=_normalize_optional_text(body.bio),
+            landlord_languages=_normalize_languages(body.landlord_languages),
         ),
     )
     return user_to_dto(updated)
@@ -335,6 +360,57 @@ def get_listing_detail(
     if detail is None:
         raise HTTPException(status_code=404, detail="Listing not found")
     return detail
+
+
+@router.post(
+    "/users/{username}/listings/{listing_id}/draft-message",
+    response_model=DraftMessageDTO,
+)
+def draft_listing_message(
+    username: str,
+    listing_id: str,
+    session: Session = Depends(get_session),
+) -> DraftMessageDTO:
+    """Generate a personalized first message to the landlord for `listing_id`.
+
+    Returns 422 with `{code: "missing_landlord_info"}` when the user has
+    not filled the Profile settings "Information for landlord" section
+    (required: first name, occupation, bio, email). The frontend uses
+    this code to route the user to the corresponding settings anchor
+    instead of calling the LLM.
+    """
+    user = repo.get_user(session, username=username)
+    if user is None:
+        raise HTTPException(status_code=404, detail="User not found")
+    contact = contact_info_from_user(user)
+    if contact is None:
+        raise HTTPException(
+            status_code=422,
+            detail={
+                "code": "missing_landlord_info",
+                "message": (
+                    "Fill in 'Information for landlord' in Profile settings "
+                    "(first name, occupation, bio, email) to enable drafts."
+                ),
+            },
+        )
+    listing_row = session.get(ListingRow, listing_id)
+    if listing_row is None:
+        raise HTTPException(status_code=404, detail="Listing not found")
+    match_row = session.get(UserListingRow, (username, listing_id))
+    if match_row is None:
+        raise HTTPException(status_code=404, detail="Listing not found")
+    listing = repo.row_to_domain_listing(listing_row)
+
+    # Import lazily so a missing OPENAI_API_KEY doesn't break unrelated
+    # imports — only callers of this endpoint need the key.
+    from . import brain
+
+    try:
+        message = brain.draft_message(listing, contact)
+    except RuntimeError as exc:
+        raise HTTPException(status_code=503, detail=str(exc)) from exc
+    return DraftMessageDTO(message=message)
 
 
 # --- Debug / smoke tests ---------------------------------------------------

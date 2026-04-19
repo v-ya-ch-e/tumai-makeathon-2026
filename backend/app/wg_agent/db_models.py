@@ -23,6 +23,15 @@ class UserRow(SQLModel, table=True):
     # notifications. Nullable so pre-migration rows keep working; call sites
     # fall back to `created_at` when the column is NULL.
     backfill_baseline_at: Optional[datetime] = None
+    # Optional landlord-intro fields. Populated via the "Information for
+    # landlord" section in Profile settings; consumed by
+    # `brain.draft_message` to craft personalized first messages.
+    first_name: Optional[str] = Field(default=None, sa_column=Column("first_name", Text))
+    last_name: Optional[str] = Field(default=None, sa_column=Column("last_name", Text))
+    phone: Optional[str] = Field(default=None, sa_column=Column("phone", Text))
+    occupation: Optional[str] = Field(default=None, sa_column=Column("occupation", Text))
+    bio: Optional[str] = Field(default=None, sa_column=Column("bio", Text))
+    languages: Optional[list] = Field(default=None, sa_column=Column("languages", JSON))
 
 
 class WgCredentialsRow(SQLModel, table=True):

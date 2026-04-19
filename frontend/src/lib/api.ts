@@ -163,9 +163,21 @@ export async function getUser(username: string): Promise<User | null> {
   return toCamel(body) as User
 }
 
+export type UpdateUserBody = {
+  age: number
+  gender: Gender
+  email: string | null
+  firstName?: string | null
+  lastName?: string | null
+  phone?: string | null
+  occupation?: string | null
+  bio?: string | null
+  landlordLanguages?: string[] | null
+}
+
 export async function updateUser(
   username: string,
-  body: { age: number; gender: Gender; email: string | null },
+  body: UpdateUserBody,
 ): Promise<User> {
   const data = await requestJson(`/api/users/${encodeURIComponent(username)}`, {
     method: 'PUT',
@@ -313,6 +325,45 @@ export async function pauseAgent(username: string): Promise<void> {
     `/api/users/${encodeURIComponent(username)}/agent/pause`,
     { method: 'POST' },
   )
+}
+
+/**
+ * Thrown by `draftListingMessage` when the user has not filled the
+ * "Information for landlord" section in Profile settings. The UI branches
+ * on this specific error to route the user to the settings anchor
+ * instead of showing a generic failure message.
+ */
+export class MissingLandlordInfoError extends Error {
+  constructor(message = 'Missing landlord info') {
+    super(message)
+    this.name = 'MissingLandlordInfoError'
+  }
+}
+
+function isMissingLandlordInfoBody(body: unknown): boolean {
+  if (!body || typeof body !== 'object') return false
+  const detail = (body as { detail?: unknown }).detail
+  if (!detail || typeof detail !== 'object') return false
+  return (detail as { code?: unknown }).code === 'missing_landlord_info'
+}
+
+export async function draftListingMessage(
+  username: string,
+  listingId: string,
+): Promise<{ message: string }> {
+  const res = await fetch(
+    `/api/users/${encodeURIComponent(username)}/listings/${encodeURIComponent(listingId)}/draft-message`,
+    { ...fetchDefaults, method: 'POST' },
+  )
+  const body = await readBody(res)
+  if (res.status === 422 && isMissingLandlordInfoBody(body)) {
+    throw new MissingLandlordInfoError(errorMessage(body))
+  }
+  if (!res.ok) {
+    throw new ApiError(res.status, body, errorMessage(body))
+  }
+  const payload = toCamel(body) as { message?: string }
+  return { message: payload.message ?? '' }
 }
 
 export async function getListingDetail(

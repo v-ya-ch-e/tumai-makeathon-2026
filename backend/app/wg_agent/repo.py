@@ -52,6 +52,12 @@ def _user_row_to_profile(row: UserRow) -> UserProfile:
         gender=Gender(row.gender),
         created_at=row.created_at,
         backfill_baseline_at=row.backfill_baseline_at,
+        first_name=row.first_name,
+        last_name=row.last_name,
+        phone=row.phone,
+        occupation=row.occupation,
+        bio=row.bio,
+        landlord_languages=list(row.languages) if row.languages else None,
     )
 
 
@@ -97,6 +103,12 @@ def update_user(session: Session, *, username: str, profile: UserProfile) -> Use
     row.email = profile.email
     row.age = profile.age
     row.gender = profile.gender.value
+    row.first_name = profile.first_name
+    row.last_name = profile.last_name
+    row.phone = profile.phone
+    row.occupation = profile.occupation
+    row.bio = profile.bio
+    row.languages = list(profile.landlord_languages) if profile.landlord_languages else None
     session.commit()
     session.refresh(row)
     return _user_row_to_profile(row)

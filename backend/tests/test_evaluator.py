@@ -480,18 +480,42 @@ def test_preference_fit_weight5_nearby_missing_sets_cap() -> None:
 # -----------------------------------------------------------------------------
 
 
+def _vibe_listing() -> Listing:
+    return _listing(description="Quiet flat near the park, lots of light.")
+
+
+def _vibe_profile() -> SearchProfile:
+    return _profile(notes="prefer quiet neighborhoods with parks")
+
+
 def test_vibe_fit_happy_path() -> None:
     async def _run() -> ComponentScore:
         with patch(
             "app.wg_agent.evaluator.brain.vibe_score",
             return_value=VibeScore(score=0.7, evidence=["likes quiet"]),
         ):
-            return await evaluator.vibe_fit(_listing(), _profile())
+            return await evaluator.vibe_fit(_vibe_listing(), _vibe_profile())
 
     c = asyncio.run(_run())
     assert c.score == 0.7
     assert c.evidence == ["likes quiet"]
     assert c.missing_data is False
+
+
+def test_vibe_fit_short_circuits_when_no_signal() -> None:
+    """Profile + listing with no vibe inputs must not hit the LLM at all."""
+
+    async def _run() -> ComponentScore:
+        with patch(
+            "app.wg_agent.evaluator.brain.vibe_score",
+            side_effect=AssertionError("LLM must not be called"),
+        ):
+            return await evaluator.vibe_fit(_listing(), _profile())
+
+    c = asyncio.run(_run())
+    assert c.score == 0.5
+    assert c.missing_data is True
+    assert c.evidence == ["not enough vibe information"]
 
 
 def test_vibe_fit_invalid_json_degrades() -> None:
@@ -504,7 +528,7 @@ def test_vibe_fit_invalid_json_degrades() -> None:
         with patch(
             "app.wg_agent.evaluator.brain.vibe_score", side_effect=boom
         ):
-            return await evaluator.vibe_fit(_listing(), _profile())
+            return await evaluator.vibe_fit(_vibe_listing(), _vibe_profile())
 
     c = asyncio.run(_run())
     assert c.missing_data is True
@@ -519,11 +543,33 @@ def test_vibe_fit_http_error_degrades() -> None:
         with patch(
             "app.wg_agent.evaluator.brain.vibe_score", side_effect=boom
         ):
-            return await evaluator.vibe_fit(_listing(), _profile())
+            return await evaluator.vibe_fit(_vibe_listing(), _vibe_profile())
 
     c = asyncio.run(_run())
     assert c.missing_data is True
     assert any("LLM error" in e for e in c.evidence)
+
+
+def test_vibe_fit_rate_limit_surfaces_distinct_message() -> None:
+    from openai import RateLimitError
+    import httpx
+
+    async def _run() -> ComponentScore:
+        def boom(*_a, **_kw):
+            raise RateLimitError(
+                message="rate limit",
+                response=httpx.Response(
+                    429, request=httpx.Request("POST", "https://api.openai.com/v1/chat/completions")
+                ),
+                body=None,
+            )
+
+        with patch("app.wg_agent.evaluator.brain.vibe_score", side_effect=boom):
+            return await evaluator.vibe_fit(_vibe_listing(), _vibe_profile())
+
+    c = asyncio.run(_run())
+    assert c.missing_data is True
+    assert any("rate limit" in e for e in c.evidence)
 
 
 # -----------------------------------------------------------------------------

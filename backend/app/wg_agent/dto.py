@@ -34,6 +34,15 @@ class UserDTO(BaseModel):
     # after a profile-edit re-backfill. Falls back to `created_at` when the
     # backend has not populated it (pre-migration rows).
     backfill_baseline_at: Optional[datetime] = None
+    # Optional "Information for landlord" fields used for personalized
+    # landlord-message drafts. All nullable; the client treats the set as
+    # "complete" when first_name, occupation, and bio are all non-empty.
+    first_name: Optional[str] = None
+    last_name: Optional[str] = None
+    phone: Optional[str] = None
+    occupation: Optional[str] = None
+    bio: Optional[str] = None
+    landlord_languages: Optional[list[str]] = None
 
 
 class CreateUserBody(BaseModel):
@@ -47,6 +56,21 @@ class UpdateUserBody(BaseModel):
     email: Optional[EmailStr] = None
     age: int = Field(..., ge=16, le=99)
     gender: str = Field(..., pattern=r"^(female|male|diverse|prefer_not_to_say)$")
+    # Optional landlord-intro fields (see UserDTO for semantics). Empty
+    # strings are normalized to None on the API layer so "clearing" a
+    # field just stores NULL.
+    first_name: Optional[str] = Field(default=None, max_length=80)
+    last_name: Optional[str] = Field(default=None, max_length=80)
+    phone: Optional[str] = Field(default=None, max_length=40)
+    occupation: Optional[str] = Field(default=None, max_length=160)
+    bio: Optional[str] = Field(default=None, max_length=2000)
+    landlord_languages: Optional[list[str]] = None
+
+
+class DraftMessageDTO(BaseModel):
+    """Response body for the draft-message endpoint."""
+
+    message: str
 
 
 class SearchProfileDTO(BaseModel):
@@ -244,6 +268,12 @@ def user_to_dto(u: UserProfile) -> UserDTO:
         gender=u.gender.value,
         created_at=u.created_at,
         backfill_baseline_at=u.backfill_baseline_at,
+        first_name=u.first_name,
+        last_name=u.last_name,
+        phone=u.phone,
+        occupation=u.occupation,
+        bio=u.bio,
+        landlord_languages=list(u.landlord_languages) if u.landlord_languages else None,
     )
 
 
