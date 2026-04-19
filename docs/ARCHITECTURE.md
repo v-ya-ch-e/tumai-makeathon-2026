@@ -3,7 +3,7 @@
 WG Hunter runs as two containers against a shared AWS-hosted MySQL:
 
 1. **backend** — FastAPI process that serves the built React SPA, bootstraps the schema on startup via `SQLModel.metadata.create_all`, and spawns per-user `UserAgent` asyncio tasks that **match** listings from the shared pool (they never scrape).
-2. **scraper** — Standalone Python process that owns `ListingRow` + `PhotoRow`. It iterates a registry of `Source` plugins ([`backend/app/scraper/sources/`](../backend/app/scraper/sources/)) — wg-gesucht (default), TUM Living, Kleinanzeigen — selected via `SCRAPER_ENABLED_SOURCES`, deep-scrapes every new listing per source × per kind, refreshes listings older than the source's `refresh_hours`, and tombstones listings that stop showing up across `SCRAPER_DELETION_PASSES` consecutive passes for that source. Per [ADR-020](./DECISIONS.md#adr-020-multi-source-listing-identifiers-via-string-namespacing), every listing id is namespaced (`f"{source}:{external_id}"`) so cross-source collisions are structurally impossible; per [ADR-021](./DECISIONS.md#adr-021-listing-kind-as-a-first-class-column), every row carries a `kind` (`'wg'` | `'flat'`) so the matcher honors `SearchProfile.mode`.
+2. **scraper** — Standalone Python process that owns `ListingRow` + `PhotoRow`. It iterates a registry of `Source` plugins ([`backend/app/scraper/sources/`](../backend/app/scraper/sources/)) — wg-gesucht (default), TUM Living, Kleinanzeigen — selected via `SCRAPER_ENABLED_SOURCES`, deep-scrapes every new listing per source × per kind, and refreshes listings older than the source's `refresh_hours`. Source URLs request newest-first sorting and the agent stops the `(source, kind)` walk the moment a stub's posting date is older than `SCRAPER_MAX_AGE_DAYS` ([ADR-026](./DECISIONS.md#adr-026-drop-the-deletion-sweep-stop-pagination-on-the-first-stale-stub)). `SCRAPER_KIND` (`wg` | `flat` | `both`) restricts which verticals run. Per [ADR-020](./DECISIONS.md#adr-020-multi-source-listing-identifiers-via-string-namespacing), every listing id is namespaced (`f"{source}:{external_id}"`) so cross-source collisions are structurally impossible; per [ADR-021](./DECISIONS.md#adr-021-listing-kind-as-a-first-class-column), every row carries a `kind` (`'wg'` | `'flat'`) so the matcher honors `SearchProfile.mode`.
 
 ## Runtime shape
 
@@ -24,7 +24,7 @@ flowchart LR
   end
   MySQL[("AWS MySQL<br/>DB_HOST / DB_PORT / DB_USER / DB_PASSWORD / DB_NAME")]
   SA -->|"per source × per kind: search + scrape_detail"| WG
-  SA -->|"upsert_global_listing + save_photos + per-source mark_listing_deleted"| MySQL
+  SA -->|"upsert_global_listing + save_photos"| MySQL
   React["React (Vite)"] -->|"fetch /api"| API
   React -->|"GET /api/users/:u/stream"| API
   API --> PM
@@ -47,7 +47,7 @@ Fernet key material for credential blobs is resolved in [`crypto.py`](../backend
 ## Why these choices
 
 - **Split scraping from matching** — The scraper writes once per listing across all users; per-user work is pure scoring. See [ADR-018](./DECISIONS.md#adr-018-separate-scraper-container--global-listingrow-mysql-only).
-- **Source-pluggable scraper** — `ScraperAgent` consumes `Source` instances from `app/scraper/sources/` instead of hardcoding wg-gesucht. Each source declares its own pacing (`search_page_delay_seconds`, `detail_delay_seconds`) and refresh window (`refresh_hours`); the loop is otherwise source-agnostic. Pagination is freshness-driven: each source exposes `search_pages` as an async iterator, and the agent stops paginating when the first listing on a page is older than `SCRAPER_MAX_AGE_DAYS` (see [ADR-024](./DECISIONS.md#adr-024-scraper-pagination-terminates-on-first-stub-freshness-not-page-count)). Adding a new site is a new module + a registry entry. See [ADR-020](./DECISIONS.md#adr-020-multi-source-listing-identifiers-via-string-namespacing) and [ADR-021](./DECISIONS.md#adr-021-listing-kind-as-a-first-class-column).
+- **Source-pluggable scraper** — `ScraperAgent` consumes `Source` instances from `app/scraper/sources/` instead of hardcoding wg-gesucht. Each source declares its own pacing (`search_page_delay_seconds`, `detail_delay_seconds`) and refresh window (`refresh_hours`); the loop is otherwise source-agnostic. Pagination is freshness-driven: each source exposes `search_pages` as an async iterator that requests newest-first results, and the agent stops the `(source, kind)` walk the moment a stub's posting date is older than `SCRAPER_MAX_AGE_DAYS` (see [ADR-024](./DECISIONS.md#adr-024-scraper-pagination-terminates-on-first-stub-freshness-not-page-count) and [ADR-026](./DECISIONS.md#adr-026-drop-the-deletion-sweep-stop-pagination-on-the-first-stale-stub)). Adding a new site is a new module + a registry entry. See [ADR-020](./DECISIONS.md#adr-020-multi-source-listing-identifiers-via-string-namespacing) and [ADR-021](./DECISIONS.md#adr-021-listing-kind-as-a-first-class-column).
 - **One agent per user (not per hunt)** — The UI has no "start a new hunt" concept anymore: saving a search profile auto-spawns a continuous `UserAgent`, and the backend resumes agents for every user with a `SearchProfileRow` on boot. Listings and actions are keyed by `username`, so the whole hunt-lifecycle state machine (`pending/running/done/failed`) is gone.
 - **MySQL on AWS, no local DB** — All developers share one AWS RDS instance via five `DB_*` env vars (`DB_HOST`, `DB_PORT`, `DB_USER`, `DB_PASSWORD`, `DB_NAME`) in `.env`. No docker-compose `mysql` service, no per-developer schema drift. Tests use in-memory SQLite for isolation ([`backend/tests/conftest.py`](../backend/tests/conftest.py) sets inert `DB_*` placeholders so the production `db.py` can import; individual tests then build their own SQLite engine and monkey-patch `db_module.engine`).
 - **Vite + React, not Next.js** — No SSR requirement; the UI is a desktop-first SPA. FastAPI serves `frontend/dist/` so one service covers API + static assets.
@@ -94,20 +94,13 @@ sequenceDiagram
   participant DB as MySQL
 
   loop every SCRAPER_INTERVAL_SECONDS
-    loop per source × per kind
-      SA->>SRC: search(kind, profile)
-      SRC-->>SA: Listing stubs (namespaced id + kind)
-      loop per new or stale listing
+    loop per source × per kind in (kind_supported ∩ SCRAPER_KIND)
+      SA->>SRC: search_pages(kind, profile)
+      SRC-->>SA: Listing stubs page (newest-first, namespaced id + kind)
+      loop per stub until posted_at < cutoff
         SA->>SRC: scrape_detail(stub)
         SRC-->>SA: enriched Listing
         SA->>DB: upsert_global_listing (status=full) + save_photos
-      end
-    end
-    loop per source
-      SA->>DB: list_active_listing_ids(source=source.name)
-      Note over SA: diff active vs seen-by-this-source; bump per-source miss counter
-      opt counter ≥ SCRAPER_DELETION_PASSES
-        SA->>DB: mark_listing_deleted (scrape_status='deleted', deleted_at=now)
       end
     end
   end

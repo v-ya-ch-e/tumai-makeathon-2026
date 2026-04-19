@@ -202,45 +202,9 @@ def test_repo_round_trip() -> None:
         assert repo.credentials_status(session, username="lea") == (False, None)
 
 
-def test_list_user_listings_excludes_deleted_listings() -> None:
-    """`list_user_listings` joins through `UserListingRow` and filters out rows
-    whose `ListingRow.deleted_at` has been stamped by the scraper's deletion
-    sweep (ADR-018 + deletion-sweep refactor)."""
-    engine = _make_engine()
-    with Session(engine) as session:
-        repo.create_user(
-            session,
-            profile=UserProfile(username="u", age=22, gender=Gender.female),
-        )
-
-        for lid in ("alive", "gone"):
-            repo.upsert_global_listing(
-                session,
-                listing=Listing(
-                    id=lid,
-                    url=HttpUrl(f"https://www.wg-gesucht.de/{lid}"),
-                    title=f"Room {lid}",
-                ),
-                status="full",
-            )
-            repo.save_user_match(
-                session,
-                username="u",
-                listing_id=lid,
-                score=0.5,
-                reason="ok",
-                match_reasons=[],
-                mismatch_reasons=[],
-            )
-
-        repo.mark_listing_deleted(session, listing_id="gone")
-
-        listings = repo.list_user_listings(session, username="u")
-
-    assert [l.id for l in listings] == ["alive"]
-
-
-def test_list_scorable_listings_for_user_excludes_scored_and_deleted() -> None:
+def test_list_scorable_listings_for_user_excludes_already_scored() -> None:
+    """The matcher must not re-score the same listing twice for the same user,
+    and stub listings must never be returned (deep-scrape gate)."""
     engine = _make_engine()
     with Session(engine) as session:
         repo.create_user(
@@ -250,7 +214,7 @@ def test_list_scorable_listings_for_user_excludes_scored_and_deleted() -> None:
             session, profile=UserProfile(username="b", age=23, gender=Gender.male)
         )
 
-        for lid in ("g1", "g2", "g3"):
+        for lid in ("g1", "g2"):
             repo.upsert_global_listing(
                 session,
                 listing=Listing(
@@ -281,9 +245,6 @@ def test_list_scorable_listings_for_user_excludes_scored_and_deleted() -> None:
             match_reasons=[],
             mismatch_reasons=[],
         )
-        # `g3` has been tombstoned by the scraper's deletion sweep → both
-        # users should skip it.
-        repo.mark_listing_deleted(session, listing_id="g3")
 
         a_candidates = {
             r.id

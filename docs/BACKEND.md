@@ -8,7 +8,7 @@ The backend container hosts the FastAPI app + `wg_agent` package: JSON/SSE API, 
 backend/app/main.py              FastAPI app, lifespan (DB bootstrap + per-user agent resume), SPA mount, legacy /items routes
 backend/app/scraper/
   __init__.py                    Package docstring; scraper is the sole writer of ListingRow + PhotoRow
-  agent.py                       `ScraperAgent` async loop: per-source × per-kind iteration → skip-if-fresh → deep-scrape → upsert_global_listing → per-source deletion sweep
+  agent.py                       `ScraperAgent` async loop: per-source × per-kind iteration → per-stub freshness stop → skip-if-fresh → deep-scrape → upsert_global_listing
   main.py                        `python -m app.scraper.main` entrypoint: db.init_db + run_forever
   migrate_multi_source.py        `python -m app.scraper.migrate_multi_source` one-shot DB migration (widen TEXT columns, add `kind` + index, namespace existing wg-gesucht ids, force rescrape). Idempotent + transactional + `--dry-run`. See [`docs/SCRAPER.md`](./SCRAPER.md#migration-verification)
   README.md                      Multi-source contract (id namespacing, kind, dedup) + deploy procedure
@@ -99,7 +99,7 @@ Key order: `WG_SECRET_KEY` (must be a valid Fernet key string) else read `~/.wg_
 
 ## `repo.py`
 
-Narrow surface (domain in/out unless noted). Write ownership is split: the scraper calls `upsert_global_listing` + `save_photos` + `mark_listing_deleted`; the per-user matcher calls `save_user_match` + `append_user_action`.
+Narrow surface (domain in/out unless noted). Write ownership is split: the scraper calls `upsert_global_listing` + `save_photos`; the per-user matcher calls `save_user_match` + `append_user_action`.
 
 | Function | Purpose |
 | --- | --- |
@@ -112,16 +112,14 @@ Narrow surface (domain in/out unless noted). Write ownership is split: the scrap
 | `upsert_credentials` | JSON-encode `WGCredentials`, Fernet-encrypt, upsert `WgCredentialsRow` |
 | `delete_credentials` | Remove credential row |
 | `credentials_status` | `(connected, saved_at)` tuple |
-| `upsert_global_listing` | Merge `ListingRow` (scraper only); writes `kind`; bumps `scraped_at` + `scrape_status` + optional `scrape_error`; stamps `deleted_at` when `status="deleted"` |
+| `upsert_global_listing` | Merge `ListingRow` (scraper only); writes `kind`; bumps `scraped_at` + `scrape_status` + optional `scrape_error` |
 | `save_user_match` | Upsert `UserListingRow` with optional `scored_against_scraped_at` (per-user matcher only) |
 | `save_photos` | Replace `PhotoRow` rows for a listing (scraper only) |
-| `list_user_listings` | `UserListingRow JOIN ListingRow` (excluding `deleted_at IS NOT NULL`) → matched `Listing` domain list for the user, ordered by score desc |
-| `list_scorable_listings_for_user` | Global listings with the given `scrape_status` that this user has not yet scored, excluding soft-deleted rows. Optional `mode='wg'` / `'flat'` kwarg adds `WHERE kind = mode` (the matcher passes `sp.mode` so users with `mode='flat'` only see flats; per [ADR-021](./DECISIONS.md#adr-021-listing-kind-as-a-first-class-column)) |
+| `list_user_listings` | `UserListingRow JOIN ListingRow` → matched `Listing` domain list for the user, ordered by score desc |
+| `list_scorable_listings_for_user` | Global listings with the given `scrape_status` that this user has not yet scored. Optional `mode='wg'` / `'flat'` kwarg adds `WHERE kind = mode` (the matcher passes `sp.mode` so users with `mode='flat'` only see flats; per [ADR-021](./DECISIONS.md#adr-021-listing-kind-as-a-first-class-column)) |
 | `list_stale_listings` | Listings whose `scraped_at < older_than` (scraper refresh input) |
 | `append_user_action` | Insert `UserActionRow` |
 | `list_actions_for_user` | Ordered `AgentAction` list (optional `limit`) |
-| `mark_listing_deleted` | Tombstone a listing: `scrape_status='deleted'` + `deleted_at=now()` (scraper deletion sweep only) |
-| `list_active_listing_ids` | Set of `ListingRow.id` where `scrape_status='full'` AND `deleted_at IS NULL`. Optional `source='wg-gesucht'` kwarg adds `WHERE id LIKE 'wg-gesucht:%'`; the per-source deletion sweep relies on this so a wg-gesucht-only pass never tombstones rows from the other sources (per [ADR-020](./DECISIONS.md#adr-020-multi-source-listing-identifiers-via-string-namespacing)) |
 | `list_usernames_with_search_profile` | Every `SearchProfileRow.username`; used by `resume_user_agents` to decide which agents to respawn on boot |
 | `row_to_domain_listing` | Rehydrate a global `ListingRow` into a domain `Listing` without a score (matcher uses this before evaluation) |
 
@@ -157,9 +155,8 @@ There is no hunt concept in v1: there is no `POST /users/{u}/hunts`, no `POST /h
 
 ## `app/scraper/agent.py`
 
-- **`ScraperAgent.__init__`** — Builds a permissive `SearchProfile` template from env config (`SCRAPER_CITY`, `SCRAPER_MAX_RENT`) and resolves the active source list via `sources.build_sources()` (default just `wg-gesucht`; opt in to more via `SCRAPER_ENABLED_SOURCES=wg-gesucht,tum-living,kleinanzeigen`).
-- **`ScraperAgent.run_once`** — Iterates `self._sources` sequentially. For each source, calls `_run_source(source)`, which iterates each `kind in source.kind_supported`, calls `source.search(kind, profile)` to get stubs, consults `ListingRow` via `session.get(ListingRow, stub.id)`, and gates the deep-scrape on `_needs_scrape(existing, source)`. `_needs_scrape` returns `True` when the row is absent, `scrape_status != "full"`, or `scraped_at` is older than `source.refresh_hours` (per-source, not global). On `True`, calls `_scrape_and_save_via(source, stub)`, which calls `source.scrape_detail(stub)`; on exception, upserts with `scrape_status='failed'` + `scrape_error`. On success, `_status_for(listing)` flips to `'full'` only when both description and coords are present (otherwise `'stub'`), then calls `repo.upsert_global_listing` + `repo.save_photos`. After all kinds for a source finish, `_sweep_deletions_for(source, seen_ids)` runs.
-- **`ScraperAgent._sweep_deletions_for`** — Per-source-scoped sweep. Diffs `repo.list_active_listing_ids(source=source.name)` against the set of ids seen by that source this pass. A per-source `_missing_passes: dict[str, dict[str, int]]` counter (keyed by source name, then by listing id) is incremented for each active listing not in the search results; listings present in the search results have their counter reset. When the counter reaches `SCRAPER_DELETION_PASSES` (default `2`), `repo.mark_listing_deleted` stamps `scrape_status='deleted'` + `deleted_at=now()`. Counters are kept in memory only: a scraper restart effectively restarts each listing at zero passes. Per-source scoping (added with [ADR-020](./DECISIONS.md#adr-020-multi-source-listing-identifiers-via-string-namespacing)) means a wg-gesucht-only pass never tombstones Kleinanzeigen / TUM Living rows.
+- **`ScraperAgent.__init__`** — Builds a permissive `SearchProfile` template from env config (`SCRAPER_CITY`, `SCRAPER_MAX_RENT`) and resolves the active source list via `sources.build_sources()` (default just `wg-gesucht`; opt in to more via `SCRAPER_ENABLED_SOURCES=wg-gesucht,tum-living,kleinanzeigen`). Reads `SCRAPER_KIND` (`wg` | `flat` | `both`, default `both`) which intersects with each source's `kind_supported` set.
+- **`ScraperAgent.run_once`** — Iterates `self._sources` sequentially. For each source, calls `_run_source(source)`, which iterates each `kind in _kinds_for(source)` (i.e. supported ∩ filter), walks `source.search_pages(kind, profile)` page by page, and processes stubs in source-defined order. The agent stops the `(source, kind)` walk the moment a stub's `posted_at` is older than `SCRAPER_MAX_AGE_DAYS` — source URLs request newest-first so this guarantees the rest is also stale (see [ADR-026](./DECISIONS.md#adr-026-drop-the-deletion-sweep-stop-pagination-on-the-first-stale-stub)). For each fresh stub it consults `ListingRow` via `session.get(ListingRow, stub.id)` and gates the deep-scrape on `_needs_scrape(existing, source)`. `_needs_scrape` returns `True` when the row is absent, `scrape_status != "full"`, or `scraped_at` is older than `source.refresh_hours` (per-source, not global). On `True`, calls `_scrape_and_persist(source, stub)`, which calls `source.scrape_detail(stub)`; on exception, upserts with `scrape_status='failed'` + `scrape_error`. On success, `_status_for(listing)` flips to `'full'` only when both description and coords are present (otherwise `'stub'`), then calls `repo.upsert_global_listing` + `repo.save_photos`. For sources whose stubs lack a date (Kleinanzeigen), the post-scrape `posted_at` triggers the same per-stub stop after the listing has been persisted.
 - **`ScraperAgent.run_forever`** — Wraps `run_once` in a `while True` that sleeps `SCRAPER_INTERVAL_SECONDS` between passes, logging and retrying on unexpected exceptions.
 - **`app/scraper/main.py`** — Entrypoint for the scraper container (`python -m app.scraper.main`): calls `db.init_db()` (which bootstraps the schema via `SQLModel.metadata.create_all`), then `asyncio.run(ScraperAgent().run_forever())`.
 
@@ -167,7 +164,7 @@ There is no hunt concept in v1: there is no `POST /users/{u}/hunts`, no `POST /h
 
 Per-source plugins consumed by `ScraperAgent` via `sources.build_sources()` ([ADR-020](./DECISIONS.md#adr-020-multi-source-listing-identifiers-via-string-namespacing) + [ADR-021](./DECISIONS.md#adr-021-listing-kind-as-a-first-class-column); per-source recon and field maps in [SCRAPER.md](./SCRAPER.md)).
 
-- **`base.py`** — `Source` Protocol with four class-level constants (`name`, `kind_supported`, `search_page_delay_seconds`, `detail_delay_seconds`, `refresh_hours`) and three methods (`search_pages` async iterator, `scrape_detail` async, `looks_like_block_page`). Stubs returned by `search_pages` carry the namespaced `id` and final `kind` immutably. Pagination depth is no longer declared per source; the agent stops paginating when the first listing on a page is older than `SCRAPER_MAX_AGE_DAYS` (see [ADR-024](./DECISIONS.md#adr-024-scraper-pagination-terminates-on-first-stub-freshness-not-page-count)).
+- **`base.py`** — `Source` Protocol with four class-level constants (`name`, `kind_supported`, `search_page_delay_seconds`, `detail_delay_seconds`, `refresh_hours`) and three methods (`search_pages` async iterator, `scrape_detail` async, `looks_like_block_page`). Stubs returned by `search_pages` carry the namespaced `id` and final `kind` immutably. Pagination depth is no longer declared per source; the agent stops the `(source, kind)` walk the moment a stub's `posted_at` is older than `SCRAPER_MAX_AGE_DAYS`, relying on each source's URL builder to request newest-first results (see [ADR-024](./DECISIONS.md#adr-024-scraper-pagination-terminates-on-first-stub-freshness-not-page-count) and [ADR-026](./DECISIONS.md#adr-026-drop-the-deletion-sweep-stop-pagination-on-the-first-stale-stub)).
 - **`__init__.py`** — `_REGISTRY` maps source name → class; `build_sources(enabled=None)` reads `SCRAPER_ENABLED_SOURCES` (comma-separated; default `"wg-gesucht"`) and instantiates the matching plugins. Unknown names log a warning and are skipped; an empty result falls back to wg-gesucht so the existing deployment behavior is preserved.
 - **`wg_gesucht.py`** — `WgGesuchtSource`. Inlines the same anonymous httpx + bs4 loop that `browser.anonymous_search` exposes, but as an async generator so the agent can drive pagination. The helper `browser.anonymous_search` stays as back-compat for non-scraper callers and as a stable patch point for tests. `kind_supported = {'wg'}` only — flat-vertical category id is unverified (queued in [ROADMAP.md](./ROADMAP.md)). Pacing 1.5s search/detail, 24h refresh.
 - **`tum_living.py`** — `TumLivingSource`. GraphQL POSTs to `https://living.tum.de/graphql` with CSRF double-submit (mints `csrf-token` from `GET /api/me`; re-mints once on `EBADCSRFTOKEN`). Verbatim queries `LISTINGS_QUERY` / `DETAIL_QUERY` from [SCRAPER.md "Source: tum-living"](./SCRAPER.md#source-tum-living). `kind_supported = {'wg', 'flat'}` (filter `type: SHARED_APARTMENT` vs `APARTMENT`). Pacing 2.5s, 48h refresh.
@@ -230,7 +227,7 @@ The bullets in `## app/scraper/agent.py` and `## periodic.py` above describe wha
 
 ### Scraper pass (ScraperAgent.run_once)
 
-`ScraperAgent` iterates the active source list (built from `SCRAPER_ENABLED_SOURCES`; default `wg-gesucht`). For each source, it iterates each `kind` the source supports; the deletion sweep then runs once per source, scoped to that source's id namespace ([ADR-020](./DECISIONS.md#adr-020-multi-source-listing-identifiers-via-string-namespacing)).
+`ScraperAgent` iterates the active source list (built from `SCRAPER_ENABLED_SOURCES`; default `wg-gesucht`). For each source, it iterates each `kind in _kinds_for(source)` (i.e. supported ∩ `SCRAPER_KIND`). Per `(source, kind)` it walks `search_pages` until either the page yields nothing or a stub's `posted_at` falls outside `SCRAPER_MAX_AGE_DAYS` (source URLs request newest-first, so the rest is provably stale — see [ADR-026](./DECISIONS.md#adr-026-drop-the-deletion-sweep-stop-pagination-on-the-first-stale-stub)).
 
 ```mermaid
 sequenceDiagram
@@ -239,32 +236,32 @@ sequenceDiagram
   participant SRC as Source plugin (wg-gesucht / tum-living / kleinanzeigen)
   participant DB as MySQL
 
-  loop per source × per kind
-    SA->>SRC: search(kind, profile)
-    SRC-->>SA: Listing stubs (namespaced id + kind set)
+  loop per source × per kind in (kind_supported ∩ SCRAPER_KIND)
+    SA->>SRC: search_pages(kind, profile)
+    SRC-->>SA: Listing stubs page (newest-first, namespaced id + kind set)
     loop per stub
-      SA->>DB: session.get(ListingRow, stub.id)
-      DB-->>SA: existing row or None
-      alt needs_scrape (missing, not full, or scraped_at older than source.refresh_hours)
-        SA->>SRC: scrape_detail(stub)
-        alt scrape raises
-          SRC-->>SA: exception
-          SA->>DB: upsert_global_listing(status="failed", scrape_error=...)
-        else scrape succeeds
-          SRC-->>SA: enriched Listing
-          SA->>DB: upsert_global_listing(status="full" if description + lat/lng else "stub")
-          SA->>DB: save_photos(listing_id, urls)
+      alt stub.posted_at older than SCRAPER_MAX_AGE_DAYS
+        SA->>SA: stop (source, kind) walk
+      else fresh stub
+        SA->>DB: session.get(ListingRow, stub.id)
+        DB-->>SA: existing row or None
+        alt needs_scrape (missing, not full, or scraped_at older than source.refresh_hours)
+          SA->>SRC: scrape_detail(stub)
+          alt scrape raises
+            SRC-->>SA: exception
+            SA->>DB: upsert_global_listing(status="failed", scrape_error=...)
+          else scrape succeeds
+            SRC-->>SA: enriched Listing
+            SA->>DB: upsert_global_listing(status="full" if description + lat/lng else "stub")
+            SA->>DB: save_photos(listing_id, urls)
+            opt detail revealed posted_at older than SCRAPER_MAX_AGE_DAYS (kleinanzeigen)
+              SA->>SA: stop (source, kind) walk
+            end
+          end
+        else recently scraped
+          SA->>SA: skip
         end
-      else recently scraped
-        SA->>SA: skip
       end
-    end
-  end
-  loop per source
-    SA->>DB: list_active_listing_ids(source=source.name)
-    Note over SA: diff active vs ids seen by THIS source; bump per-source miss counter
-    opt counter ≥ SCRAPER_DELETION_PASSES
-      SA->>DB: mark_listing_deleted (scrape_status='deleted', deleted_at=now)
     end
   end
 ```
@@ -353,7 +350,7 @@ While the matcher processes candidates it also calls [`UserAgent._maybe_queue_di
 
 ### Membership invariant
 
-`repo.list_user_listings` joins `UserListingRow JOIN ListingRow` on `username`, filtering out rows where `ListingRow.deleted_at IS NOT NULL`. A listing only appears in a user's dashboard after the matcher has written a `UserListingRow` for it — which includes veto rows with `score=0.0`. Users never see listings the scraper hasn't deep-scraped (`scrape_status != 'full'` is filtered out by `list_scorable_listings_for_user`) or has since tombstoned.
+`repo.list_user_listings` joins `UserListingRow JOIN ListingRow` on `username`. A listing only appears in a user's dashboard after the matcher has written a `UserListingRow` for it — which includes veto rows with `score=0.0`. Users never see listings the scraper hasn't deep-scraped (`scrape_status != 'full'` is filtered out by `list_scorable_listings_for_user`).
 
 ### Error paths
 
@@ -361,7 +358,6 @@ While the matcher processes candidates it also calls [`UserAgent._maybe_queue_di
 - **Per-listing scrape failure** — recorded as `scrape_status='failed'` with `scrape_error` set, so the listing is visible in the pool for observability but excluded from the matcher (which filters on `status='full'`).
 - **Block-page response** — each source declares its own `looks_like_block_page` (TUM Living: `EBADCSRFTOKEN` / GraphQL-errors-with-null-data; Kleinanzeigen: 403/429/short-body/datadome regex; wg-gesucht: captcha/turnstile markers in the HTML). When detected, the source returns the unmodified stub (or empty list) so the loop persists what it has and retries later instead of crashing.
 - **Unexpected exception inside `run_once`** — caught by `run_forever`; logged via `logger.exception`, then the loop sleeps and retries.
-- **Per-source deletion sweep** — `_sweep_deletions_for(source, seen_ids)` runs after each source finishes its kinds. A scraper restart effectively starts every listing at zero missing passes. Per-source scoping (added with [ADR-020](./DECISIONS.md#adr-020-multi-source-listing-identifiers-via-string-namespacing)) means a wg-gesucht-only pass never tombstones Kleinanzeigen / TUM Living rows.
 - **Scraper offline** — If the scraper container is stopped, the pool stops growing but existing listings remain scorable. Match passes still produce scores; the SSE `search` action reads "Matched 0 candidates from shared pool" once the user has scored everything.
 - **Per-listing score failure** — The `try`/`except` inside the candidate loop logs `ActionKind.error` with the listing id, pushes to the queue, and `continue`s. Already-scored listings from successful iterations remain.
 - **Schema bootstrap failure during startup** — If `db.init_db()` raises inside [`lifespan`](../backend/app/main.py) or [`app/scraper/main.py`](../backend/app/scraper/main.py) (typically: one of `DB_HOST`/`DB_PORT`/`DB_USER`/`DB_PASSWORD`/`DB_NAME` is missing, MySQL is unreachable, or `SQLModel.metadata.create_all` hits a permissions error), the respective process fails startup and does not serve traffic / scrape until the environment is fixed.
@@ -380,9 +376,9 @@ While the matcher processes candidates it also calls [`UserAgent._maybe_queue_di
 | File | Role | Command |
 | --- | --- | --- |
 | [`test_wg_parser.py`](../backend/tests/test_wg_parser.py) | Cached HTML fixtures under `tests/fixtures/`; asserts parser output shape and locks down the structured fields the scorer relies on (address split, available-from/to, languages, pets/smoking, description-doesn't-leak-page-chrome, map-pin lat/lng) | `cd backend && python tests/test_wg_parser.py` (or `pytest tests/test_wg_parser.py`) |
-| [`test_repo.py`](../backend/tests/test_repo.py) | In-memory SQLite round-trip for `repo` + crypto (user/email, search profile, credentials, per-user match rows, soft-delete exclusion, per-user action log) | `cd backend && pytest tests/test_repo.py` |
+| [`test_repo.py`](../backend/tests/test_repo.py) | In-memory SQLite round-trip for `repo` + crypto (user/email, search profile, credentials, per-user match rows, scorable-listings exclusion of already-scored + non-full rows, per-user action log) | `cd backend && pytest tests/test_repo.py` |
 | [`test_periodic.py`](../backend/tests/test_periodic.py) | `UserAgent` / `PeriodicUserMatcher` with pre-seeded global pool + mocked I/O (commute-reaches-evaluator, nearby-places-persist, lat-missing guard, `PeriodicUserMatcher` cancellation clears registry) | `cd backend && pytest tests/test_periodic.py` |
-| [`test_scraper.py`](../backend/tests/test_scraper.py) | `ScraperAgent` with the `wg-gesucht` source plugin + mocked `browser.*`: status/scrape_error branches, refresh-TTL skip, stale-refresh, deletion sweep (`mark_listing_deleted` after N missing passes, counter reset when a listing returns), and the per-source-scoped sweep (a wg-gesucht-only pass cannot tombstone Kleinanzeigen rows) | `cd backend && pytest tests/test_scraper.py` |
+| [`test_scraper.py`](../backend/tests/test_scraper.py) | `ScraperAgent` with `_FakeSource`: status/scrape_error branches, refresh-TTL skip, stale-refresh, per-stub freshness stop (wg-gesucht stub `posted_at` halts the kind walk; kleinanzeigen detail-revealed staleness halts after the first stale persist), the SCRAPER_KIND filter (`wg` / `flat` / `both`), and unknown-freshness fall-through (no `posted_at` → keep paginating) | `cd backend && pytest tests/test_scraper.py` |
 | [`tests/scraper/test_parse_tum_living.py`](../backend/tests/scraper/test_parse_tum_living.py) | Offline parser tests for the TUM Living source against captured GraphQL fixtures (`tests/scraper/fixtures/tum_living/`); plus block-page detector cases for `EBADCSRFTOKEN`, GraphQL-errors-with-null-data, and HTTP 5xx | `cd backend && pytest tests/scraper/test_parse_tum_living.py` |
 | [`tests/scraper/test_parse_kleinanzeigen.py`](../backend/tests/scraper/test_parse_kleinanzeigen.py) | Offline parser tests for the Kleinanzeigen source against captured HTML fixtures (`tests/scraper/fixtures/kleinanzeigen/`); covers WG + flat search pages, one detail page, and the block-page detector | `cd backend && pytest tests/scraper/test_parse_kleinanzeigen.py` |
 | [`tests/scraper/live/test_live_tum_living.py`](../backend/tests/scraper/live/test_live_tum_living.py) | Smoke test against the live TUM Living GraphQL endpoint. Skipped unless `SCRAPER_LIVE_TESTS=1`; run manually before a deploy | `SCRAPER_LIVE_TESTS=1 cd backend && pytest tests/scraper/live/` |

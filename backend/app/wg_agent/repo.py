@@ -207,17 +207,11 @@ def upsert_global_listing(
     """Write a listing to the global pool (scraper only).
 
     Preserves `first_seen_at`, bumps `last_seen_at`, stamps `scraped_at` with
-    the current UTC time, and updates `scrape_status` + `scrape_error`. When
-    called with `status="deleted"`, also stamps `deleted_at`; otherwise the
-    existing `deleted_at` is preserved.
+    the current UTC time, and updates `scrape_status` + `scrape_error`.
     """
     now = datetime.utcnow()
     existing = session.get(ListingRow, listing.id)
     first_seen = existing.first_seen_at if existing else now
-    if status == "deleted":
-        deleted_at: Optional[datetime] = now
-    else:
-        deleted_at = existing.deleted_at if existing else None
     row = ListingRow(
         id=listing.id,
         url=str(listing.url),
@@ -243,7 +237,6 @@ def upsert_global_listing(
         scrape_error=scrape_error,
         first_seen_at=first_seen,
         last_seen_at=now,
-        deleted_at=deleted_at,
     )
     session.merge(row)
     session.commit()
@@ -306,7 +299,7 @@ def save_photos(
 
 
 def list_user_listings(session: Session, *, username: str) -> list[Listing]:
-    """Return every listing this user has scored, excluding deleted listings.
+    """Return every listing this user has scored.
 
     Ordered by score (DESC), then `scored_at` (DESC).
     """
@@ -314,7 +307,6 @@ def list_user_listings(session: Session, *, username: str) -> list[Listing]:
         select(ListingRow, UserListingRow)
         .join(UserListingRow, UserListingRow.listing_id == ListingRow.id)
         .where(UserListingRow.username == username)
-        .where(ListingRow.deleted_at.is_(None))
         .order_by(UserListingRow.score.desc(), UserListingRow.scored_at.desc())
     ).all()
     out: list[Listing] = []
@@ -338,7 +330,7 @@ def list_scorable_listings_for_user(
     mode: Optional[str] = None,
 ) -> list[ListingRow]:
     """Global listings with the given scrape status that this user has not
-    yet scored, excluding soft-deleted listings.
+    yet scored.
 
     `mode` (one of `'wg'`, `'flat'`, `'both'`, or `None`) honors the
     user's `SearchProfile.mode` selection: pass `'wg'` to get rooms only,
@@ -351,7 +343,6 @@ def list_scorable_listings_for_user(
     stmt = (
         select(ListingRow)
         .where(ListingRow.scrape_status == status)
-        .where(ListingRow.deleted_at.is_(None))
         .order_by(ListingRow.last_seen_at.desc())
     )
     if mode in ("wg", "flat"):
@@ -417,36 +408,6 @@ def list_actions_for_user(
         )
         for r in rows
     ]
-
-
-def mark_listing_deleted(session: Session, *, listing_id: str) -> None:
-    row = session.get(ListingRow, listing_id)
-    if row is None:
-        return
-    row.scrape_status = "deleted"
-    row.deleted_at = datetime.utcnow()
-    session.add(row)
-    session.commit()
-
-
-def list_active_listing_ids(
-    session: Session, *, source: Optional[str] = None
-) -> set[str]:
-    """Return the ids of active (full + non-deleted) listings.
-
-    `source` filters by the namespaced id prefix (`f"{source}:%"`); the
-    deletion sweep uses this so a wg-gesucht-only pass cannot tombstone
-    Kleinanzeigen / TUM Living rows it never tried to see.
-    """
-    stmt = (
-        select(ListingRow.id)
-        .where(ListingRow.scrape_status == "full")
-        .where(ListingRow.deleted_at.is_(None))
-    )
-    if source is not None:
-        stmt = stmt.where(ListingRow.id.like(f"{source}:%"))
-    rows = session.exec(stmt).all()
-    return {row for row in rows}
 
 
 def list_usernames_with_search_profile(session: Session) -> list[str]:

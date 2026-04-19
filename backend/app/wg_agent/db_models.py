@@ -43,9 +43,11 @@ class SearchProfileRow(SQLModel, table=True):
 
 
 class ListingRow(SQLModel, table=True):
-    """Global wg-gesucht listing; the scraper is the sole writer.
+    """Global listing pool; the scraper is the sole writer.
 
-    `deleted_at` marks listings no longer visible on wg-gesucht.
+    `deleted_at` is a deprecated, no-longer-written column kept on the
+    schema only for backward compatibility with rows tombstoned by the
+    legacy deletion sweep. New code never sets or reads it.
     """
 
     __tablename__ = "listingrow"

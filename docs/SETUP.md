@@ -27,7 +27,7 @@ Clone the repo and run the WG Hunter stack locally: FastAPI backend + background
    - `DB_HOST`, `DB_PORT`, `DB_USER`, `DB_PASSWORD`, `DB_NAME` — AWS RDS credentials (ask a teammate). All five are required for both the backend and scraper processes; `db.py` assembles the `mysql+pymysql://` DSN from them at import time and refuses to boot if any are missing.
    - `OPENAI_API_KEY` — OpenAI key for the vibe-score component.
    - Optionally `VITE_GOOGLE_MAPS_API_KEY` for the Places Autocomplete widget and `GOOGLE_MAPS_SERVER_KEY` for backend routing/geocoding/place enrichment; Vite reads this file via [`envDir: '..'`](../frontend/vite.config.ts) from `frontend/`, so one repo-root `.env` covers backend, scraper, and frontend.
-   - Optionally tune the scraper via `SCRAPER_CITY`, `SCRAPER_MAX_RENT`, `SCRAPER_INTERVAL_SECONDS`, `SCRAPER_REFRESH_HOURS`, `SCRAPER_MAX_AGE_DAYS` (defaults in [`.env.example`](../.env.example)). Pagination depth is freshness-driven: the agent walks each source until the first listing on a page is older than `SCRAPER_MAX_AGE_DAYS` (default 14).
+   - Optionally tune the scraper via `SCRAPER_CITY`, `SCRAPER_MAX_RENT`, `SCRAPER_INTERVAL_SECONDS`, `SCRAPER_REFRESH_HOURS`, `SCRAPER_MAX_AGE_DAYS`, `SCRAPER_KIND` (defaults in [`.env.example`](../.env.example)). Pagination depth is freshness-driven: search URLs request newest-first and the agent stops the moment a stub's posting date is older than `SCRAPER_MAX_AGE_DAYS` (default 4). Set `SCRAPER_KIND=wg` (or `flat`) to restrict the scraper to one vertical; default `both`.
    - Optional LLM-driven enrichment of missing structured fields: `SCRAPER_ENRICH_ENABLED`, `SCRAPER_ENRICH_MODEL`, `SCRAPER_ENRICH_MIN_DESC_CHARS` (default off; requires `OPENAI_API_KEY`).
 
 3. **Backend**

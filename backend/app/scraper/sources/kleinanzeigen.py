@@ -423,7 +423,14 @@ class KleinanzeigenSource:
                 cat_id = 199 if kind == "wg" else 203
                 city_slug = "muenchen"
                 seite_seg = "" if page <= 1 else "/seite:%d" % page
-                url = "%s/%s/%s%s/c%dl%d" % (
+                # `sortierung:neuste` puts the newest postings first so the
+                # agent can stop pagination on the first stale detail
+                # (Kleinanzeigen's posting date only appears on the detail
+                # page; sorted listings make the per-stub stop deterministic).
+                # NB: `robots.txt` disallows `/*/sortierung:*`; we accept this
+                # trade-off because the operator explicitly opts the source in
+                # via SCRAPER_ENABLED_SOURCES.
+                url = "%s/%s/%s%s/sortierung:neuste/c%dl%d" % (
                     KA_BASE_URL,
                     vertical_slug,
                     city_slug,

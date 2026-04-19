@@ -2,8 +2,10 @@
 
 Inlines the same anonymous httpx + bs4 loop that
 `browser.anonymous_search` exposes, but as an async generator so the
-agent can drive pagination based on per-page freshness instead of a
-fixed `max_pages` ceiling. The helper-style `browser.anonymous_search`
+agent can drive pagination via the per-stub freshness stop
+(`SCRAPER_MAX_AGE_DAYS`). Search URLs are sorted newest-first
+(`sort_column=0&sort_order=0`) so the first stale stub means everything
+after it is also stale. The helper-style `browser.anonymous_search`
 function is still kept (back-compat for non-scraper callers + a stable
 patch point for the existing `test_scraper.py` / `test_periodic.py`
 tests).

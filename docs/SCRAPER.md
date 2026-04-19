@@ -44,7 +44,7 @@ Each scraped listing declares what it represents — a room in a shared flat (`'
 | `tum-living`     | GraphQL `type == "SHARED_APARTMENT"`                                            | GraphQL `type == "APARTMENT"` (treat `HOUSE` as `'flat'` too)           |
 | `kleinanzeigen`  | `/s-auf-zeit-wg/…/c199…` URL pattern                                            | `/s-mietwohnung/…/c203…` URL pattern                                    |
 
-Sources that support both verticals iterate them in two passes per cycle (one with `kind='wg'`, one with `kind='flat'`). The matcher then filters by `SearchProfile.mode` when reading the global pool.
+Sources that support both verticals iterate them in two passes per cycle (one with `kind='wg'`, one with `kind='flat'`). `SCRAPER_KIND` (env, one of `wg` | `flat` | `both`, default `both`) intersects with each source's `kind_supported` set, so a `flat`-only run skips wg-gesucht entirely and only iterates the flat verticals on Kleinanzeigen / TUM Living. The matcher then filters by `SearchProfile.mode` when reading the global pool.
 
 ### Per-source scraper contract
 
@@ -54,14 +54,14 @@ Each source's module under [`backend/app/scraper/sources/`](../backend/app/scrap
 2. An async **detail** function that accepts a stub `Listing` and returns it enriched (description, photos, lat/lng, structured booleans, …). The function must **never re-key** the listing — `id` and `kind` are immutable from the moment the stub is created.
 3. A **block-page detector** (`looks_like_block_page(body, status) -> bool`). When a fetch returns an anti-bot interstitial, the detail pass must return the unmodified stub (so the loop persists what it has) rather than crashing.
 
-[`./agent.py`](../backend/app/scraper/agent.py) holds the source-agnostic loop (`run_once` → search → diff → enrich → upsert → sweep deletions). It iterates the active source list (built from `SCRAPER_ENABLED_SOURCES`) in sequence per pass and dispatches to the right `search` / `detail` pair based on the source token. See [BACKEND.md "Agent loop"](./BACKEND.md#agent-loop) for the end-to-end sequence diagrams.
+[`./agent.py`](../backend/app/scraper/agent.py) holds the source-agnostic loop (`run_once` → search → per-stub freshness check → enrich → upsert). It iterates the active source list (built from `SCRAPER_ENABLED_SOURCES`) in sequence per pass and dispatches to the right `search` / `detail` pair based on the source token. See [BACKEND.md "Agent loop"](./BACKEND.md#agent-loop) for the end-to-end sequence diagrams.
 
-### Refresh, deletion, and pacing
+### Refresh and pacing
 
 These behaviors apply to **every** source — the per-source sections below only specify the source-specific constants:
 
 - **Refresh:** a listing is re-fetched only if `scrape_status != 'full'` or `scraped_at < now - SCRAPER_REFRESH_HOURS` (`ScraperAgent._needs_scrape`). Tune the refresh window per source — TUM Living tolerates 48h, wg-gesucht and Kleinanzeigen 24h.
-- **Deletion sweep:** `ScraperAgent._sweep_deletions_for(source, seen_ids)` runs after each source finishes its kinds. It diffs `repo.list_active_listing_ids(source=source.name)` (rows whose id starts with `f"{source.name}:"`) against the ids that source saw this pass. A per-source counter (`_missing_passes[source.name]`) increments for listings missing from this pass and resets for listings that reappear. When the counter reaches `SCRAPER_DELETION_PASSES` (default 2), the listing is tombstoned via `repo.mark_listing_deleted`. Per-source scoping (added with [ADR-020](./DECISIONS.md#adr-020-multi-source-listing-identifiers-via-string-namespacing)) means a wg-gesucht-only pass never tombstones Kleinanzeigen / TUM Living rows.
+- **Freshness stop:** see "Pagination" below — there is no separate "deletion sweep". Listings that disappear from the source eventually fall off the matcher reads through `SCRAPER_REFRESH_HOURS` (stale rows simply stop being re-scraped and the matcher keeps showing the last known data). [ADR-026](./DECISIONS.md#adr-026-drop-the-deletion-sweep-stop-pagination-on-the-first-stale-stub) explains why the older sweep was removed.
 - **Pacing:** each source declares its own request-pacing constant (see "Anti-bot posture" in each per-source section). The cross-source loop does not interleave sources within one pass — it iterates them sequentially so per-source pacing is local.
 
 ---
@@ -77,7 +77,7 @@ These behaviors apply to **every** source — the per-source sections below only
 - **Code:**
   - Search + parse + detail fetch: [`../backend/app/wg_agent/browser.py`](../backend/app/wg_agent/browser.py) (`build_search_url`, `parse_search_page`, `parse_listing_page`, `_parse_map_lat_lng`, `_anon_client`, `anonymous_search`, `anonymous_scrape_listing`).
   - Source plugin shim: [`../backend/app/scraper/sources/wg_gesucht.py`](../backend/app/scraper/sources/wg_gesucht.py).
-  - Loop, dedup, deletion sweep: [`../backend/app/scraper/agent.py`](../backend/app/scraper/agent.py).
+  - Loop and dedup: [`../backend/app/scraper/agent.py`](../backend/app/scraper/agent.py).
 - **Anti-bot:** real Chrome User-Agent + `Accept-Language: de-DE,de;q=0.9,en;q=0.8` (see `_anon_client`); captcha/Turnstile interstitials detected by `_looks_like_block_page` and returned as the unmodified stub instead of crashing; rate-limit constant `ANONYMOUS_PAGE_DELAY_SECONDS = 1.5` between search-page fetches.
 - **Data freshness:** `SCRAPER_INTERVAL_SECONDS` (default 300s, between full passes) and `SCRAPER_REFRESH_HOURS` (default 24h, re-scrape threshold for full listings).
 
@@ -107,6 +107,10 @@ Example (München, WG-room, unbefristet, page 0): `https://www.wg-gesucht.de/wg-
 | `furnishedSea`| `1` = furnished, `2` = unfurnished.                                                      | `furnishedSea=1`   |
 | `dFr`         | Available from (`DD.MM.YYYY`).                                                           | `dFr=01.05.2026`   |
 | `dTo`         | Available until (if temporary).                                                          | `dTo=30.09.2026`   |
+| `sort_column` | Sort field. `0` = "Online seit" (date posted). Verified.                                 | `sort_column=0`    |
+| `sort_order`  | Sort direction. `0` = newest first. Verified.                                            | `sort_order=0`     |
+
+`build_search_url` always sends `sort_column=0&sort_order=0` so the agent's per-stub freshness stop ([ADR-026](./DECISIONS.md#adr-026-drop-the-deletion-sweep-stop-pagination-on-the-first-stale-stub)) sees results in chronological order — the moment a stub's `posted_at` falls outside `SCRAPER_MAX_AGE_DAYS`, the rest of the (source, kind) walk halts.
 
 **Gotchas (confirmed 2026-04):**
 
@@ -191,7 +195,7 @@ Source code: `parse_listing_page` and `_parse_map_lat_lng` in [`../backend/app/w
 | `lat`, `lng` | — | `_parse_map_lat_lng` reads the first marker out of the embedded `var map_config = { ... markers: [{"lat":…,"lng":…}] }` block. Falls back to `geocoder.geocode(address or "<district>, <city>")` only when the map block is absent or unparseable. |
 | `online_viewing` | substring `"Online-Besichtigung"` in card text | — |
 | `photo_urls`, `cover_photo_url` | — | `_parse_photo_urls` walks `og:image`, `[data-full-image]`, `img[data-src/data-lazy/src]`, `source[srcset]`; filters out logos/avatars/icons/placeholder gallery elements; capped at 12. `cover_photo_url = photo_urls[0]`. |
-| `posted_at` (transient — used by `ScraperAgent._is_fresh_enough`) | `parse_search_page` finds the first `<span>` text matching `^\s*Online\s*:` inside the card, strips the `Online:` prefix, then `_parse_wgg_online_value` returns either `now - <n*unit>` for the relative form (`Online: 25 Minuten`, `Online: 1 Stunde`, `Online: 2 Tage`) or `datetime(y, m, d)` for the absolute form (`Online: 12.03.2026`). The regex is **anchored at the start of the string** so it doesn't catch `Online-Besichtigung` (the unrelated online-viewing flag). The relative form fires for ads <24h old; the absolute form (`dd.mm.yyyy`) takes over from ≥24h. **Default sort is "most recently bumped" not strictly chronological**, so the agent does NOT do an early-stop heuristic on this source — it relies on the per-stub freshness gate in `_run_source` instead. | `<b>` next to `<span class="section_panel_detail">Online:</span>` inside a `div.row` — currently unused by the parser since the search-card value is always populated. |
+| `posted_at` (transient — used by `ScraperAgent._is_stale`) | `parse_search_page` finds the first `<span>` text matching `^\s*Online\s*:` inside the card, strips the `Online:` prefix, then `_parse_wgg_online_value` returns either `now - <n*unit>` for the relative form (`Online: 25 Minuten`, `Online: 1 Stunde`, `Online: 2 Tage`) or `datetime(y, m, d)` for the absolute form (`Online: 12.03.2026`). The regex is **anchored at the start of the string** so it doesn't catch `Online-Besichtigung` (the unrelated online-viewing flag). The relative form fires for ads <24h old; the absolute form (`dd.mm.yyyy`) takes over from ≥24h. With `sort_column=0&sort_order=0` (set unconditionally by `build_search_url`), results are strictly newest-first and the agent uses the per-stub freshness stop in `_run_source` to halt pagination on the first stale stub. | `<b>` next to `<span class="section_panel_detail">Online:</span>` inside a `div.row` — currently unused by the parser since the search-card value is always populated. |
 
 Fields on the `Listing` domain model that this source **never** populates (filled later by the matcher per user, not by the scraper): `score`, `score_reason`, `match_reasons`, `mismatch_reasons`, `components`, `veto_reason`, `best_commute_minutes`.
 
@@ -654,13 +658,13 @@ What was actually observed:
 
 ### URL patterns for the two listing kinds (kleinanzeigen)
 
-- **WG (`kind='wg'`):** `https://www.kleinanzeigen.de/s-auf-zeit-wg/<city-slug>/c199l<localityId>` — confirmed for Munich as `/s-auf-zeit-wg/muenchen/c199l6411`. Category `c199` = "Auf Zeit & WG".
-- **Flat (`kind='flat'`):** `https://www.kleinanzeigen.de/s-mietwohnung/<city-slug>/c203l<localityId>` — confirmed for Munich as `/s-mietwohnung/muenchen/c203l6411`. The alternate slug `/s-wohnung-mieten/<city-slug>/c203l<localityId>` returns the same listings. Category `c203` = "Mietwohnungen".
+- **WG (`kind='wg'`):** `https://www.kleinanzeigen.de/s-auf-zeit-wg/<city-slug>/sortierung:neuste/c199l<localityId>` — `/s-auf-zeit-wg/muenchen/sortierung:neuste/c199l6411` for Munich. Category `c199` = "Auf Zeit & WG".
+- **Flat (`kind='flat'`):** `https://www.kleinanzeigen.de/s-mietwohnung/<city-slug>/sortierung:neuste/c203l<localityId>` — `/s-mietwohnung/muenchen/sortierung:neuste/c203l6411` for Munich. The alternate slug `/s-wohnung-mieten/<city-slug>/c203l<localityId>` returns the same listings. Category `c203` = "Mietwohnungen".
 - **Generalization to other cities:** the `c<categoryId>` segment is global (`c199` / `c203` apply everywhere). The `l<localityId>` segment is per-city. Discover by visiting `https://www.kleinanzeigen.de/s-immobilien/<city-slug>/` (no `c…l…` suffix) and inspecting the resulting redirect — it lands on `/s-immobilien/<city-slug>/c195l<localityId>`.
 - **Filters (URL-path segments):**
+  - `sortierung:neuste` — verified to put newest postings first. The plugin always sends it because the per-stub freshness stop ([ADR-026](./DECISIONS.md#adr-026-drop-the-deletion-sweep-stop-pagination-on-the-first-stale-stub)) only works on chronologically sorted results, and Kleinanzeigen's posting date is detail-page-only — so without it the scraper would have to fetch every detail page in `(source, kind)` to find the freshness boundary.
   - `preis:<min>:<max>` — verified working with `/preis:800:1500/c199l6411`. **But:** `robots.txt` says `Disallow: /*/preis:*`. Don't use this in production scrapes.
-  - `anbieter:privat`, `sortierung:empfohlen` — also `robots.txt`-disallowed.
-  - **What this means for the scraper:** mirror wg-gesucht's strategy — pass **no** filter segments and let the scorecard evaluator filter.
+  - `anbieter:privat`, `sortierung:empfohlen` — also `robots.txt`-disallowed (`/*/anbieter:*` and `/*/sortierung:*`). We accept the trade-off for `sortierung:neuste` because the source has to be opted in via `SCRAPER_ENABLED_SOURCES`; mirror wg-gesucht's strategy for the rest and leave price/seller filtering to the scorecard evaluator.
 
 ### How to list listings (kleinanzeigen search)
 
@@ -689,7 +693,7 @@ What was actually observed:
 
 **HTML-parser gotcha (Python 3.14):** Kleinanzeigen ships an unterminated numeric character reference `&#8203` (zero-width space, no trailing `;`). bs4's bundled `html.parser` raises `ValueError: invalid literal for int() with base 10` on it. Pre-process raw HTML with `re.sub(r"&#(\d+)(?![\d;])", r"&#\1;", html)` before feeding to BeautifulSoup. The recipe at the bottom of this section shows the fix.
 
-**Pagination:** Kleinanzeigen uses a `/seite:<N>` path segment inserted **before** the `c<cat>l<loc>` token, e.g. `https://www.kleinanzeigen.de/s-auf-zeit-wg/muenchen/seite:2/c199l6411`. **Robots.txt cap:** `Disallow: /*/seite:6*` through `/*/seite:59*` — pages 1-5 are crawl-allowed, pages 6+ are not. The plugin no longer enforces a `max_pages` ceiling itself; pagination continues until either (a) the page contains zero `article.aditem` cards, (b) the response trips `looks_like_block_page`, or (c) the agent decides to stop because the first listing on the page is older than `SCRAPER_MAX_AGE_DAYS` (the freshness probe runs `scrape_detail` on the page leader to read its posting date — Kleinanzeigen does not expose dates on the search card). The 5-page robots cap is therefore a **soft natural ceiling** rather than a hard one: in practice the freshness gate fires well before page 5 in Munich, and reaching page 5 means the next page would be 6 (disallowed) at which point we'd stop on the empty-page condition.
+**Pagination:** Kleinanzeigen uses a `/seite:<N>` path segment inserted **before** the `sortierung:neuste/c<cat>l<loc>` token, e.g. `https://www.kleinanzeigen.de/s-auf-zeit-wg/muenchen/seite:2/sortierung:neuste/c199l6411`. **Robots.txt cap:** `Disallow: /*/seite:6*` through `/*/seite:59*` — pages 1-5 are crawl-allowed, pages 6+ are not. The plugin no longer enforces a `max_pages` ceiling itself; pagination continues until either (a) the page contains zero `article.aditem` cards, (b) the response trips `looks_like_block_page`, or (c) the agent decides to stop because a stub's `posted_at` (revealed by `scrape_detail`, since Kleinanzeigen doesn't expose dates on the search card) is older than `SCRAPER_MAX_AGE_DAYS`. With `sortierung:neuste` the first stale detail means everything after it is also stale, so the agent halts that `(source, kind)` walk immediately. The 5-page robots cap is therefore a **soft natural ceiling** rather than a hard one: in practice the freshness gate fires well before page 5 in Munich, and reaching page 5 means the next page would be 6 (disallowed) at which point we'd stop on the empty-page condition.
 
 ### How to read one listing (kleinanzeigen detail)
 
@@ -941,8 +945,8 @@ The agent listens for these env knobs:
 - `SCRAPER_MAX_RENT` — default `2000`.
 - `SCRAPER_INTERVAL_SECONDS` — between full passes. Default `300`.
 - `SCRAPER_REFRESH_HOURS` — re-scrape threshold for full listings. Default `24`.
-- `SCRAPER_DELETION_PASSES` — consecutive missing passes before tombstoning. Default `2`.
-- `SCRAPER_MAX_AGE_DAYS` — drives both the per-page pagination stop (the agent halts when the first listing on a page is older than the cutoff) and the per-stub backstop drop. Default `7`. There is no `SCRAPER_MAX_PAGES` knob: pagination depth is freshness-driven.
+- `SCRAPER_KIND` — restrict which verticals the agent iterates. One of `wg`, `flat`, `both`. Default `both`.
+- `SCRAPER_MAX_AGE_DAYS` — drives the per-stub pagination stop. Default `4`. Source URLs request newest-first; the moment a stub's posting date is older than the cutoff the agent stops the `(source, kind)` walk. There is no `SCRAPER_MAX_PAGES` knob.
 - `SCRAPER_ENRICH_ENABLED` / `SCRAPER_ENRICH_MODEL` / `SCRAPER_ENRICH_MIN_DESC_CHARS` — optional LLM enrichment of missing structured fields (`furnished`, `wg_size`, …) when the description states them clearly. Default off (`false` / `gpt-4o-mini` / `200`); requires `OPENAI_API_KEY`. Coordinates remain on the deterministic Google Geocoding fallback path. See [DECISIONS.md ADR-025](./DECISIONS.md#adr-025-llm-driven-enrichment-of-missing-structured-fields).
 
 ## Migration verification
@@ -952,7 +956,6 @@ After running [`migrate_multi_source.py`](../backend/app/scraper/migrate_multi_s
 - **G1** — Every new `ListingRow.id` is namespaced. `SELECT id FROM listingrow WHERE id NOT REGEXP '^(wg-gesucht|tum-living|kleinanzeigen):' AND first_seen_at > <cycle_start>;` returns 0 rows.
 - **G2** — Every `ListingRow` carries a non-null `kind ∈ {'wg', 'flat'}`. `SELECT count(*) FROM listingrow WHERE kind NOT IN ('wg','flat') OR kind IS NULL;` returns 0.
 - **G3** — A user with `SearchProfile.mode = 'flat'` only gets `kind='flat'` listings. `SELECT l.kind, count(*) FROM listingrow l JOIN userlistingrow u ON u.listing_id = l.id WHERE u.username = '<u>' GROUP BY l.kind;` returns one row, `flat`.
-- **G4** — The deletion sweep does not tombstone listings from sources it didn't iterate this pass. With `SCRAPER_ENABLED_SOURCES=wg-gesucht`, after a clean pass: `SELECT count(*) FROM listingrow WHERE id LIKE 'tum-living:%' AND deleted_at IS NOT NULL AND deleted_at > <cycle_start>;` returns 0.
 - **G7** — Each source has fixture-driven offline parser tests: `pytest backend/tests/scraper/ -v` passes offline.
 - **G9** — No `ListingRow.description` is silently truncated. `SELECT count(*) FROM listingrow WHERE scrape_status = 'full' AND CHAR_LENGTH(description) = 255;` returns 0. Schema check: `SHOW COLUMNS FROM listingrow LIKE 'description';` reports `text` (not `varchar(255)`).
 

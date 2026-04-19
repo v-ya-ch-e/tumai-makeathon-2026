@@ -56,16 +56,32 @@ def _city_slug_and_id(city: str) -> tuple[int, str]:
     return CITY_CATALOGUE["Muenchen"]
 
 
-def build_search_url(req: SearchProfile, page_index: int = 0) -> str:
+def build_search_url(
+    req: SearchProfile,
+    page_index: int = 0,
+    *,
+    category_id: int = 0,
+) -> str:
     """Compose a wg-gesucht listing-search URL.
 
     IMPORTANT: the ``offer_filter=1`` and ``city_id`` query parameters trigger a
     malformed 301 redirect on the server side and must NOT be included. We pass
-    only the numeric filters (``rMax``, ``rMin``, ``sMin``, ``sMax``, …).
+    only the numeric filters (``rMax``, ``rMin``, ``sMin``, ``sMax``, …) plus
+    the chronological sort knobs (``sort_column=0`` = "Online seit",
+    ``sort_order=0`` = newest first).
+
+    `category_id` selects the wg-gesucht vertical (`0` = WG room, the only
+    verified id today; flat-vertical ids are still TODO — see ROADMAP.md).
     """
     city_id, slug = _city_slug_and_id(req.city)
-    path = f"/wg-zimmer-in-{slug}.{city_id}.0.{int(req.rent_type)}.{page_index}.html"
-    qs: dict[str, str] = {"rMax": str(req.max_rent_eur)}
+    path = f"/wg-zimmer-in-{slug}.{city_id}.{category_id}.{int(req.rent_type)}.{page_index}.html"
+    qs: dict[str, str] = {
+        "rMax": str(req.max_rent_eur),
+        # Sort newest first so the agent can stop pagination on the first
+        # stale stub (`SCRAPER_MAX_AGE_DAYS`).
+        "sort_column": "0",
+        "sort_order": "0",
+    }
     if req.min_rent_eur:
         qs["rMin"] = str(req.min_rent_eur)
     if req.min_size_m2:

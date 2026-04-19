@@ -2,12 +2,19 @@
 
 Drives a list of `Source` plugins (`backend/app/scraper/sources/*.py`)
 sequentially per pass. For each `(source, kind)` it walks the source's
-`search_pages` async iterator one page at a time, deciding after each
-page whether to keep going based on the freshness of the first stub on
-that page. Any page whose first stub is older than the
-`SCRAPER_MAX_AGE_DAYS` cutoff terminates pagination for that
-`(source, kind)`. There is no per-source `max_pages` ceiling; pagination
-also stops on an empty page or after the first HTTP error.
+`search_pages` async iterator one page at a time. Inside each page it
+processes stubs in order; the moment a stub's `posted_at` is older than
+`SCRAPER_MAX_AGE_DAYS` it stops the entire `(source, kind)` walk
+because results are sorted newest-first by the source URL.
+
+For wg-gesucht and tum-living the stub already carries `posted_at`, so
+the staleness check is free. For kleinanzeigen the date only appears on
+the detail page, so the stop fires after the first stale `scrape_detail`
+in that `(source, kind)`.
+
+`SCRAPER_KIND` (env, one of `wg` | `flat` | `both`; default `both`)
+restricts which verticals each source iterates. `SCRAPER_ENABLED_SOURCES`
+(env, comma-separated; default `wg-gesucht`) selects which sources run.
 
 If `SCRAPER_ENRICH_ENABLED` is set, the agent calls a narrow LLM
 enrichment step between `scrape_detail` and `repo.upsert_global_listing`
@@ -16,9 +23,6 @@ to fill missing structured fields that the description states clearly
 path; the LLM never produces lat/lng.
 
 Never scores, never touches per-user matchers.
-
-`SCRAPER_ENABLED_SOURCES` (env, comma-separated; default `wg-gesucht`)
-selects which sources run.
 """
 
 from __future__ import annotations
@@ -40,6 +44,9 @@ from .enricher import ENRICHABLE_FIELDS, EnrichmentDiff, enrich_listing
 from .sources import Source, build_sources
 
 logger = logging.getLogger(__name__)
+
+
+_VALID_KIND_FILTERS = ("wg", "flat", "both")
 
 
 def _env_int(name: str, default: int) -> int:
@@ -64,6 +71,17 @@ def _env_bool(name: str, default: bool) -> bool:
     return raw.strip().lower() in {"1", "true", "yes", "on"}
 
 
+def _env_kind(name: str, default: str) -> str:
+    raw = (os.environ.get(name) or default).strip().lower()
+    if raw not in _VALID_KIND_FILTERS:
+        logger.warning(
+            "Invalid %s=%r (expected one of %s), falling back to %r",
+            name, raw, _VALID_KIND_FILTERS, default,
+        )
+        return default
+    return raw
+
+
 class ScraperAgent:
     """Multi-source loop that keeps the global `ListingRow` pool fresh."""
 
@@ -78,6 +96,7 @@ class ScraperAgent:
         enrich_enabled: Optional[bool] = None,
         enrich_model: Optional[str] = None,
         enrich_min_desc_chars: Optional[int] = None,
+        kind_filter: Optional[str] = None,
     ) -> None:
         self._city = city if city is not None else _env_str("SCRAPER_CITY", "München")
         self._max_rent = (
@@ -96,8 +115,7 @@ class ScraperAgent:
             if refresh_hours is not None
             else _env_int("SCRAPER_REFRESH_HOURS", 24)
         )
-        self._deletion_passes = _env_int("SCRAPER_DELETION_PASSES", 2)
-        self._max_age_days = _env_int("SCRAPER_MAX_AGE_DAYS", 7)
+        self._max_age_days = _env_int("SCRAPER_MAX_AGE_DAYS", 4)
         self._enrich_enabled = (
             enrich_enabled
             if enrich_enabled is not None
@@ -113,11 +131,12 @@ class ScraperAgent:
             if enrich_min_desc_chars is not None
             else _env_int("SCRAPER_ENRICH_MIN_DESC_CHARS", 200)
         )
+        self._kind_filter = (
+            kind_filter
+            if kind_filter is not None
+            else _env_kind("SCRAPER_KIND", "both")
+        )
         self._sources: list[Source] = sources if sources is not None else build_sources()
-        # Per-source miss counters: { source_name: { listing_id: missed_passes } }.
-        self._missing_passes: dict[str, dict[str, int]] = {
-            s.name: {} for s in self._sources
-        }
 
     def _search_profile(self) -> SearchProfile:
         return SearchProfile(city=self._city, max_rent_eur=self._max_rent)
@@ -145,34 +164,13 @@ class ScraperAgent:
     def _stale_cutoff(self) -> datetime:
         return datetime.utcnow() - timedelta(days=self._max_age_days)
 
-    async def _first_stub_posted_at(
-        self, source: Source, stub: Listing
-    ) -> tuple[Optional[datetime], Optional[Listing]]:
-        """Return `(posted_at, prefetched_listing)` for the page-leading stub.
-
-        For sources whose stub already carries `posted_at` (wg-gesucht,
-        tum-living) we never touch the network. For kleinanzeigen the
-        date only appears on the detail page, so we run `scrape_detail`
-        once and pass the enriched listing back to `_run_source` so the
-        per-page scrape loop can skip refetching the same URL.
-
-        Returns `(None, None)` on failure: the agent treats freshness
-        unknown as "fresh enough" so a parser regression cannot silently
-        halt the scraper.
-        """
-        if stub.posted_at is not None:
-            return stub.posted_at, None
-        try:
-            enriched = await source.scrape_detail(stub)
-        except Exception as exc:  # noqa: BLE001
-            logger.warning(
-                "[%s] freshness probe failed for %s: %s",
-                source.name,
-                stub.id,
-                exc,
-            )
-            return None, None
-        return enriched.posted_at, enriched
+    def _kinds_for(self, source: Source) -> list[str]:
+        """Intersect the agent-wide kind filter with the source's supported kinds."""
+        if self._kind_filter == "both":
+            wanted = {"wg", "flat"}
+        else:
+            wanted = {self._kind_filter}
+        return sorted(k for k in source.kind_supported if k in wanted)
 
     def _has_missing_enrichable_fields(self, listing: Listing) -> bool:
         return any(getattr(listing, f, None) is None for f in ENRICHABLE_FIELDS)
@@ -235,43 +233,26 @@ class ScraperAgent:
                 listing.id,
             )
 
-    async def _scrape_and_save_via(
+    async def _scrape_and_persist(
         self,
         source: Source,
         stub: Listing,
-        *,
-        prefetched: Optional[Listing] = None,
-    ) -> None:
-        if prefetched is not None:
-            enriched = prefetched
-        else:
-            try:
-                enriched = await source.scrape_detail(stub)
-            except Exception as exc:  # noqa: BLE001
-                logger.warning("[%s] scrape failed for %s: %s", source.name, stub.id, exc)
-                with Session(db_module.engine) as session:
-                    repo.upsert_global_listing(
-                        session,
-                        listing=stub,
-                        status="failed",
-                        scrape_error=str(exc),
-                    )
-                return
-
-        # Defensive backstop: the per-page first-stub freshness probe
-        # already fires for stub-time-dated sources (wg-gesucht,
-        # tum-living). For kleinanzeigen the same probe runs against
-        # the page leader; this re-check catches non-leader stubs whose
-        # detail page reveals an older posting date than the leader.
-        if not self._is_fresh_enough(enriched):
-            logger.info(
-                "[%s] dropping stale listing %s (posted_at=%s, max_age_days=%d)",
-                source.name,
-                enriched.id,
-                enriched.posted_at,
-                self._max_age_days,
-            )
-            return
+    ) -> Optional[Listing]:
+        """Deep-scrape one stub and persist the result. Returns the enriched
+        listing on success, or `None` on scrape failure (which has already
+        been recorded as `scrape_status='failed'`)."""
+        try:
+            enriched = await source.scrape_detail(stub)
+        except Exception as exc:  # noqa: BLE001
+            logger.warning("[%s] scrape failed for %s: %s", source.name, stub.id, exc)
+            with Session(db_module.engine) as session:
+                repo.upsert_global_listing(
+                    session,
+                    listing=stub,
+                    status="failed",
+                    scrape_error=str(exc),
+                )
+            return None
 
         await self._maybe_enrich(source, enriched)
 
@@ -283,27 +264,33 @@ class ScraperAgent:
                 listing_id=enriched.id,
                 urls=list(enriched.photo_urls),
             )
+        return enriched
 
-    def _is_fresh_enough(self, listing: Listing) -> bool:
-        """True iff `listing.posted_at` is within the freshness window.
+    def _is_stale(self, posted_at: Optional[datetime]) -> bool:
+        """True iff `posted_at` is set and older than the freshness cutoff.
 
-        Listings without a `posted_at` are treated as fresh. The agent
-        treats unknown freshness as "fresh enough" so a parser
-        regression never silently halts scraping; the existing refresh
-        / deletion sweep eventually cleans up genuinely stale rows.
+        Unknown freshness (`None`) is treated as fresh — a parser
+        regression must never silently halt the scraper.
         """
-        posted_at = getattr(listing, "posted_at", None)
         if posted_at is None:
-            return True
-        return posted_at >= self._stale_cutoff()
+            return False
+        return posted_at < self._stale_cutoff()
 
     async def _run_source(self, source: Source) -> int:
         sp = self._search_profile()
-        seen_for_source: set[str] = set()
         scraped = 0
 
-        for kind in sorted(source.kind_supported):
-            cutoff = self._stale_cutoff()
+        kinds = self._kinds_for(source)
+        if not kinds:
+            logger.info(
+                "[%s] no kinds in scope (filter=%s, supported=%s); skipping",
+                source.name,
+                self._kind_filter,
+                sorted(source.kind_supported),
+            )
+            return 0
+
+        for kind in kinds:
             try:
                 page_iter = source.search_pages(kind=kind, profile=sp).__aiter__()
             except Exception as exc:  # noqa: BLE001
@@ -316,7 +303,8 @@ class ScraperAgent:
                 continue
 
             page_index = 0
-            while True:
+            stop_kind = False
+            while not stop_kind:
                 try:
                     batch = await page_iter.__anext__()
                 except StopAsyncIteration:
@@ -334,18 +322,6 @@ class ScraperAgent:
                 if not batch:
                     break
 
-                first_posted, prefetched = await self._first_stub_posted_at(source, batch[0])
-                if first_posted is not None and first_posted < cutoff:
-                    logger.info(
-                        "[%s] kind=%s page=%d: first listing posted_at=%s < cutoff %s, stopping",
-                        source.name,
-                        kind,
-                        page_index,
-                        first_posted,
-                        cutoff,
-                    )
-                    break
-
                 logger.info(
                     "[%s] kind=%s page=%d: %d stubs (city=%s)",
                     source.name,
@@ -355,21 +331,53 @@ class ScraperAgent:
                     self._city,
                 )
 
-                for index, stub in enumerate(batch):
-                    seen_for_source.add(stub.id)
+                for stub in batch:
+                    # Stub-time freshness check (free for sources whose
+                    # search card already carries a date — wg-gesucht,
+                    # tum-living). Sorted newest-first by the source URL,
+                    # so the first stale stub means everything after it
+                    # is also stale.
+                    if self._is_stale(stub.posted_at):
+                        logger.info(
+                            "[%s] kind=%s stopping at stub %s (posted_at=%s, max_age_days=%d)",
+                            source.name,
+                            kind,
+                            stub.id,
+                            stub.posted_at,
+                            self._max_age_days,
+                        )
+                        stop_kind = True
+                        break
+
                     with Session(db_module.engine) as session:
                         existing = session.get(ListingRow, stub.id)
                     if not self._needs_scrape(existing, source):
                         continue
-                    use_prefetched = prefetched if index == 0 else None
-                    await self._scrape_and_save_via(
-                        source, stub, prefetched=use_prefetched
-                    )
+
+                    enriched = await self._scrape_and_persist(source, stub)
+                    if enriched is None:
+                        continue
                     scraped += 1
+
+                    # Detail-time freshness check for sources whose stub
+                    # lacks a date (kleinanzeigen). The stub couldn't be
+                    # rejected up-front; the detail revealed it's stale,
+                    # and the same newest-first sort guarantees the rest
+                    # of this kind is stale too.
+                    if self._is_stale(enriched.posted_at):
+                        logger.info(
+                            "[%s] kind=%s stopping after detail %s (posted_at=%s, max_age_days=%d)",
+                            source.name,
+                            kind,
+                            enriched.id,
+                            enriched.posted_at,
+                            self._max_age_days,
+                        )
+                        stop_kind = True
+                        break
 
                 page_index += 1
 
-        self._sweep_deletions_for(source, seen_for_source)
         return scraped
 
     async def run_once(self) -> int:
@@ -380,52 +388,19 @@ class ScraperAgent:
                 total += await self._run_source(source)
             except Exception:  # noqa: BLE001
                 logger.exception("Scraper source %s pass failed", source.name)
-        logger.info("Scraper: scraped %d listings this pass across %d sources", total, len(self._sources))
-        return total
-
-    def _sweep_deletions_for(self, source: Source, seen_ids: set[str]) -> None:
-        """Per-source deletion sweep.
-
-        Diffs `seen_ids` (collected across every kind this source iterated)
-        against `repo.list_active_listing_ids(source=source.name)` and
-        tombstones any listing missing for `self._deletion_passes`
-        consecutive passes. Per-source scoping means a wg-gesucht-only
-        pass cannot tombstone Kleinanzeigen / TUM Living rows.
-        """
-        with Session(db_module.engine) as session:
-            active_ids = repo.list_active_listing_ids(session, source=source.name)
-
-        misses = self._missing_passes.setdefault(source.name, {})
-
-        # Reset counters for anything that reappeared this pass.
-        for lid in list(misses.keys()):
-            if lid in seen_ids:
-                del misses[lid]
-
-        missing = active_ids - seen_ids
-        tombstoned: list[str] = []
-        for lid in missing:
-            count = misses.get(lid, 0) + 1
-            if count >= self._deletion_passes:
-                with Session(db_module.engine) as session:
-                    repo.mark_listing_deleted(session, listing_id=lid)
-                tombstoned.append(lid)
-                misses.pop(lid, None)
-            else:
-                misses[lid] = count
-
         logger.info(
-            "[%s] deletion sweep: %d missing, %d tombstoned",
-            source.name,
-            len(missing),
-            len(tombstoned),
+            "Scraper: scraped %d listings this pass across %d sources",
+            total,
+            len(self._sources),
         )
+        return total
 
     async def run_forever(self) -> None:
         logger.info(
-            "Starting scraper agent: interval=%ds, sources=%s",
+            "Starting scraper agent: interval=%ds, sources=%s, kind=%s",
             self._interval,
             ",".join(s.name for s in self._sources),
+            self._kind_filter,
         )
         while True:
             try:

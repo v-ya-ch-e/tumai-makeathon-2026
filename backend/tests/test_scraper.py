@@ -144,6 +144,7 @@ def _agent(
     max_age_days: Optional[int] = None,
     enrich_enabled: bool = False,
     enrich_min_desc_chars: int = 200,
+    kind_filter: str = "both",
 ) -> ScraperAgent:
     if max_age_days is not None:
         os.environ["SCRAPER_MAX_AGE_DAYS"] = str(max_age_days)
@@ -155,6 +156,7 @@ def _agent(
         sources=sources,
         enrich_enabled=enrich_enabled,
         enrich_min_desc_chars=enrich_min_desc_chars,
+        kind_filter=kind_filter,
     )
 
 
@@ -235,9 +237,9 @@ def test_scraper_skips_recently_scraped(monkeypatch) -> None:
     scraped = asyncio.run(_agent(sources=[fake]).run_once())
 
     assert scraped == 0
-    # The page leader (only stub) was probed via stub.posted_at (no detail
-    # fetch) since wg-gesucht stubs carry posted_at; and the stub was
-    # already fresh in the DB so no second detail fetch fires either.
+    # The stub was fresh per `posted_at` (so the per-stub stop didn't fire)
+    # and already fully scraped in the DB, so `_needs_scrape` short-circuited
+    # and no detail fetch was made.
     assert fake.detail_calls == []
 
 
@@ -264,254 +266,67 @@ def test_scraper_refreshes_stale_listings(monkeypatch) -> None:
     assert fake.detail_calls == ["wg-gesucht:stale"]
 
 
-def test_scraper_deletion_sweep_tombstones_missing_listings(monkeypatch) -> None:
-    engine = _make_engine()
-    monkeypatch.setattr(db_module, "engine", engine)
-
-    with Session(engine) as session:
-        repo.upsert_global_listing(
-            session, listing=_full_listing("wg-gesucht:keep"), status="full"
-        )
-        repo.upsert_global_listing(
-            session, listing=_full_listing("wg-gesucht:gone"), status="full"
-        )
-
-    fake = _FakeSource(
-        pages=[[_stub_listing("wg-gesucht:keep", posted_at=_fresh())]]
-    )
-    agent = _agent(sources=[fake])
-
-    asyncio.run(agent.run_once())
-    asyncio.run(agent.run_once())
-
-    with Session(engine) as session:
-        keep = session.get(ListingRow, "wg-gesucht:keep")
-        gone = session.get(ListingRow, "wg-gesucht:gone")
-    assert keep is not None
-    assert keep.deleted_at is None
-    assert keep.scrape_status != "deleted"
-    assert gone is not None
-    assert gone.scrape_status == "deleted"
-    assert gone.deleted_at is not None
+# --- Per-stub freshness stop (sources are now sorted newest-first) ---------
 
 
-def test_scraper_deletion_sweep_resets_counter_when_listing_returns(monkeypatch) -> None:
-    engine = _make_engine()
-    monkeypatch.setattr(db_module, "engine", engine)
-
-    with Session(engine) as session:
-        repo.upsert_global_listing(
-            session, listing=_full_listing("wg-gesucht:flaky"), status="full"
-        )
-
-    flaky_stub = _stub_listing("wg-gesucht:flaky", posted_at=_fresh())
-    runs = {"n": 0}
-
-    class _AlternatingSource(_FakeSource):
-        async def search_pages(self, *, kind, profile):  # noqa: ARG002
-            self.search_pages_calls += 1
-            runs["n"] += 1
-            if runs["n"] == 1:
-                return  # first pass: nothing returned
-            yield [flaky_stub]
-
-    fake = _AlternatingSource()
-    agent = _agent(sources=[fake])
-
-    asyncio.run(agent.run_once())
-    asyncio.run(agent.run_once())
-
-    with Session(engine) as session:
-        row = session.get(ListingRow, "wg-gesucht:flaky")
-    assert row is not None
-    assert row.deleted_at is None
-    assert row.scrape_status != "deleted"
-    assert "wg-gesucht:flaky" not in agent._missing_passes["wg-gesucht"]
-
-
-def test_scraper_per_source_sweep_does_not_tombstone_other_sources(monkeypatch) -> None:
-    engine = _make_engine()
-    monkeypatch.setattr(db_module, "engine", engine)
-
-    with Session(engine) as session:
-        repo.upsert_global_listing(
-            session, listing=_full_listing("wg-gesucht:keep"), status="full"
-        )
-        repo.upsert_global_listing(
-            session,
-            listing=Listing(
-                id="kleinanzeigen:other",
-                url=HttpUrl("https://www.kleinanzeigen.de/s-anzeige/x/other-199-6411"),
-                title="other source",
-                kind="wg",
-                description="ok",
-                lat=48.1,
-                lng=11.5,
-            ),
-            status="full",
-        )
-
-    fake = _FakeSource(
-        pages=[[_stub_listing("wg-gesucht:keep", posted_at=_fresh())]]
-    )
-    agent = _agent(sources=[fake])
-    for _ in range(3):
-        asyncio.run(agent.run_once())
-
-    with Session(engine) as session:
-        other = session.get(ListingRow, "kleinanzeigen:other")
-    assert other is not None
-    assert other.deleted_at is None
-    assert other.scrape_status != "deleted"
-
-
-# --- Freshness gate (legacy backstop, now triggered by detail-page posted_at) -
-
-
-def test_scraper_drops_stale_kleinanzeigen_after_detail(monkeypatch) -> None:
-    """kleinanzeigen stubs lack `posted_at`; a stale listing must not
-    persist even though we paid for the detail fetch."""
-    engine = _make_engine()
-    monkeypatch.setattr(db_module, "engine", engine)
-
-    stub_without_date = _stub_listing("kleinanzeigen:stale")
-
-    async def fake_detail(stub: Listing) -> Listing:
-        stub.description = "long ka description"
-        stub.lat = 48.1
-        stub.lng = 11.5
-        stub.posted_at = _stale()
-        return stub
-
-    fake = _FakeSource(
-        name="kleinanzeigen",
-        pages=[[stub_without_date]],
-        scrape_detail=fake_detail,
-    )
-
-    asyncio.run(_agent(sources=[fake]).run_once())
-
-    # Page-leader probe sees a stale posted_at, so we never even iterate
-    # the page; the listing is not persisted.
-    with Session(engine) as session:
-        row = session.get(ListingRow, "kleinanzeigen:stale")
-    assert row is None
-
-
-def test_scraper_drops_stale_wg_gesucht_via_first_stub_probe(monkeypatch) -> None:
-    """wg-gesucht stubs carry `posted_at`; the page-leader probe stops
-    pagination and never fires a detail scrape for stale listings."""
-    engine = _make_engine()
-    monkeypatch.setattr(db_module, "engine", engine)
-
-    stale_stub = _stub_listing("wg-gesucht:stale", posted_at=_stale())
-    fake = _FakeSource(pages=[[stale_stub]])
-
-    scraped = asyncio.run(_agent(sources=[fake]).run_once())
-
-    assert scraped == 0
-    assert fake.detail_calls == []
-    with Session(engine) as session:
-        row = session.get(ListingRow, "wg-gesucht:stale")
-    assert row is None
-
-
-# --- New: per-page freshness pagination -------------------------------------
-
-
-def test_pagination_stops_when_first_stub_on_page_is_stale(monkeypatch) -> None:
-    """3 pages: P0 fresh + fresh, P1 fresh + fresh, P2 stale + fresh.
-
-    Expect: scraped = 4 (all of P0 and P1, none of P2). The agent reads
-    P2's leader, decides it's stale, and stops without scraping any
-    member of P2.
-    """
+def test_pagination_stops_at_first_stale_stub(monkeypatch) -> None:
+    """Stubs are sorted newest-first by the source URL. The first stale
+    stub stops the rest of the `(source, kind)` walk; the fresh tail
+    after it on the same page is also dropped."""
     engine = _make_engine()
     monkeypatch.setattr(db_module, "engine", engine)
 
     p0 = [
         _stub_listing("wg-gesucht:p0a", posted_at=_fresh()),
         _stub_listing("wg-gesucht:p0b", posted_at=_fresh()),
+        _stub_listing("wg-gesucht:p0c", posted_at=_stale()),  # stops here
+        _stub_listing("wg-gesucht:p0d", posted_at=_fresh()),  # never reached
     ]
-    p1 = [
-        _stub_listing("wg-gesucht:p1a", posted_at=_fresh()),
-        _stub_listing("wg-gesucht:p1b", posted_at=_fresh()),
-    ]
-    p2 = [
-        _stub_listing("wg-gesucht:p2a", posted_at=_stale()),
-        _stub_listing("wg-gesucht:p2b", posted_at=_fresh()),  # tail ignored
-    ]
-    fake = _FakeSource(pages=[p0, p1, p2])
+    p1 = [_stub_listing("wg-gesucht:p1a", posted_at=_fresh())]  # never reached
+    fake = _FakeSource(pages=[p0, p1])
 
     scraped = asyncio.run(_agent(sources=[fake]).run_once())
 
-    assert scraped == 4
-    assert set(fake.detail_calls) == {
-        "wg-gesucht:p0a",
-        "wg-gesucht:p0b",
-        "wg-gesucht:p1a",
-        "wg-gesucht:p1b",
-    }
+    assert scraped == 2
+    assert set(fake.detail_calls) == {"wg-gesucht:p0a", "wg-gesucht:p0b"}
     with Session(engine) as session:
-        for lid in fake.detail_calls:
-            row = session.get(ListingRow, lid)
-            assert row is not None, lid
-        for lid in ("wg-gesucht:p2a", "wg-gesucht:p2b"):
+        for lid in ("wg-gesucht:p0a", "wg-gesucht:p0b"):
+            assert session.get(ListingRow, lid) is not None, lid
+        for lid in ("wg-gesucht:p0c", "wg-gesucht:p0d", "wg-gesucht:p1a"):
             assert session.get(ListingRow, lid) is None, lid
 
 
-def test_pagination_first_stub_probe_memoizes_kleinanzeigen_detail(monkeypatch) -> None:
-    """Kleinanzeigen stubs lack `posted_at`, so the agent runs
-    `scrape_detail` on each page leader to read the date. That same
-    detail must be reused when the per-page scrape loop processes
-    `batch[0]` — never refetched."""
+def test_kleinanzeigen_stops_after_first_stale_detail(monkeypatch) -> None:
+    """Kleinanzeigen stubs lack `posted_at`. The agent only learns the
+    date after `scrape_detail`; the first stale detail persists the
+    listing then stops the walk so the rest of the (newest-first
+    sorted) results aren't even fetched."""
     engine = _make_engine()
     monkeypatch.setattr(db_module, "engine", engine)
 
     page = [
         _stub_listing("kleinanzeigen:a"),
-        _stub_listing("kleinanzeigen:b"),
-        _stub_listing("kleinanzeigen:c"),
+        _stub_listing("kleinanzeigen:b"),  # first stale → stops here
+        _stub_listing("kleinanzeigen:c"),  # never reached
     ]
 
-    detail_call_counts: dict[str, int] = {}
-
     async def detail(stub: Listing) -> Listing:
-        detail_call_counts[stub.id] = detail_call_counts.get(stub.id, 0) + 1
+        if stub.id == "kleinanzeigen:b":
+            return _full_listing(stub.id, posted_at=_stale())
         return _full_listing(stub.id, posted_at=_fresh())
 
     fake = _FakeSource(name="kleinanzeigen", pages=[page], scrape_detail=detail)
 
     scraped = asyncio.run(_agent(sources=[fake]).run_once())
 
-    assert scraped == 3
-    assert detail_call_counts == {
-        "kleinanzeigen:a": 1,
-        "kleinanzeigen:b": 1,
-        "kleinanzeigen:c": 1,
-    }
+    assert scraped == 2
+    assert fake.detail_calls == ["kleinanzeigen:a", "kleinanzeigen:b"]
 
 
-def test_pagination_skips_kleinanzeigen_detail_for_stub_with_posted_at(monkeypatch) -> None:
-    """When the first stub already has `posted_at` (from a parser that
-    learns to extract it later), the agent must not run a detail scrape
-    just to check freshness."""
-    engine = _make_engine()
-    monkeypatch.setattr(db_module, "engine", engine)
-
-    page = [_stub_listing("wg-gesucht:a", posted_at=_fresh())]
-    fake = _FakeSource(pages=[page])
-
-    asyncio.run(_agent(sources=[fake]).run_once())
-
-    # Only one detail call, and it is the normal scrape (not a probe).
-    assert fake.detail_calls == ["wg-gesucht:a"]
-
-
-def test_pagination_unknown_freshness_keeps_paginating(monkeypatch) -> None:
-    """If the freshness probe cannot determine a date (no posted_at on
-    stub AND scrape_detail also returns no posted_at), the agent must
-    treat the page as fresh and continue."""
+def test_unknown_freshness_keeps_paginating(monkeypatch) -> None:
+    """If neither the stub nor the detail set `posted_at`, the agent
+    must keep going — better to over-scrape than to silently halt on a
+    parser regression."""
     engine = _make_engine()
     monkeypatch.setattr(db_module, "engine", engine)
 
@@ -519,19 +334,76 @@ def test_pagination_unknown_freshness_keeps_paginating(monkeypatch) -> None:
     p1 = [_stub_listing("kleinanzeigen:b")]
 
     async def detail_no_date(stub: Listing) -> Listing:
-        # Returns a fully-scraped listing but never sets posted_at.
         return _full_listing(stub.id, description="ok")
 
     fake = _FakeSource(
-        name="kleinanzeigen",
-        pages=[p0, p1],
-        scrape_detail=detail_no_date,
+        name="kleinanzeigen", pages=[p0, p1], scrape_detail=detail_no_date,
     )
 
     scraped = asyncio.run(_agent(sources=[fake]).run_once())
 
     assert scraped == 2
     assert fake.pages_yielded == 2
+
+
+# --- SCRAPER_KIND filter ----------------------------------------------------
+
+
+def test_kind_filter_wg_skips_flat_only_pass(monkeypatch) -> None:
+    """`kind_filter='wg'` must skip the flat vertical entirely."""
+    engine = _make_engine()
+    monkeypatch.setattr(db_module, "engine", engine)
+
+    captured_kinds: list[str] = []
+
+    class _RecordingSource(_FakeSource):
+        async def search_pages(self, *, kind, profile):  # noqa: ARG002
+            captured_kinds.append(kind)
+            yield [_stub_listing(f"kleinanzeigen:{kind}", posted_at=_fresh())]
+
+    fake = _RecordingSource(
+        name="kleinanzeigen",
+        kind_supported=frozenset({"wg", "flat"}),
+    )
+    asyncio.run(_agent(sources=[fake], kind_filter="wg").run_once())
+
+    assert captured_kinds == ["wg"]
+
+
+def test_kind_filter_flat_skips_wg_only_source(monkeypatch) -> None:
+    """`kind_filter='flat'` against a wg-only source produces zero work."""
+    engine = _make_engine()
+    monkeypatch.setattr(db_module, "engine", engine)
+
+    fake = _FakeSource(
+        pages=[[_stub_listing("wg-gesucht:x", posted_at=_fresh())]],
+        kind_supported=frozenset({"wg"}),
+    )
+    scraped = asyncio.run(_agent(sources=[fake], kind_filter="flat").run_once())
+
+    assert scraped == 0
+    assert fake.search_pages_calls == 0
+    assert fake.detail_calls == []
+
+
+def test_kind_filter_both_runs_every_supported_kind(monkeypatch) -> None:
+    engine = _make_engine()
+    monkeypatch.setattr(db_module, "engine", engine)
+
+    captured_kinds: list[str] = []
+
+    class _RecordingSource(_FakeSource):
+        async def search_pages(self, *, kind, profile):  # noqa: ARG002
+            captured_kinds.append(kind)
+            yield [_stub_listing(f"kleinanzeigen:{kind}", posted_at=_fresh())]
+
+    fake = _RecordingSource(
+        name="kleinanzeigen",
+        kind_supported=frozenset({"wg", "flat"}),
+    )
+    asyncio.run(_agent(sources=[fake], kind_filter="both").run_once())
+
+    assert sorted(captured_kinds) == ["flat", "wg"]
 
 
 # --- Enrichment ---------------------------------------------------------------
