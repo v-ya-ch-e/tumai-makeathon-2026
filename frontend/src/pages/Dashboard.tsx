@@ -22,6 +22,7 @@ import {
   stopHunt,
   streamHunt,
 } from '../lib/api'
+import { useHiddenListings } from '../lib/hiddenListings'
 import { useSession } from '../lib/session'
 import type { Action, Hunt, Listing, SearchProfile } from '../types'
 
@@ -88,17 +89,26 @@ export default function Dashboard() {
   const [filters, setFilters] = useState<ListingFilters>(DEFAULT_LISTING_FILTERS)
 
   const userCreatedAt = user?.createdAt ?? null
+  const { hiddenIds, isHidden, toggle: toggleHidden } = useHiddenListings(username)
   const isNewListing = useCallback(
     (listing: Listing) => isListingNew(listing, userCreatedAt),
     [userCreatedAt],
+  )
+  const isListingHidden = useCallback(
+    (listing: Listing) => isHidden(listing.id),
+    [isHidden],
   )
   const newCount = useMemo(
     () => listings.filter((listing) => isNewListing(listing)).length,
     [listings, isNewListing],
   )
+  const hiddenCount = useMemo(
+    () => listings.reduce((acc, listing) => (hiddenIds.has(listing.id) ? acc + 1 : acc), 0),
+    [listings, hiddenIds],
+  )
   const visibleListings = useMemo(
-    () => applyListingFilters(listings, filters, userCreatedAt),
-    [listings, filters, userCreatedAt],
+    () => applyListingFilters(listings, filters, userCreatedAt, isListingHidden),
+    [listings, filters, userCreatedAt, isListingHidden],
   )
   const seenActionKeysRef = useRef<Set<string>>(new Set())
   const autoStartTriggeredRef = useRef(false)
@@ -373,6 +383,7 @@ export default function Dashboard() {
             newCount={newCount}
             totalCount={listings.length}
             visibleCount={visibleListings.length}
+            hiddenCount={hiddenCount}
           />
           {viewMode === 'list' ? (
             <div className="max-h-[820px] overflow-y-auto">
@@ -380,6 +391,8 @@ export default function Dashboard() {
                 listings={visibleListings}
                 onOpen={(listing) => setOpenListing(listing)}
                 isNew={isNewListing}
+                isHidden={isListingHidden}
+                onToggleHide={(listing) => toggleHidden(listing.id)}
                 emptyLabel={
                   listings.length === 0
                     ? undefined

@@ -8,21 +8,17 @@ export type WeightSliderProps = {
   className?: string
 }
 
-const LEGEND: Array<{ position: number; label: string }> = [
+const STEPS: Array<{ position: number; label: string }> = [
   { position: 1, label: 'nice' },
   { position: 3, label: 'important' },
   { position: 5, label: 'must-have' },
 ]
 
-const ACTIVE_LEGEND_DISTANCE = 0.6
+const ACTIVE_DISTANCE = 0.6
 
-export function WeightSlider({
-  value,
-  onChange,
-  id,
-  ariaLabel,
-  className,
-}: WeightSliderProps) {
+export function WeightSlider({ value, onChange, id, ariaLabel, className }: WeightSliderProps) {
+  const fillPct = ((value - 1) / 4) * 100
+
   return (
     <div className={clsx('w-full', className)}>
       <input
@@ -35,17 +31,24 @@ export function WeightSlider({
         aria-label={ariaLabel}
         onChange={(e) => onChange(Number(e.target.value))}
         onClick={(e) => e.stopPropagation()}
-        className="h-1 w-full cursor-pointer appearance-none rounded-full bg-hairline accent-accent focus:outline-none focus:ring-2 focus:ring-accent focus:ring-offset-0"
+        className="weight-slider w-full cursor-pointer"
+        style={{ '--fill-pct': `${fillPct}%` } as React.CSSProperties}
       />
-      <div className="mt-1 flex justify-between text-[11px] text-ink-muted">
-        {LEGEND.map((l) => (
-          <span
-            key={l.position}
-            className={clsx(Math.abs(value - l.position) <= ACTIVE_LEGEND_DISTANCE ? 'text-ink' : undefined)}
-          >
-            {l.label}
-          </span>
-        ))}
+      <div className="mt-2 flex justify-between">
+        {STEPS.map((s) => {
+          const isActive = Math.abs(value - s.position) <= ACTIVE_DISTANCE
+          return (
+            <span
+              key={s.position}
+              className={clsx(
+                'font-mono text-[10px] uppercase tracking-[0.18em] transition-colors duration-150',
+                isActive ? 'font-semibold text-accent' : 'text-ink-muted',
+              )}
+            >
+              {s.label}
+            </span>
+          )
+        })}
       </div>
     </div>
   )
