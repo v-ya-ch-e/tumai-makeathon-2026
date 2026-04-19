@@ -11,6 +11,7 @@ from pydantic import BaseModel, EmailStr, Field, model_validator
 from .models import (
     AgentAction,
     ComponentScore,
+    Gender,
     Listing,
     NearbyPlace,
     PlaceLocation,
@@ -57,6 +58,11 @@ class SearchProfileDTO(BaseModel):
     rescan_interval_minutes: int
     schedule: Literal["one_shot", "periodic"]
     updated_at: datetime
+    # Matcher v2 (MATCHER.md §2.1, §5.6, §3.4). All optional so legacy
+    # wizard payloads (which never send these) keep round-tripping.
+    desired_min_months: Optional[int] = None
+    flatmate_self_gender: Optional[Gender] = None
+    flatmate_self_age: Optional[int] = None
 
 
 class UpsertSearchProfileBody(BaseModel):
@@ -71,6 +77,9 @@ class UpsertSearchProfileBody(BaseModel):
     preferences: list[PreferenceWeight] = Field(default_factory=list)
     rescan_interval_minutes: int = Field(30, ge=5, le=1440)
     schedule: Literal["one_shot", "periodic"] = "one_shot"
+    desired_min_months: Optional[int] = Field(default=None, ge=1, le=60)
+    flatmate_self_gender: Optional[Gender] = None
+    flatmate_self_age: Optional[int] = Field(default=None, ge=16, le=99)
 
 
 class CredentialsBody(BaseModel):
@@ -138,6 +147,11 @@ class ListingDTO(BaseModel):
     mismatch_reasons: list[str] = Field(default_factory=list)
     components: list[ComponentDTO] = Field(default_factory=list)
     veto_reason: Optional[str] = None
+    # Matcher v2 (MATCHER.md §2.2): exposed so the drawer can show
+    # "+20% Kalt uplift" and the upfront-cost evidence as separate badges.
+    price_basis: Optional[Literal["warm", "kalt_uplift", "unknown"]] = None
+    deposit_months: Optional[float] = None
+    furniture_buyout_eur: Optional[int] = None
 
 
 class NearbyPlaceDTO(BaseModel):
@@ -254,6 +268,9 @@ def search_profile_to_dto(sp: SearchProfile) -> SearchProfileDTO:
         rescan_interval_minutes=FIXED_RESCAN_INTERVAL_MINUTES,
         schedule=FIXED_SEARCH_SCHEDULE,
         updated_at=sp.updated_at,
+        desired_min_months=sp.desired_min_months,
+        flatmate_self_gender=sp.flatmate_self_gender,
+        flatmate_self_age=sp.flatmate_self_age,
     )
 
 
@@ -276,6 +293,9 @@ def upsert_body_to_search_profile(b: UpsertSearchProfileBody) -> SearchProfile:
         schedule=FIXED_SEARCH_SCHEDULE,
         updated_at=datetime.utcnow(),
         min_rent_eur=b.price_min_eur,
+        desired_min_months=b.desired_min_months,
+        flatmate_self_gender=b.flatmate_self_gender,
+        flatmate_self_age=b.flatmate_self_age,
     )
 
 
@@ -338,4 +358,7 @@ def listing_to_dto(l: Listing, *, username: Optional[str] = None) -> ListingDTO:
         mismatch_reasons=[normalize_score_text(item) or "" for item in l.mismatch_reasons],
         components=[component_to_dto(c) for c in l.components],
         veto_reason=l.veto_reason,
+        price_basis=l.price_basis,
+        deposit_months=l.deposit_months,
+        furniture_buyout_eur=l.furniture_buyout_eur,
     )

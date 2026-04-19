@@ -495,3 +495,34 @@ The deletion sweep also wasn't earning its complexity: matched-listing rows are 
 - **The previously "soft natural ceiling" page count for kleinanzeigen** (its `robots.txt` disallows `seite:6+`) becomes a real concern — with `SCRAPER_MAX_PAGES=6` the agent will request `seite:6`, which sits inside the disallowed range. We accept this for the same reason as the existing `sortierung:neuste` violation (operator-opted-in via `SCRAPER_ENABLED_SOURCES`); operators who care can lower `SCRAPER_MAX_PAGES` to `5`.
 
 **Introduced in:** this commit
+
+---
+
+## ADR-028: Matcher v2 — split match/quality, four-family preference resolver, deal-breaker commute aggregator
+
+- **Date:** 2026-04-19
+- **Status:** Accepted
+- **Supersedes:** ADR-015's curve shapes, weights, missing-data policy, and `brain.vibe_score` schema. The pipeline (hard filter → deterministic components → narrow LLM call → composition) is unchanged in spirit.
+
+**Context:** ADR-015 shipped the scorecard evaluator with a single LLM `vibe_fit` call and six deterministic components (price, size, wg_size, availability, commute, preferences). After several weeks of running it, two structural problems surfaced:
+
+1. **Math contradictions.** Quality was double-counted in v1 because it lived in both the weighted mean AND a post-blend term; the size curve had a backwards discontinuity below `lo` (a smaller listing scored higher than the user's stated minimum); commute aggregator was a flat mean across anchors so one unreachable anchor (e.g. a 90-min part-time job) was masked by one perfect anchor; weight-5 unknown preferences silently escaped the must-have cap; availability missing-data condition self-contradicted between the prose and the pseudocode.
+2. **Real-world fidelity.** Munich rents lie about cost (Kaltmiete/Warmmiete), the engine had no signal for Kaution/Ablöse, the structured-pref keyword `pet_friendly`/`non_smoking` from the wizard didn't match the evaluator's `pets_allowed`/`smoking_ok` lookups (so the structured veto silently never fired for those tiles), keyword scans had `Bahnhof` matching `\bhof\b` in `garden`, and `wg_gender`/`wg_age_band` (the most-asked Munich WG question) had no resolver path.
+
+**Decision:** Replace the v1 evaluator with v2 per [`docs/MATCHER.md`](./MATCHER.md). The pipeline structure is unchanged; the curves, aggregators, and field set are.
+
+1. **Final score is now `0.85·match + 0.15·quality`.** `quality_fit` is a new absolute "is this a good Munich rental?" component (description structure, photo count, availability clarity, scam severity from the LLM) with `weight=0` in the weighted mean and `0.15` in the post-blend — so it influences ranking without entering the `live` denominator twice. The proof test `test_quality_is_NOT_double_counted` asserts the gap between identical-fit / different-quality listings is exactly `0.15`.
+2. **Curves re-anchored** so "at the user's cap" is meaningful: `price_fit` is `1.0` at half-budget, `0.6` at exact cap, `0` at 1.2× cap (then the 1.5× hard veto). `size_fit` is monotone with continuous handover at `lo`. `commute_fit` is `1.0` plateau up to 60 % of budget, `0.6` at budget, `0` at 1.5× budget; per-anchor sub-scores aggregate as `0.7·min + 0.3·mean` so one bad anchor (e.g. 90-min job commute) pulls the score down hard rather than being masked by an excellent anchor.
+3. **Four-family preference resolver** (§3 in MATCHER.md): structured booleans on the listing (`furnished`, `pet_friendly→pets_allowed`, `non_smoking→smoking_ok` inverted), Google Places nearby with per-category `(comfort, ok, max)` distance bands pinned in `places.PLACE_DISTANCE_BANDS`, regex with word boundaries (closes `Bahnhof`/`unruhig` false positives), and LLM soft signals for `wg_gender`/`wg_age_band`/`lgbt_friendly`/etc. via `brain.vibe_score`'s `soft_signal_scores` dict.
+4. **Three new components.** `tenancy_fit` (lease-length match — uses the LLM's `tenancy_label` when `available_to` is missing rather than silently scoring 1.0); `quality_fit` (above); `upfront_cost_fit` (deposit + furniture buyout penalty). Total `live` weight rises to 11.0; commute + price stay at ~41 % of `match_score`.
+5. **Cap source naming.** When `capped < raw`, the `score_reason` string names the binding cap (`"capped at 0.45 by deal-breaker commute to Marienplatz"`) — v1's mystery `"(capped)"` is gone.
+6. **Provenance tags on every evidence string** (`[google]`, `[listing]`, `[llm]`, `[engine]`) so the drawer can render confidence badges per fact.
+
+**Consequences:**
+
+- **Three new `Listing` fields** (`price_basis`, `deposit_months`, `furniture_buyout_eur`) and three new `SearchProfile` fields (`desired_min_months`, `flatmate_self_gender`, `flatmate_self_age`). Schema migration in [`backend/app/scraper/migrate_matcher_v2.py`](../backend/app/scraper/migrate_matcher_v2.py) (idempotent, `--dry-run`-friendly, `ALTER TABLE … ADD COLUMN` only when absent). `price_basis` is backfilled to `"unknown"` for legacy rows.
+- **The vibe LLM does more per call** — same one call per listing, but it now also emits `tenancy_label` (used by `tenancy_fit` when `available_to` is missing), `scam_severity` (drives a `0.30` hard cap on the vibe component when `≥ 0.7`), `soft_signal_scores` (per-key `0..1` for `wg_gender`/`wg_age_band`/`lgbt_friendly`/etc.), and `red_flags`/`green_flags` that fold into the `mismatch_reasons`/`match_reasons` lists. Token spend grows ~30 %; latency unchanged.
+- **Wizard backlog created.** The wizard does not yet expose `desired_min_months` / `flatmate_self_*`; the engine handles their absence by defaulting `desired_min_months` to a "prefer longer is better" ladder and resolving `wg_gender`/`wg_age_band` to `None` (which then triggers the unknown-must-have cap if the user weighted them at 5). Tracked in [`docs/ROADMAP.md`](./ROADMAP.md) → "Wizard catch-up for matcher v2".
+- **Future evaluator changes** that touch curve shapes or the composition formula should regenerate the proof harness ([`docs/MATCHER.md`](./MATCHER.md) §6 + §11) and re-run the full unit + integration test suite before shipping; the curves and weights here are the result of a deliberate design pass and should not be tweaked piecemeal.
+
+**Introduced in:** this commit

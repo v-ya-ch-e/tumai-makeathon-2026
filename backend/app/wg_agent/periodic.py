@@ -16,7 +16,7 @@ from typing import Optional
 
 from sqlmodel import Session
 
-from . import commute, evaluator, notifier, places, repo
+from . import commute, evaluator, market, notifier, places, repo
 from . import db as db_module
 from .db_models import ListingRow, UserRow
 from .models import ActionKind, AgentAction, NearbyPlace, SearchProfile
@@ -286,11 +286,25 @@ class UserAgent:
                         origin=(listing.lat, listing.lng),
                         preferences=sp.preferences,
                     )
+                # Market percentile context for `price_fit` evidence
+                # (MATCHER.md §5.1). Cheap query against the existing
+                # global ListingRow pool; degrades to None when there
+                # aren't enough peers in the same district + size band.
+                with Session(db_module.engine) as session:
+                    market_context = market.market_context(
+                        session,
+                        listing_id=listing.id,
+                        district=listing.district,
+                        kind=listing.kind,
+                        size_m2=listing.size_m2,
+                        price_eur=listing.price_eur,
+                    )
                 result = await evaluator.evaluate(
                     listing,
                     sp,
                     travel_times=travel_times,
                     nearby_places=nearby_places,
+                    market_context=market_context,
                 )
                 listing.score = result.score
                 listing.score_reason = result.summary

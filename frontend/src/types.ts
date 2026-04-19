@@ -42,6 +42,11 @@ export type SearchProfile = {
   rescanIntervalMinutes: number
   schedule: Schedule
   updatedAt: string
+  // Matcher v2 (MATCHER.md §2.1, §5.6, §3.4). Wizard does not yet expose
+  // these; the engine degrades gracefully when they are null.
+  desiredMinMonths?: number | null
+  flatmateSelfGender?: Gender | null
+  flatmateSelfAge?: number | null
 }
 
 export type UpsertSearchProfileBody = Omit<SearchProfile, 'updatedAt'>
@@ -117,6 +122,12 @@ export type Listing = {
   mismatchReasons: string[]
   components: Component[]
   vetoReason: string | null
+  // Matcher v2 (MATCHER.md §2.2). Drawer can show "+20% Kalt uplift" badge
+  // and per-listing upfront-cost evidence. Optional everywhere so legacy
+  // payloads stay valid.
+  priceBasis?: 'warm' | 'kalt_uplift' | 'unknown' | null
+  depositMonths?: number | null
+  furnitureBuyoutEur?: number | null
 }
 
 export type ListingDetail = {

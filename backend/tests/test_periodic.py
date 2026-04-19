@@ -135,7 +135,7 @@ def test_user_agent_scores_every_pool_listing_once(monkeypatch) -> None:
     monkeypatch.setattr(db_module, "engine", engine)
 
     async def evaluate_stub(
-        _lst: Listing, _sp: SearchProfile, *, travel_times=None, nearby_places=None
+        _lst: Listing, _sp: SearchProfile, *, travel_times=None, nearby_places=None, market_context=None
     ) -> EvaluationResult:
         return _stub_result(0.9)
 
@@ -194,7 +194,7 @@ def test_user_agent_sees_listings_added_between_passes(monkeypatch) -> None:
     monkeypatch.setattr(db_module, "engine", engine)
 
     async def evaluate_stub(
-        _lst: Listing, _sp: SearchProfile, *, travel_times=None, nearby_places=None
+        _lst: Listing, _sp: SearchProfile, *, travel_times=None, nearby_places=None, market_context=None
     ) -> EvaluationResult:
         return _stub_result(0.6)
 
@@ -253,7 +253,7 @@ def test_periodic_user_matcher_cancels_cleanly(monkeypatch) -> None:
     started_event = asyncio.Event()
 
     async def evaluate_stub(
-        _lst: Listing, _sp: SearchProfile, *, travel_times=None, nearby_places=None
+        _lst: Listing, _sp: SearchProfile, *, travel_times=None, nearby_places=None, market_context=None
     ) -> EvaluationResult:
         started_event.set()
         return _stub_result(0.5)
@@ -298,7 +298,7 @@ def test_publish_fans_out_to_every_subscriber(monkeypatch) -> None:
     monkeypatch.setattr(db_module, "engine", engine)
 
     async def evaluate_stub(
-        _lst: Listing, _sp: SearchProfile, *, travel_times=None, nearby_places=None
+        _lst: Listing, _sp: SearchProfile, *, travel_times=None, nearby_places=None, market_context=None
     ) -> EvaluationResult:
         return _stub_result(0.7)
 
@@ -359,7 +359,7 @@ def test_commute_times_reach_evaluator_and_persist(monkeypatch) -> None:
     captured: dict = {}
 
     async def evaluate_capture(
-        _lst: Listing, _sp: SearchProfile, *, travel_times=None, nearby_places=None
+        _lst: Listing, _sp: SearchProfile, *, travel_times=None, nearby_places=None, market_context=None
     ) -> EvaluationResult:
         captured["travel_times"] = travel_times
         captured["nearby_places"] = nearby_places
@@ -425,7 +425,7 @@ def test_nearby_places_reach_evaluator_and_persist(monkeypatch) -> None:
     captured: dict = {}
 
     async def evaluate_capture(
-        _lst: Listing, _sp: SearchProfile, *, travel_times=None, nearby_places=None
+        _lst: Listing, _sp: SearchProfile, *, travel_times=None, nearby_places=None, market_context=None
     ) -> EvaluationResult:
         captured["nearby_places"] = nearby_places
         return _stub_result(0.7)
@@ -475,7 +475,7 @@ def test_commute_skipped_when_listing_lacks_coords(monkeypatch) -> None:
     )
 
     async def evaluate_stub(
-        _lst: Listing, _sp: SearchProfile, *, travel_times=None, nearby_places=None
+        _lst: Listing, _sp: SearchProfile, *, travel_times=None, nearby_places=None, market_context=None
     ) -> EvaluationResult:
         return _stub_result(0.5, summary="no commute")
 
@@ -532,7 +532,7 @@ def test_initial_evaluation_does_not_send_email(monkeypatch) -> None:
     _reset_notify_state("u-initial")
 
     async def evaluate_stub(
-        _lst: Listing, _sp: SearchProfile, *, travel_times=None, nearby_places=None
+        _lst: Listing, _sp: SearchProfile, *, travel_times=None, nearby_places=None, market_context=None
     ) -> EvaluationResult:
         return _stub_result(0.95)
 
@@ -584,7 +584,7 @@ def test_new_listings_trigger_single_batched_email(monkeypatch) -> None:
     _reset_notify_state("u-new")
 
     async def evaluate_stub(
-        _lst: Listing, _sp: SearchProfile, *, travel_times=None, nearby_places=None
+        _lst: Listing, _sp: SearchProfile, *, travel_times=None, nearby_places=None, market_context=None
     ) -> EvaluationResult:
         return _stub_result(0.95)
 
@@ -642,7 +642,7 @@ def test_cooldown_suppresses_second_email_and_releases_after(monkeypatch) -> Non
     _reset_notify_state("u-cool")
 
     async def evaluate_stub(
-        _lst: Listing, _sp: SearchProfile, *, travel_times=None, nearby_places=None
+        _lst: Listing, _sp: SearchProfile, *, travel_times=None, nearby_places=None, market_context=None
     ) -> EvaluationResult:
         return _stub_result(0.95)
 

@@ -23,36 +23,73 @@ logger = logging.getLogger(__name__)
 
 NEARBY_URL = "https://places.googleapis.com/v1/places:searchNearby"
 TEXT_URL = "https://places.googleapis.com/v1/places:searchText"
+# Legacy flat radius — kept only for back-compat with the old
+# `_placeholder` evidence string. New code uses `PLACE_DISTANCE_BANDS`
+# (MATCHER.md §3.2) and never reads SEARCH_RADIUS_M.
 SEARCH_RADIUS_M = 2000
-PARK_RADIUS_M = 5000  # parks can be large; wider radius to catch Englischer Garten etc.
 _TIMEOUT = httpx.Timeout(4.0, connect=3.0)
 _CACHE_LIMIT = 4096
 _cache: dict[str, Optional[NearbyPlace]] = {}
 
-# Maps UI preference keys to (label, primary_types, text_query, radius_override).
+
+# `PLACE_DISTANCE_BANDS` (MATCHER.md §3.2) is the single source of truth
+# for the (comfort, ok, max) triple per category. The evaluator imports
+# it directly so the proof tests, production code, and docs cannot
+# drift. The Google `searchNearby` radius for each category is `max_m`
+# (the outer band) — anything beyond `max_m` scores 0.0 anyway.
+PLACE_DISTANCE_BANDS: dict[str, tuple[int, int, int]] = {
+    "supermarket": (400, 900, 1500),
+    "gym": (400, 900, 1500),
+    "cafe": (200, 600, 1000),
+    "bars": (300, 900, 1500),
+    "library": (400, 1200, 2000),
+    "coworking": (400, 1000, 2000),
+    "nightlife": (500, 1200, 2000),
+    "park": (800, 2000, 5000),
+    "green_space": (800, 2000, 5000),
+    "public_transport": (200, 500, 800),
+}
+
+
+# Maps UI preference keys to (label, primary_types, text_query).
 # - primary_types: used with searchNearby as `includedPrimaryTypes` — only places
 #   whose *primary* Google type matches are returned. This prevents false positives
 #   (e.g. gas stations that carry "supermarket" as a secondary type, or indoor
 #   atriums tagged as secondary "park"). Empty tuple → use text_query instead.
 # - text_query: for searchText when type-based search is insufficient.
-# - radius_override: search radius in metres; None → SEARCH_RADIUS_M.
-PREFERENCE_PLACE_CATEGORIES: dict[str, tuple[str, tuple[str, ...], Optional[str], Optional[int]]] = {
-    "supermarket": ("Supermarket", ("supermarket", "grocery_store"), None, None),
-    "gym": ("Gym", ("gym",), None, None),
-    "park": ("Park", ("park", "national_park"), None, PARK_RADIUS_M),
-    "cafe": ("Cafe", ("cafe", "coffee_shop"), None, None),
-    "bars": ("Bars", ("bar", "pub"), None, None),
-    "library": ("Library", ("library",), None, None),
-    "coworking": ("Coworking", tuple(), "coworking space", None),
-    "nightlife": ("Nightlife", ("night_club", "bar", "pub"), None, None),
-    "green_space": ("Green space", ("park", "national_park"), None, PARK_RADIUS_M),
+# Search radius per key is the `max_m` of `PLACE_DISTANCE_BANDS[key]`.
+#
+# MATCHER.md §3.2 v3 fix: `public_transport` no longer requests
+# `tram_station` (Google v1 rejects it) — Munich tram falls under
+# `light_rail_station`, which the v1 API accepts. Kept the bus and
+# train types so the call returns useful results in any layout.
+PREFERENCE_PLACE_CATEGORIES: dict[str, tuple[str, tuple[str, ...], Optional[str]]] = {
+    "supermarket": ("Supermarket", ("supermarket", "grocery_store"), None),
+    "gym": ("Gym", ("gym",), None),
+    "park": ("Park", ("park", "national_park"), None),
+    "cafe": ("Cafe", ("cafe", "coffee_shop"), None),
+    "bars": ("Bars", ("bar", "pub"), None),
+    "library": ("Library", ("library",), None),
+    "coworking": ("Coworking", tuple(), "coworking space"),
+    "nightlife": ("Nightlife", ("night_club", "bar", "pub"), None),
+    "green_space": ("Green space", ("park", "national_park"), None),
     "public_transport": (
         "Public transport",
-        ("transit_station", "subway_station", "train_station", "bus_station"),
-        None,
+        ("transit_station", "subway_station", "light_rail_station", "bus_station"),
         None,
     ),
 }
+
+
+def _radius_for_key(key: str) -> int:
+    """Per-category search radius in metres, taken from `PLACE_DISTANCE_BANDS`.
+
+    Falls back to `SEARCH_RADIUS_M` if a new category is added to
+    `PREFERENCE_PLACE_CATEGORIES` but not yet to `PLACE_DISTANCE_BANDS`,
+    so the call still returns *something* during a partial rollout.
+    """
+    band = PLACE_DISTANCE_BANDS.get(key)
+    return band[2] if band is not None else SEARCH_RADIUS_M
 
 
 def supports_preference(key: str) -> bool:
@@ -63,7 +100,7 @@ def _placeholder(key: str, *, searched: bool) -> Optional[NearbyPlace]:
     spec = PREFERENCE_PLACE_CATEGORIES.get(key)
     if spec is None:
         return None
-    label, _primary_types, _text_query, _radius = spec
+    label, _primary_types, _text_query = spec
     return NearbyPlace(key=key, label=label, searched=searched)
 
 
@@ -92,8 +129,8 @@ async def _fetch_one(
     spec = PREFERENCE_PLACE_CATEGORIES.get(key)
     if spec is None:
         return None
-    label, primary_types, text_query, radius_override = spec
-    radius = radius_override if radius_override is not None else SEARCH_RADIUS_M
+    label, primary_types, text_query = spec
+    radius = _radius_for_key(key)
     lat, lng = origin
     headers = {
         "Content-Type": "application/json",

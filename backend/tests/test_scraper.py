@@ -588,6 +588,13 @@ def test_enrichment_skipped_when_no_missing_fields(monkeypatch) -> None:
             lng=11.5,
             description=long_desc,
             posted_at=_fresh(),
+            # Matcher v2 added price_basis / deposit_months /
+            # furniture_buyout_eur to ENRICHABLE_FIELDS; populate them so
+            # this "fully populated" fixture actually has nothing left to
+            # enrich.
+            price_basis="warm",
+            deposit_months=2.0,
+            furniture_buyout_eur=0,
         )
 
     page = [_stub_listing("wg-gesucht:done", posted_at=_fresh())]

@@ -123,6 +123,11 @@ def upsert_search_profile(
     row.rescan_interval_minutes = sp.rescan_interval_minutes
     row.schedule = sp.schedule
     row.updated_at = sp.updated_at
+    row.desired_min_months = sp.desired_min_months
+    row.flatmate_self_gender = (
+        sp.flatmate_self_gender.value if sp.flatmate_self_gender is not None else None
+    )
+    row.flatmate_self_age = sp.flatmate_self_age
     session.commit()
     session.refresh(row)
     return get_search_profile(session, username=username) or sp
@@ -139,6 +144,12 @@ def get_search_profile(session: Session, *, username: str) -> Optional[SearchPro
     city = "München"
     max_rent_eur = row.price_max_eur if row.price_max_eur is not None else 2000
     min_rent_eur = row.price_min_eur
+    flatmate_self_gender: Optional[Gender] = None
+    if row.flatmate_self_gender:
+        try:
+            flatmate_self_gender = Gender(row.flatmate_self_gender)
+        except ValueError:
+            flatmate_self_gender = None
     return SearchProfile(
         city=city,
         max_rent_eur=max_rent_eur,
@@ -155,6 +166,9 @@ def get_search_profile(session: Session, *, username: str) -> Optional[SearchPro
         updated_at=row.updated_at,
         move_in_from=row.move_in_from,
         move_in_until=row.move_in_until,
+        desired_min_months=row.desired_min_months,
+        flatmate_self_gender=flatmate_self_gender,
+        flatmate_self_age=row.flatmate_self_age,
     )
 
 
@@ -237,6 +251,9 @@ def upsert_global_listing(
         scrape_error=scrape_error,
         first_seen_at=first_seen,
         last_seen_at=now,
+        price_basis=listing.price_basis,
+        deposit_months=listing.deposit_months,
+        furniture_buyout_eur=listing.furniture_buyout_eur,
     )
     session.merge(row)
     session.commit()
@@ -444,7 +461,25 @@ def row_to_domain_listing(row: ListingRow) -> Listing:
         furnished=row.furnished,
         pets_allowed=row.pets_allowed,
         smoking_ok=row.smoking_ok,
+        price_basis=_price_basis_from_row(row),
+        deposit_months=row.deposit_months,
+        furniture_buyout_eur=row.furniture_buyout_eur,
     )
+
+
+_VALID_PRICE_BASIS = ("warm", "kalt_uplift", "unknown")
+
+
+def _price_basis_from_row(row: ListingRow) -> Optional[str]:
+    """Coerce `ListingRow.price_basis` to the literal Listing accepts.
+
+    Legacy rows return `None`, which the engine treats as "unknown" (no
+    Warmmiete uplift evidence). Free-form string values that don't match
+    one of the three literals also degrade to `None` so `Listing`
+    validation never raises.
+    """
+    raw = (row.price_basis or "").strip().lower()
+    return raw if raw in _VALID_PRICE_BASIS else None
 
 
 def _kind_from_row(row: ListingRow) -> str:
@@ -499,6 +534,9 @@ def _listing_from_row(
         mismatch_reasons=mismatch_reasons,
         components=components,
         veto_reason=veto_reason,
+        price_basis=_price_basis_from_row(row),
+        deposit_months=row.deposit_months,
+        furniture_buyout_eur=row.furniture_buyout_eur,
     )
 
 

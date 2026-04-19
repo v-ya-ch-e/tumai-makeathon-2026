@@ -19,7 +19,7 @@ from typing import Any, Optional
 from urllib.parse import urlparse
 
 from openai import OpenAI
-from pydantic import BaseModel, Field, ValidationError
+from pydantic import BaseModel, Field, ValidationError, model_validator
 
 from .models import (
     ContactInfo,
@@ -33,6 +33,11 @@ from .models import (
 logger = logging.getLogger(__name__)
 
 DEFAULT_MODEL = os.getenv("OPENAI_MODEL", "gpt-4o-mini")
+# Matcher v2 (MATCHER.md §5.8): the vibe LLM model is env-driven so CI /
+# prod can pin different snapshots without code changes. Defaults to
+# `gpt-5.4-nano` per the design's model recommendation; override with
+# WG_VIBE_MODEL=gpt-5-nano (or any other id) when needed.
+VIBE_MODEL = os.getenv("WG_VIBE_MODEL", "gpt-5.4-nano")
 
 
 def _base_url() -> Optional[str]:
@@ -312,40 +317,95 @@ def score_listing(
 
 
 # -----------------------------------------------------------------------------
-# 1b. Vibe-only score (one component of the scorecard evaluator)
+# 1b. Vibe-only judgement (one component of the v2 scorecard evaluator)
 # -----------------------------------------------------------------------------
 
 
-class VibeScore(BaseModel):
-    """Narrow LLM output: how well the listing's prose matches the user's notes.
+class VibeJudgement(BaseModel):
+    """Strict JSON output of the vibe LLM (MATCHER.md §5.8).
 
-    `evaluator.py` composes this with deterministic components (price, size,
-    commute, preferences). The LLM is explicitly told **not** to judge
-    numeric fit — those live in code.
+    Single shot per listing. The LLM is told to judge prose-only signals
+    (vibe, flatmate fit, lifestyle) and to NEVER score price / size /
+    WG-size / commute (those are deterministic in `evaluator.py`).
+
+    Side channels feed back into other components:
+      * `soft_signal_scores` -> `preferences_fit` per-key resolution for
+        the §3.4 LLM-resolved keys (lgbt_friendly, english_speaking, ...).
+      * `tenancy_label`     -> `tenancy_fit` when the listing has no
+        explicit `available_to`.
+      * `scam_severity`     -> drives the `vibe_fit` hard-cap at 0.30
+        (§9 row 6) and feeds `quality_fit`.
+
+    Backward-compat alias: the legacy `score` / `evidence` fields from the
+    old `VibeScore` are mirrored as properties so any caller that still
+    references them by the old names keeps working.
     """
 
-    score: float = Field(ge=0, le=1)
+    fit_score: float = Field(ge=0, le=1)
     evidence: list[str] = Field(default_factory=list)
+    flatmate_vibe: str = ""
+    lifestyle_match: str = ""
+    red_flags: list[str] = Field(default_factory=list)
+    green_flags: list[str] = Field(default_factory=list)
+    soft_signal_scores: dict[str, float] = Field(default_factory=dict)
+    tenancy_label: str = "unknown"
+    scam_severity: float = Field(default=0.0, ge=0, le=1)
+
+    @model_validator(mode="before")
+    @classmethod
+    def _accept_legacy_score(cls, data):  # type: ignore[override]
+        """Accept the v1 `{score, evidence}` shape for backward compat.
+
+        Older test fixtures and the legacy `VibeScore` callers still pass
+        `score=...`. We mirror it onto `fit_score` so the new schema
+        validates without forcing every caller to rename the field.
+        """
+        if isinstance(data, dict) and "fit_score" not in data and "score" in data:
+            data = {**data, "fit_score": data["score"]}
+        return data
+
+    @property
+    def score(self) -> float:
+        """Legacy alias used by older `vibe_score` callers."""
+        return self.fit_score
+
+
+# Kept as an import alias so any in-tree code that still imports
+# `VibeScore` continues to type-check. New code should use
+# `VibeJudgement` directly.
+VibeScore = VibeJudgement
+
+
+_TENANCY_LABELS = ("open_ended", "long_term", "mid_term", "short_term", "unknown")
 
 
 VIBE_SYSTEM = (
     "You judge the vibe of a WG-Gesucht listing against a student's free-form "
-    "notes, district preferences, and lifestyle preferences. Nearby place facts "
-    "can inform lifestyle fit when they clearly matter to the student. Do NOT "
-    "judge price, size, WG size, or commute times — those are handled by other "
-    "components. Output strict JSON."
+    "notes, district preferences, and lifestyle preferences. Nearby place "
+    "facts can inform lifestyle fit when they clearly matter to the student. "
+    "Do NOT judge price, size, WG size, or commute times — those are handled "
+    "by other deterministic components. You also extract three side-channel "
+    "facts (tenancy_label, scam_severity, per-key soft-signal scores) so the "
+    "rest of the engine can reuse your read of the description without a "
+    "second call. Output strict JSON, no prose."
 )
 
 VIBE_USER_TEMPLATE = """
 Rate how well the listing's description and district match the student's vibe
-notes on a 0..1 scale.
+notes on a 0..1 scale, and extract the side-channel facts described below.
 
 STUDENT NOTES:
 {notes}
 
+STUDENT DEMOGRAPHICS (for wg_gender / wg_age_band soft signals):
+  gender: {self_gender}
+  age: {self_age}
+
 PREFERRED DISTRICTS: {preferred_districts}
 AVOID DISTRICTS: {avoid_districts}
 WEIGHTED PREFERENCES: {preferences}
+SOFT-SIGNAL KEYS YOU MUST SCORE (0..1, omit a key when no evidence):
+{soft_signal_keys}
 NEARBY PREFERENCE PLACES:
 {nearby_places}
 
@@ -355,17 +415,38 @@ LISTING DESCRIPTION:
 {description}
 \"\"\"
 
-Return JSON:
-  score (0..1, higher = better vibe match),
-  evidence (list of 1..4 short strings: concrete phrases you relied on).
+Return JSON with EXACTLY these fields:
+  fit_score:           number in [0, 1] (overall prose-vibe match).
+  evidence:            list of 1..4 short strings, concrete phrases you used.
+  flatmate_vibe:       one short sentence describing the flatmates / household.
+  lifestyle_match:     one short sentence linking the listing to the user's lifestyle.
+  red_flags:           0..3 short strings naming concrete concerns (e.g. "asks for deposit by transfer to private account").
+  green_flags:         0..3 short strings naming concrete positives.
+  soft_signal_scores:  object with per-key scores in [0, 1] for the keys listed
+                       under SOFT-SIGNAL KEYS above. OMIT a key when the
+                       description gives no evidence either way (do not guess).
+  tenancy_label:       one of "open_ended" | "long_term" | "mid_term" | "short_term" | "unknown".
+                       "open_ended" = "unbefristet" / "permanent" stated.
+                       "long_term"  = year-or-more lease implied (e.g. "min. 12 Monate").
+                       "mid_term"   = 3-9 months ("Zwischenmiete" without a year).
+                       "short_term" = under 3 months / weeks ("4 Wochen Zwischenmiete").
+                       "unknown"    = description does not say.
+  scam_severity:       number in [0, 1]. 0 = no concern; 1 = obvious scam pattern
+                       (off-platform contact required, payment by Western Union,
+                       implausibly cheap rent for the district, photos clearly stolen
+                       or copy-pasted, urgent pressure to transfer money). Be
+                       conservative — only flag with concrete evidence in the text.
 
 Rules:
-  * If the student has no notes, no district preferences, and no nearby-place
-    context, return score 0.5 with evidence ["not enough vibe information"].
-  * If the listing is in an avoid-district, score <= 0.3 and mention the
+  * If the student has no notes AND no district preferences AND no nearby-place
+    context, return fit_score 0.5 with evidence ["not enough vibe information"]
+    and still emit the side-channel facts as best you can from the description.
+  * If the listing is in an avoid-district, fit_score <= 0.3 and mention the
     district in evidence.
-  * Nearby place facts can support lifestyle fit, especially for place-based
-    preferences such as gym, park, supermarket, cafe, or nightlife.
+  * For wg_gender / wg_age_band: only score from EXPLICIT exclusions or matches
+    in the description ("nur Frauen-WG", "30+ WG", "Studi-WG"); omit when
+    unstated. The student's gender/age above are provided so you can decide
+    "matches student" (1.0) vs "explicitly excludes student" (0.0).
   * Do NOT mention rent, size, or commute in the evidence.
 
 Only return valid JSON, no prose.
@@ -377,37 +458,76 @@ def vibe_score(
     requirements: SearchProfile,
     *,
     nearby_places: Optional[dict[str, NearbyPlace]] = None,
-) -> VibeScore:
-    """Return a narrow vibe score for the evaluator's `vibe_fit` component.
+    soft_signal_keys: Optional[list[str]] = None,
+) -> VibeJudgement:
+    """Run the v2 vibe LLM and return the parsed `VibeJudgement`.
 
-    Raises on HTTP / JSON / ValidationError failure. The evaluator catches
-    these and sets `missing_data=True` on the component.
+    Raises on HTTP / JSON / ValidationError failure. The evaluator
+    catches these and sets `missing_data=True` on the `vibe_fit`
+    component (see MATCHER.md §5.8).
+
+    `soft_signal_keys` is the list of preference keys for which the LLM
+    should report a per-key score in `soft_signal_scores` (the §3.4
+    keys: `student_household`, `couples_ok`, `lgbt_friendly`,
+    `english_speaking`, `international_friendly`, `wg_gender`,
+    `wg_age_band`). Pass `None` to ask for no soft signals.
     """
     client = _client()
     nearby_block = _nearby_places_block(
         nearby_places or {},
         list(requirements.preferences),
     )
+    self_gender = (
+        requirements.flatmate_self_gender.value
+        if requirements.flatmate_self_gender is not None
+        else "—"
+    )
+    self_age = (
+        str(requirements.flatmate_self_age)
+        if requirements.flatmate_self_age is not None
+        else "—"
+    )
+    soft_signal_keys = list(soft_signal_keys or [])
+    keys_block = (
+        "  " + "\n  ".join(soft_signal_keys) if soft_signal_keys else "  (none)"
+    )
     user_msg = VIBE_USER_TEMPLATE.format(
-        notes=(requirements.notes or "(none)").strip()[:1200],
+        notes=(requirements.notes or "(none)").strip()[:1500],
+        self_gender=self_gender,
+        self_age=self_age,
         preferred_districts=", ".join(requirements.preferred_districts) or "—",
         avoid_districts=", ".join(requirements.avoid_districts) or "—",
-        preferences=", ".join(f"{p.key} ({p.weight})" for p in requirements.preferences) or "—",
-        nearby_places=nearby_block.replace("Nearby preference places:\n", "") or "—",
+        preferences=", ".join(
+            f"{p.key} ({p.weight})" for p in requirements.preferences
+        )
+        or "—",
+        soft_signal_keys=keys_block,
+        nearby_places=nearby_block.replace("Nearby preference places:\n", "")
+        or "—",
         district=listing.district or "?",
-        description=(listing.description or "").strip()[:1800],
+        description=(listing.description or "").strip()[:2000],
     )
     response = client.chat.completions.create(
-        model=DEFAULT_MODEL,
+        model=VIBE_MODEL,
         messages=[
             {"role": "system", "content": VIBE_SYSTEM},
             {"role": "user", "content": user_msg},
         ],
         response_format={"type": "json_object"},
-        temperature=0.2,
     )
     content = response.choices[0].message.content or "{}"
-    return VibeScore.model_validate_json(content)
+    judgement = VibeJudgement.model_validate_json(content)
+    # Defensive: clamp scam_severity and soft_signal_scores into [0, 1]
+    # so a misbehaving LLM cannot poison downstream caps.
+    judgement.scam_severity = max(0.0, min(1.0, float(judgement.scam_severity)))
+    judgement.soft_signal_scores = {
+        k: max(0.0, min(1.0, float(v)))
+        for k, v in (judgement.soft_signal_scores or {}).items()
+        if k in soft_signal_keys
+    }
+    if judgement.tenancy_label not in _TENANCY_LABELS:
+        judgement.tenancy_label = "unknown"
+    return judgement
 
 
 # -----------------------------------------------------------------------------

@@ -132,6 +132,17 @@ class SearchProfile(BaseModel):
     max_listings_to_consider: int = Field(default=30, ge=1, le=100)
     max_messages_to_send: int = Field(default=5, ge=1, le=15)
 
+    # Matcher v2 additions (MATCHER.md §2.1, §5.6, §3.4).
+    # `desired_min_months` drives `tenancy_fit`; falls back to `RentType` when
+    # left unset (`unlimited→12`, `temporary→3`, `overnight→1`) inside
+    # `repo.get_search_profile`. `flatmate_self_*` are read by the LLM vibe
+    # prompt to resolve the `wg_gender` / `wg_age_band` soft signals; `None`
+    # means the user did not state a preference and the keys resolve to
+    # `None` in the preference aggregator.
+    desired_min_months: Optional[int] = Field(default=None, ge=1, le=60)
+    flatmate_self_gender: Optional[Gender] = Field(default=None)
+    flatmate_self_age: Optional[int] = Field(default=None, ge=16, le=99)
+
 
 class WGCredentials(BaseModel):
     """Credentials for logging into wg-gesucht.de."""
@@ -223,6 +234,14 @@ class Listing(BaseModel):
     best_commute_minutes: Optional[int] = None
     best_commute_label: Optional[str] = None
     best_commute_mode: Optional[str] = None
+
+    # Matcher v2 additions (MATCHER.md §2.2, §5.1, upfront_cost_fit).
+    # `price_basis` records whether `price_eur` is total Warmmiete as-stated
+    # ("warm"), uplifted from a Kaltmiete-only source ("kalt_uplift"), or
+    # truly unknown ("unknown" — the safe default for legacy rows).
+    price_basis: Optional[Literal["warm", "kalt_uplift", "unknown"]] = None
+    deposit_months: Optional[float] = Field(default=None, ge=0, le=12)
+    furniture_buyout_eur: Optional[int] = Field(default=None, ge=0)
 
     # Transient: populated by per-source search/detail parsers and consumed by
     # `ScraperAgent._is_fresh_enough` to drop stale listings before persistence.

@@ -40,6 +40,12 @@ class SearchProfileRow(SQLModel, table=True):
     rescan_interval_minutes: int = 30
     schedule: str = "one_shot"
     updated_at: datetime = Field(default_factory=datetime.utcnow)
+    # Matcher v2 (MATCHER.md §2.1, §5.6, §3.4). Optional + nullable so legacy
+    # rows decode unchanged; the migration script `migrate_matcher_v2.py`
+    # backfills `desired_min_months` from `RentType` and leaves the rest NULL.
+    desired_min_months: Optional[int] = None
+    flatmate_self_gender: Optional[str] = None
+    flatmate_self_age: Optional[int] = None
 
 
 class ListingRow(SQLModel, table=True):
@@ -76,6 +82,13 @@ class ListingRow(SQLModel, table=True):
     first_seen_at: datetime
     last_seen_at: datetime
     deleted_at: Optional[datetime] = Field(default=None, index=True)
+    # Matcher v2 (MATCHER.md §2.2, §5.1, upfront_cost_fit). Nullable so the
+    # `migrate_matcher_v2.py` ALTER TABLE doesn't have to backfill at write
+    # time; `price_basis` is later defaulted to "unknown" once existing rows
+    # are visited (idempotent UPDATE in the migration script).
+    price_basis: Optional[str] = Field(default=None)
+    deposit_months: Optional[float] = None
+    furniture_buyout_eur: Optional[int] = None
 
 
 class PhotoRow(SQLModel, table=True):

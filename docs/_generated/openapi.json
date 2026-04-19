@@ -665,6 +665,53 @@
         }
       }
     },
+    "/api/debug/send-test-email": {
+      "get": {
+        "tags": [
+          "wg-hunter"
+        ],
+        "summary": "Debug Send Test Email",
+        "description": "Fire a single SES test email. Disabled unless ENABLE_EMAIL_DEBUG is set.\n\nUseful for verifying that SES credentials + verified identity + sandbox\nstatus are all correctly configured without waiting for a real 0.9+ match.",
+        "operationId": "debug_send_test_email_api_debug_send_test_email_get",
+        "parameters": [
+          {
+            "name": "to",
+            "in": "query",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "description": "Destination email address",
+              "title": "To"
+            },
+            "description": "Destination email address"
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "additionalProperties": true,
+                  "title": "Response Debug Send Test Email Api Debug Send Test Email Get"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
     "/api/deadline/summary": {
       "get": {
         "tags": [
@@ -1010,6 +1057,16 @@
         ],
         "title": "CredentialsStatusDTO"
       },
+      "Gender": {
+        "type": "string",
+        "enum": [
+          "female",
+          "male",
+          "diverse",
+          "prefer_not_to_say"
+        ],
+        "title": "Gender"
+      },
       "HTTPValidationError": {
         "properties": {
           "detail": {
@@ -1193,6 +1250,28 @@
             ],
             "title": "Best Commute Minutes"
           },
+          "best_commute_label": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Best Commute Label"
+          },
+          "best_commute_mode": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Best Commute Mode"
+          },
           "score": {
             "anyOf": [
               {
@@ -1246,6 +1325,44 @@
               }
             ],
             "title": "Veto Reason"
+          },
+          "price_basis": {
+            "anyOf": [
+              {
+                "type": "string",
+                "enum": [
+                  "warm",
+                  "kalt_uplift",
+                  "unknown"
+                ]
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Price Basis"
+          },
+          "deposit_months": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Deposit Months"
+          },
+          "furniture_buyout_eur": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Furniture Buyout Eur"
           }
         },
         "type": "object",
@@ -1282,7 +1399,10 @@
             "anyOf": [
               {
                 "additionalProperties": {
-                  "type": "integer"
+                  "additionalProperties": {
+                    "type": "integer"
+                  },
+                  "type": "object"
                 },
                 "type": "object"
               },
@@ -1514,6 +1634,38 @@
             "type": "string",
             "format": "date-time",
             "title": "Updated At"
+          },
+          "desired_min_months": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Desired Min Months"
+          },
+          "flatmate_self_gender": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/Gender"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "flatmate_self_age": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Flatmate Self Age"
           }
         },
         "type": "object",
@@ -1734,6 +1886,42 @@
             ],
             "title": "Schedule",
             "default": "one_shot"
+          },
+          "desired_min_months": {
+            "anyOf": [
+              {
+                "type": "integer",
+                "maximum": 60.0,
+                "minimum": 1.0
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Desired Min Months"
+          },
+          "flatmate_self_gender": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/Gender"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "flatmate_self_age": {
+            "anyOf": [
+              {
+                "type": "integer",
+                "maximum": 99.0,
+                "minimum": 16.0
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Flatmate Self Age"
           }
         },
         "type": "object",

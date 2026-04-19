@@ -50,6 +50,12 @@ ENRICHABLE_FIELDS: frozenset[str] = frozenset(
         "pets_allowed",
         "smoking_ok",
         "languages",
+        # Matcher v2 (MATCHER.md §2.2 + upfront_cost_fit). The LLM only fills
+        # these when the description states them clearly — same "do not infer"
+        # discipline as the existing fields.
+        "price_basis",
+        "deposit_months",
+        "furniture_buyout_eur",
     }
 )
 
@@ -76,6 +82,10 @@ class EnrichmentDiff(BaseModel):
     pets_allowed: Optional[bool] = None
     smoking_ok: Optional[bool] = None
     languages: Optional[list[str]] = None
+    # Matcher v2 additions (MATCHER.md §2.2 + upfront_cost_fit).
+    price_basis: Optional[Literal["warm", "kalt_uplift", "unknown"]] = None
+    deposit_months: Optional[float] = Field(default=None, ge=0, le=12)
+    furniture_buyout_eur: Optional[int] = Field(default=None, ge=0)
 
 
 ENRICH_SYSTEM_PROMPT = """\
@@ -102,12 +112,19 @@ description with high confidence):
 - title (string)
 - kind ("wg" or "flat")
 - city, district, address (strings)
-- price_eur (integer euros, total monthly rent)
+- price_eur (integer euros, total monthly rent — Warmmiete / Gesamtmiete)
 - size_m2 (float, square meters)
 - wg_size (integer, total residents including the new one; >= 1)
 - available_from, available_to (ISO yyyy-mm-dd)
 - furnished, pets_allowed, smoking_ok (boolean)
 - languages (list of strings, e.g. ["Deutsch", "English"])
+- price_basis ("warm" if price_eur is total Warmmiete/Gesamtmiete; "kalt_uplift"
+  ONLY when the listing quotes a Kaltmiete + a clear Nebenkosten amount AND
+  you computed price_eur as kalt + nk; otherwise omit. Never infer.)
+- deposit_months (float, e.g. 3 for "3 Monatsmieten Kaution"; only when the
+  description states the deposit in monthly-rent units)
+- furniture_buyout_eur (integer euros, e.g. 4000 for "Ablöse Möbel 4000 €";
+  only when the description states a furniture buyout / Ablöse amount)
 """
 
 
