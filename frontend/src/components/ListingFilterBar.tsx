@@ -162,19 +162,22 @@ export function ListingFilterBar({
 const NEW_WINDOW_MS = 24 * 60 * 60 * 1000
 
 /** A listing is "new" when it was first discovered by the scraper *after* the
- * user created their account (gate that already governs notifications on the
- * backend) AND it is still inside the 24-hour display window. */
+ * user's backfill baseline (`user.backfillBaselineAt`, falling back to
+ * `user.createdAt`) AND it is still inside the 24-hour display window. The
+ * baseline is bumped on material profile edits so the silent re-backfill
+ * that follows never produces "new" badges, while brand-new listings scraped
+ * afterwards are still correctly highlighted. */
 export function isListingNew(
   listing: Listing,
-  userCreatedAt: string | null,
+  baselineAt: string | null,
 ): boolean {
   if (!listing.firstSeenAt) return false
   const firstSeenMs = Date.parse(listing.firstSeenAt)
   if (Number.isNaN(firstSeenMs)) return false
   if (Date.now() - firstSeenMs > NEW_WINDOW_MS) return false
-  if (userCreatedAt) {
-    const userCreatedMs = Date.parse(userCreatedAt)
-    if (!Number.isNaN(userCreatedMs) && firstSeenMs <= userCreatedMs) return false
+  if (baselineAt) {
+    const baselineMs = Date.parse(baselineAt)
+    if (!Number.isNaN(baselineMs) && firstSeenMs <= baselineMs) return false
   }
   return true
 }
@@ -182,14 +185,14 @@ export function isListingNew(
 export function applyListingFilters(
   listings: Listing[],
   filters: ListingFilters,
-  userCreatedAt: string | null,
+  baselineAt: string | null,
   isHidden: (listing: Listing) => boolean = () => false,
 ): Listing[] {
   const filtered = listings.filter((listing) => {
     if (filters.kind !== 'all' && listing.kind && listing.kind !== filters.kind) {
       return false
     }
-    if (filters.onlyNew && !isListingNew(listing, userCreatedAt)) {
+    if (filters.onlyNew && !isListingNew(listing, baselineAt)) {
       return false
     }
     if (!filters.showHidden && isHidden(listing)) {
@@ -204,8 +207,8 @@ export function applyListingFilters(
   switch (filters.sort) {
     case 'newest': {
       return [...filtered].sort((a, b) => {
-        const aNew = isListingNew(a, userCreatedAt)
-        const bNew = isListingNew(b, userCreatedAt)
+        const aNew = isListingNew(a, baselineAt)
+        const bNew = isListingNew(b, baselineAt)
         if (aNew !== bNew) return aNew ? -1 : 1
         return byScoreDesc(a, b)
       })

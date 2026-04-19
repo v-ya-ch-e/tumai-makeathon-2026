@@ -81,7 +81,10 @@ def test_repo_round_trip() -> None:
             schedule="periodic",
             updated_at=datetime(2024, 1, 2, 3, 4, 5),
         )
-        out = repo.upsert_search_profile(session, username="lea", sp=sp)
+        out, baseline_bumped = repo.upsert_search_profile(
+            session, username="lea", sp=sp
+        )
+        assert baseline_bumped is False
         assert out.price_min_eur == 400
         assert out.price_max_eur == 950
         assert out.main_locations == [sendling, laim]

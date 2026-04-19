@@ -13,6 +13,7 @@ type LocalState = {
   mainLocations: PlaceLocation[]
   hasCar: boolean
   hasBike: boolean
+  hasPublicTransport: boolean
   mode: Mode
   moveInFrom: string
   moveInUntil: string
@@ -30,6 +31,7 @@ const DEFAULT_STATE: LocalState = {
   mainLocations: [],
   hasCar: false,
   hasBike: false,
+  hasPublicTransport: true,
   mode: 'both',
   moveInFrom: '',
   moveInUntil: '',
@@ -67,6 +69,7 @@ export default function OnboardingRequirements() {
           mainLocations: searchProfile.mainLocations,
           hasCar: searchProfile.hasCar,
           hasBike: searchProfile.hasBike,
+          hasPublicTransport: true,
           mode: searchProfile.mode,
           moveInFrom: searchProfile.moveInFrom ?? '',
           moveInUntil: searchProfile.moveInUntil ?? '',
@@ -214,13 +217,12 @@ export default function OnboardingRequirements() {
             <Chip selected={state.hasCar} onToggle={() => setState({ ...state, hasCar: !state.hasCar })}>
               Car
             </Chip>
-            <span
-              role="note"
-              title="Public transport is always considered"
-              className="inline-flex min-h-9 cursor-default items-center rounded border border-accent bg-accent-muted px-3 py-1.5 text-[12px] text-ink"
+            <Chip
+              selected={state.hasPublicTransport}
+              onToggle={() => setState({ ...state, hasPublicTransport: !state.hasPublicTransport })}
             >
               Public transport
-            </span>
+            </Chip>
           </div>
         </Field>
 

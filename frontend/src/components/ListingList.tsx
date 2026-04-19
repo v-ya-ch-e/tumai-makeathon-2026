@@ -96,22 +96,19 @@ export function ListingList({
         const fresh = flagAsNew(listing)
         const hidden = isHidden ? isHidden(listing) : false
         return (
-          <li key={listing.id} className="relative">
+          <li key={listing.id} className="group relative">
             <button
               type="button"
               onClick={() => onOpen(listing)}
-              className={`group grid w-full gap-4 px-5 py-5 text-left transition-colors duration-150 ease-out hover:bg-surface-raised sm:grid-cols-[176px_minmax(0,1fr)] ${hidden ? 'opacity-60' : ''}`}
+              className={`grid w-full gap-4 px-5 py-5 text-left transition-colors duration-150 ease-out group-hover:bg-surface-raised sm:grid-cols-[176px_minmax(0,1fr)] ${hidden ? 'opacity-60' : ''}`}
             >
               <div className="relative overflow-hidden rounded border border-hairline bg-surface-raised">
                 {fresh ? (
                   <span
-                    className="absolute left-2 top-2 z-10 inline-flex items-center gap-1.5 rounded-full bg-accent px-2.5 py-1 text-[10px] font-bold uppercase tracking-[0.18em] text-white ring-2 ring-white/95 shadow-[0_2px_6px_rgba(0,0,0,0.35)]"
+                    className="absolute left-2 top-2 z-10 inline-flex h-7 items-center gap-1.5 rounded-full bg-accent/95 px-2.5 text-[10px] font-semibold uppercase tracking-[0.14em] text-white shadow-[0_1px_3px_rgba(0,0,0,0.25)] backdrop-blur-sm"
                     aria-label="New listing"
                   >
-                    <span aria-hidden className="relative inline-flex h-1.5 w-1.5">
-                      <span className="absolute inline-flex h-full w-full animate-ping rounded-full bg-white opacity-75" />
-                      <span className="relative inline-flex h-1.5 w-1.5 rounded-full bg-white" />
-                    </span>
+                    <span aria-hidden className="h-1.5 w-1.5 rounded-full bg-white/95" />
                     New
                   </span>
                 ) : null}
@@ -174,7 +171,11 @@ export function ListingList({
                 aria-pressed={hidden}
                 aria-label={hidden ? 'Unhide listing' : 'Hide listing'}
                 title={hidden ? 'Unhide listing' : 'Hide listing'}
-                className="absolute right-7 top-7 z-20 inline-flex h-8 w-8 items-center justify-center rounded-full border border-hairline bg-surface/90 text-ink-muted shadow-sm backdrop-blur transition-colors hover:border-ink hover:text-ink focus:border-ink focus:outline-none sm:right-auto sm:left-[156px]"
+                className={`absolute right-7 top-7 z-20 inline-flex h-7 w-7 items-center justify-center rounded-full bg-ink/70 text-white/95 shadow-[0_1px_4px_rgba(0,0,0,0.3)] backdrop-blur-sm transition-all duration-150 hover:bg-ink/90 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-white/70 sm:right-auto sm:left-40 ${
+                  hidden
+                    ? 'opacity-100'
+                    : 'opacity-0 group-hover:opacity-100 focus-visible:opacity-100'
+                }`}
               >
                 {hidden ? <EyeOffIcon /> : <EyeIcon />}
               </button>
@@ -188,7 +189,7 @@ export function ListingList({
 
 function EyeIcon() {
   return (
-    <svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round" aria-hidden>
+    <svg viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" aria-hidden>
       <path d="M2 12s3.5-7 10-7 10 7 10 7-3.5 7-10 7S2 12 2 12z" />
       <circle cx="12" cy="12" r="3" />
     </svg>
@@ -197,7 +198,7 @@ function EyeIcon() {
 
 function EyeOffIcon() {
   return (
-    <svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round" aria-hidden>
+    <svg viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" aria-hidden>
       <path d="M3 3l18 18" />
       <path d="M10.58 10.58A3 3 0 0 0 12 15a3 3 0 0 0 2.83-2.01" />
       <path d="M9.88 5.09A10.94 10.94 0 0 1 12 5c6.5 0 10 7 10 7a17.5 17.5 0 0 1-3.22 4.19" />

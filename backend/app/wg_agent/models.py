@@ -155,6 +155,11 @@ class UserProfile(BaseModel):
     age: int = Field(..., ge=16, le=99)
     gender: Gender = Gender.prefer_not_to_say
     created_at: datetime = Field(default_factory=datetime.utcnow)
+    # Cutoff the "new" badge + email digest compare against. Set on signup to
+    # `created_at`, bumped to `utcnow()` whenever a search-profile edit
+    # triggers a silent re-backfill. Callers fall back to `created_at` when
+    # this is None (pre-migration rows).
+    backfill_baseline_at: Optional[datetime] = None
 
 
 class ContactInfo(BaseModel):
@@ -296,6 +301,7 @@ class ActionKind(str, Enum):
     done = "done"
     new_listing = "new_listing"
     rescan = "rescan"
+    backfill_progress = "backfill_progress"
 
 
 class AgentAction(BaseModel):

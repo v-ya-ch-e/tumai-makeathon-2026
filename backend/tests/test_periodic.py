@@ -40,8 +40,10 @@ from app.wg_agent.periodic import (  # noqa: E402
     PeriodicUserMatcher,
     UserAgent,
     _ACTIVE_AGENTS,
+    _ACTIVE_MATCHERS,
     _NOTIFY_STATE,
     _SUBSCRIBERS,
+    request_backfill,
     resume_user_agents,
     subscribe,
     unsubscribe,
@@ -109,15 +111,22 @@ def _seed_user(
             username=username, email=email, age=22, gender=Gender.female
         ),
     )
-    repo.upsert_search_profile(session, username=username, sp=sp)
+    repo.upsert_search_profile(session, username=username, sp=sp)  # type: ignore[func-returns-value]
 
 
 def _set_user_created_at(session: Session, username: str, when) -> None:
-    """Backdate/forward the user's `created_at` so tests can pretend the user
-    was created before (or after) the seeded listings' `first_seen_at`."""
+    """Backdate/forward the user's `created_at` and its `backfill_baseline_at`
+    so tests can pretend the user was created before (or after) the seeded
+    listings' `first_seen_at`. Both fields move in lock-step because every
+    freshness gate now reads `backfill_baseline_at` (falling back to
+    `created_at`) — leaving the baseline at `utcnow()` would defeat the
+    `first_seen_at > baseline` check in tests that stamp listings at a
+    past date.
+    """
     row = session.get(UserRow, username)
     assert row is not None
     row.created_at = when
+    row.backfill_baseline_at = when
     session.add(row)
     session.commit()
 
@@ -858,7 +867,7 @@ def test_digest_never_queues_the_same_listing_twice(monkeypatch) -> None:
                 row=r,
                 listing=listing,
                 user_email="u-dedup@example.com",
-                user_created_at=now - timedelta(days=7),
+                baseline_at=now - timedelta(days=7),
             )
 
     # Two back-to-back queue calls with pending not yet flushed.
@@ -1047,3 +1056,344 @@ def test_run_match_pass_bails_when_paused_mid_pass(monkeypatch) -> None:
     assert len(persisted) == 1, f"expected 1 persisted row, got {persisted}"
     assert persisted[0] == scored[0]
     assert len(scored) == 1
+
+
+# --- Silent backfill + profile-edit re-backfill ------------------------------
+
+
+def test_backfill_pass_scores_every_listing_without_emailing(monkeypatch) -> None:
+    """`run_backfill_pass` scores every pool listing in one shot with no cap,
+    emits `backfill_progress` events, and never queues a digest email — even
+    when the score passes the notify threshold and the fresh-window would
+    otherwise accept the listing.
+
+    Together these guard the "silent backfill" contract: after signup every
+    existing listing lands on the dashboard without a "new" badge and without
+    triggering an email.
+    """
+    engine = _make_engine()
+    monkeypatch.setattr(db_module, "engine", engine)
+    monkeypatch.setenv("WG_NOTIFY_FRESH_WINDOW_MINUTES", "0")
+    _reset_notify_state("u-backfill")
+
+    async def evaluate_stub(
+        _lst: Listing, _sp: SearchProfile, *, travel_times=None, nearby_places=None
+    ) -> EvaluationResult:
+        return _stub_result(0.95)
+
+    now = datetime.utcnow()
+    ids = tuple(f"bf{i}" for i in range(20))
+
+    with Session(engine) as session:
+        _seed_user(
+            session,
+            "u-backfill",
+            SearchProfile(
+                city="München",
+                max_rent_eur=900,
+                rescan_interval_minutes=30,
+                schedule="one_shot",
+            ),
+            email="u-backfill@example.com",
+        )
+        # Baseline must be AFTER every listing's first_seen_at so the
+        # silence gate would NOT trip on freshness alone — the only reason
+        # these skip email is the `silent=True` branch in `_score_one`.
+        _set_user_created_at(session, "u-backfill", now)
+        _seed_listings(session, ids)
+        for lid in ids:
+            _set_listing_first_seen_at(session, lid, now - timedelta(days=1))
+
+    agent = UserAgent("u-backfill")
+    progress_events: list[tuple[int, int]] = []
+
+    async def run() -> None:
+        queue = subscribe("u-backfill")
+        try:
+            with (
+                patch(
+                    "app.wg_agent.periodic.evaluator.evaluate",
+                    new=AsyncMock(side_effect=evaluate_stub),
+                ),
+                patch(
+                    "app.wg_agent.periodic.notifier.send_digest_email",
+                    return_value=True,
+                ) as mocked_send,
+            ):
+                total = await agent.run_backfill_pass(
+                    on_progress=lambda d, t: progress_events.append((d, t))
+                )
+            assert total == len(ids)
+            assert mocked_send.call_count == 0
+        finally:
+            # Drain and classify the SSE fan-out before tearing down so we
+            # can assert the wire protocol matches what the frontend expects.
+            kinds: list[ActionKind] = []
+            while not queue.empty():
+                kinds.append(queue.get_nowait().kind)
+            unsubscribe("u-backfill", queue)
+            assert ActionKind.backfill_progress in kinds
+            # Every listing fires a `new_listing` + `evaluate` pair.
+            assert kinds.count(ActionKind.new_listing) == len(ids)
+            assert kinds.count(ActionKind.evaluate) == len(ids)
+            # And exactly `len(ids) + 1` progress events (initial + each tick).
+            assert (
+                kinds.count(ActionKind.backfill_progress) == len(ids) + 1
+            )
+
+    asyncio.run(run())
+
+    with Session(engine) as session:
+        scored = repo.list_user_listings(session, username="u-backfill")
+    assert {l.id for l in scored} == set(ids)
+    # Callback fires start + one per listing.
+    assert progress_events[0] == (0, len(ids))
+    assert progress_events[-1] == (len(ids), len(ids))
+    assert _NOTIFY_STATE.get("u-backfill") is None or not _NOTIFY_STATE[
+        "u-backfill"
+    ].pending
+
+
+def test_post_backfill_match_pass_emails_new_listings(monkeypatch) -> None:
+    """After a silent backfill, a subsequent `run_match_pass` emails a
+    digest for a listing whose `first_seen_at > baseline_at` — proving the
+    normal notification path picks up where the backfill left off.
+    """
+    engine = _make_engine()
+    monkeypatch.setattr(db_module, "engine", engine)
+    monkeypatch.setenv("WG_NOTIFY_FRESH_WINDOW_MINUTES", "0")
+    _reset_notify_state("u-after-bf")
+
+    async def evaluate_stub(
+        _lst: Listing, _sp: SearchProfile, *, travel_times=None, nearby_places=None
+    ) -> EvaluationResult:
+        return _stub_result(0.95)
+
+    baseline = datetime(2024, 6, 1)
+
+    with Session(engine) as session:
+        _seed_user(
+            session,
+            "u-after-bf",
+            SearchProfile(
+                city="München",
+                max_rent_eur=900,
+                rescan_interval_minutes=30,
+                schedule="one_shot",
+            ),
+            email="u-after-bf@example.com",
+        )
+        _set_user_created_at(session, "u-after-bf", baseline)
+        # Two backlog listings in the pool at backfill time.
+        _seed_listings(session, ("old1", "old2"))
+        _set_listing_first_seen_at(session, "old1", baseline - timedelta(days=3))
+        _set_listing_first_seen_at(session, "old2", baseline - timedelta(days=2))
+
+    agent = UserAgent("u-after-bf")
+
+    with (
+        patch(
+            "app.wg_agent.periodic.evaluator.evaluate",
+            new=AsyncMock(side_effect=evaluate_stub),
+        ),
+        patch(
+            "app.wg_agent.periodic.notifier.send_digest_email",
+            return_value=True,
+        ) as mocked_send,
+    ):
+        asyncio.run(agent.run_backfill_pass())
+        assert mocked_send.call_count == 0
+
+        # A new listing appears AFTER the backfill finishes — the scraper
+        # would have added it mid-loop in real life. The match pass must
+        # pick it up and email a digest for it.
+        with Session(engine) as s:
+            _seed_listings(s, ("fresh1",))
+            _set_listing_first_seen_at(
+                s, "fresh1", baseline + timedelta(minutes=1)
+            )
+
+        asyncio.run(agent.run_match_pass())
+
+    assert mocked_send.call_count == 1
+    items = list(mocked_send.call_args.kwargs["items"])
+    assert [i.listing_id for i in items] == ["fresh1"]
+
+
+def test_profile_edit_wipes_matches_and_bumps_baseline(monkeypatch) -> None:
+    """A material `upsert_search_profile` call deletes every `UserListingRow`
+    for the user and bumps `backfill_baseline_at` to `utcnow()`. The next
+    `run_backfill_pass` re-scores the whole pool silently.
+    """
+    engine = _make_engine()
+    monkeypatch.setattr(db_module, "engine", engine)
+    monkeypatch.setenv("WG_NOTIFY_FRESH_WINDOW_MINUTES", "0")
+    _reset_notify_state("u-edit")
+
+    async def evaluate_stub(
+        _lst: Listing, _sp: SearchProfile, *, travel_times=None, nearby_places=None
+    ) -> EvaluationResult:
+        return _stub_result(0.95)
+
+    with Session(engine) as session:
+        _seed_user(
+            session,
+            "u-edit",
+            SearchProfile(
+                city="München",
+                max_rent_eur=900,
+                rescan_interval_minutes=30,
+                schedule="one_shot",
+            ),
+            email="u-edit@example.com",
+        )
+        _seed_listings(session, ("e1", "e2", "e3"))
+
+    agent = UserAgent("u-edit")
+    with patch(
+        "app.wg_agent.periodic.evaluator.evaluate",
+        new=AsyncMock(side_effect=evaluate_stub),
+    ):
+        asyncio.run(agent.run_backfill_pass())
+
+    with Session(engine) as session:
+        seeded = repo.list_user_listings(session, username="u-edit")
+    assert {l.id for l in seeded} == {"e1", "e2", "e3"}
+
+    with Session(engine) as session:
+        user_row_before = session.get(UserRow, "u-edit")
+        assert user_row_before is not None
+        baseline_before = user_row_before.backfill_baseline_at
+
+    # Tiny sleep so the bumped baseline is strictly later than the initial
+    # signup baseline — otherwise `utcnow()` can tie on fast machines and
+    # the > assertion below becomes flaky.
+    import time as _time
+
+    _time.sleep(0.01)
+
+    with Session(engine) as session:
+        # Materially edit the profile: `price_max_eur` is one of the fields
+        # `_search_profile_material_snapshot` hashes, so flipping it must
+        # produce a diff. `max_rent_eur` alone would NOT — it's a domain
+        # field that never reaches the persisted snapshot.
+        new_sp = SearchProfile(
+            city="München",
+            max_rent_eur=900,
+            price_max_eur=1200,
+            rescan_interval_minutes=30,
+            schedule="one_shot",
+        )
+        _, bumped = repo.upsert_search_profile(
+            session, username="u-edit", sp=new_sp
+        )
+    assert bumped is True
+
+    with Session(engine) as session:
+        # Every `UserListingRow` for this user must be gone so the next
+        # `list_scorable_listings_for_user` sees the full pool again.
+        after_wipe = repo.list_user_listings(session, username="u-edit")
+        user_row_after = session.get(UserRow, "u-edit")
+    assert after_wipe == []
+    assert user_row_after is not None
+    assert user_row_after.backfill_baseline_at is not None
+    assert baseline_before is not None
+    assert user_row_after.backfill_baseline_at > baseline_before
+
+    with patch(
+        "app.wg_agent.periodic.evaluator.evaluate",
+        new=AsyncMock(side_effect=evaluate_stub),
+    ):
+        asyncio.run(agent.run_backfill_pass())
+
+    with Session(engine) as session:
+        rescored = repo.list_user_listings(session, username="u-edit")
+    assert {l.id for l in rescored} == {"e1", "e2", "e3"}
+
+
+def test_upsert_search_profile_noop_does_not_bump_baseline(monkeypatch) -> None:
+    """Re-submitting the exact same search profile (no material diff) must
+    NOT wipe matches or bump the baseline — otherwise every dashboard reload
+    that re-PUTs the profile would silently wipe the shortlist.
+    """
+    engine = _make_engine()
+    monkeypatch.setattr(db_module, "engine", engine)
+
+    sp = SearchProfile(
+        city="München",
+        max_rent_eur=900,
+        rescan_interval_minutes=30,
+        schedule="one_shot",
+    )
+    with Session(engine) as session:
+        _seed_user(session, "u-noop", sp)
+        _seed_listings(session, ("n1",))
+
+    async def evaluate_stub(
+        _lst: Listing, _sp: SearchProfile, *, travel_times=None, nearby_places=None
+    ) -> EvaluationResult:
+        return _stub_result(0.8)
+
+    with patch(
+        "app.wg_agent.periodic.evaluator.evaluate",
+        new=AsyncMock(side_effect=evaluate_stub),
+    ):
+        asyncio.run(UserAgent("u-noop").run_match_pass())
+
+    with Session(engine) as session:
+        baseline_before = (
+            session.get(UserRow, "u-noop").backfill_baseline_at  # type: ignore[union-attr]
+        )
+        # Re-PUT the identical profile.
+        _, bumped = repo.upsert_search_profile(
+            session, username="u-noop", sp=sp
+        )
+        baseline_after = (
+            session.get(UserRow, "u-noop").backfill_baseline_at  # type: ignore[union-attr]
+        )
+        persisted = repo.list_user_listings(session, username="u-noop")
+
+    assert bumped is False
+    assert baseline_before == baseline_after
+    assert {l.id for l in persisted} == {"n1"}
+
+
+def test_request_backfill_resets_matcher_flag(monkeypatch) -> None:
+    """`request_backfill` flips `_backfill_complete` to False and wakes the
+    matcher so the profile-edit flow doesn't have to wait out the rescan
+    interval before the silent re-backfill kicks off.
+    """
+    engine = _make_engine()
+    monkeypatch.setattr(db_module, "engine", engine)
+
+    with Session(engine) as session:
+        _seed_user(
+            session,
+            "u-req",
+            SearchProfile(
+                city="München",
+                max_rent_eur=900,
+                rescan_interval_minutes=30,
+                schedule="one_shot",
+            ),
+        )
+
+    async def scenario() -> None:
+        matcher = PeriodicUserMatcher(
+            username="u-req", interval_minutes=1
+        )
+        _ACTIVE_MATCHERS["u-req"] = matcher
+        try:
+            matcher._backfill_complete = True
+            matcher.backfill_state = {"done": 5, "total": 5}
+            assert request_backfill("u-req") is True
+            assert matcher._backfill_complete is False
+            assert matcher.backfill_state is None
+            # The wake event must be set so the matcher cuts its sleep short.
+            assert matcher._wake.is_set()
+        finally:
+            _ACTIVE_MATCHERS.pop("u-req", None)
+
+    asyncio.run(scenario())
+    # No matcher registered → no-op return.
+    assert request_backfill("u-ghost") is False

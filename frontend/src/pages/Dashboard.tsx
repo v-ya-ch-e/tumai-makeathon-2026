@@ -12,7 +12,7 @@ import {
 } from '../components/ListingFilterBar'
 import { ListingList } from '../components/ListingList'
 import { ListingMap } from '../components/ListingMap'
-import { Button, StatusPill, type StatusPillTone } from '../components/ui'
+import { Button, ProgressBar, StatusPill, type StatusPillTone } from '../components/ui'
 import { formatGermanDate } from '../lib/date'
 import {
   ApiError,
@@ -87,12 +87,17 @@ export default function Dashboard() {
   const [openListing, setOpenListing] = useState<Listing | null>(null)
   const [viewMode, setViewMode] = useState<'list' | 'map'>('list')
   const [filters, setFilters] = useState<ListingFilters>(DEFAULT_LISTING_FILTERS)
+  const [initialLoading, setInitialLoading] = useState(true)
 
-  const userCreatedAt = user?.createdAt ?? null
+  // Prefer the backfill baseline (bumped on material profile edits) over
+  // raw account-creation time: listings scored by the silent re-backfill
+  // should not light up the "new" badge, while listings scraped afterwards
+  // still correctly flag as new.
+  const baselineAt = user?.backfillBaselineAt ?? user?.createdAt ?? null
   const { hiddenIds, isHidden, toggle: toggleHidden } = useHiddenListings(username)
   const isNewListing = useCallback(
-    (listing: Listing) => isListingNew(listing, userCreatedAt),
-    [userCreatedAt],
+    (listing: Listing) => isListingNew(listing, baselineAt),
+    [baselineAt],
   )
   const isListingHidden = useCallback(
     (listing: Listing) => isHidden(listing.id),
@@ -107,9 +112,14 @@ export default function Dashboard() {
     [listings, hiddenIds],
   )
   const visibleListings = useMemo(
-    () => applyListingFilters(listings, filters, userCreatedAt, isListingHidden),
-    [listings, filters, userCreatedAt, isListingHidden],
+    () => applyListingFilters(listings, filters, baselineAt, isListingHidden),
+    [listings, filters, baselineAt, isListingHidden],
   )
+  const isBackfilling =
+    hunt !== null &&
+    hunt.backfillTotal !== null &&
+    hunt.backfillTotal > 0 &&
+    (hunt.backfillDone ?? 0) < hunt.backfillTotal
   const seenActionKeysRef = useRef<Set<string>>(new Set())
   const autoStartTriggeredRef = useRef(false)
   const refreshTimerRef = useRef<number | null>(null)
@@ -151,21 +161,26 @@ export default function Dashboard() {
     }
     let cancelled = false
     void (async () => {
-      const searchProfile = await getSearchProfile(username)
-      if (cancelled) return
-      if (searchProfile === null) {
-        navigate('/onboarding/requirements', { replace: true })
-        return
+      try {
+        const searchProfile = await getSearchProfile(username)
+        if (cancelled) return
+        if (searchProfile === null) {
+          navigate('/onboarding/requirements', { replace: true })
+          return
+        }
+        const storedId = localStorage.getItem(LS_HUNT_ID)
+        const expectedHuntId = huntIdForUsername(username)
+        const huntId = storedId === expectedHuntId ? storedId : expectedHuntId
+        if (storedId !== huntId) {
+          localStorage.setItem(LS_HUNT_ID, huntId)
+        }
+        const nextHunt = await refreshHunt(huntId)
+        if (cancelled) return
+        setProfile(searchProfile)
+        applyHunt(nextHunt)
+      } finally {
+        if (!cancelled) setInitialLoading(false)
       }
-      setProfile(searchProfile)
-      const storedId = localStorage.getItem(LS_HUNT_ID)
-      const expectedHuntId = huntIdForUsername(username)
-      const huntId = storedId === expectedHuntId ? storedId : expectedHuntId
-      if (storedId !== huntId) {
-        localStorage.setItem(LS_HUNT_ID, huntId)
-      }
-      const nextHunt = await refreshHunt(huntId)
-      if (!cancelled) applyHunt(nextHunt)
     })()
     return () => {
       cancelled = true
@@ -218,6 +233,38 @@ export default function Dashboard() {
         return
       }
       const action = event as Action
+      // Backfill progress events fire ~one per scored listing; we refresh the
+      // progress bar directly from the action's `detail` JSON instead of
+      // round-tripping /agent every time, and intentionally skip
+      // `scheduleRefresh` here because the per-listing `evaluate` /
+      // `new_listing` actions already drive the debounced listings refetch.
+      if (action.kind === 'backfill_progress') {
+        try {
+          const payload = action.detail ? JSON.parse(action.detail) : null
+          if (
+            payload &&
+            typeof payload === 'object' &&
+            typeof (payload as { done?: unknown }).done === 'number' &&
+            typeof (payload as { total?: unknown }).total === 'number'
+          ) {
+            const done = (payload as { done: number }).done
+            const total = (payload as { total: number }).total
+            setHunt((prev) =>
+              prev === null
+                ? prev
+                : {
+                    ...prev,
+                    backfillDone: done,
+                    backfillTotal: total,
+                  },
+            )
+          }
+        } catch {
+          // Malformed detail — ignore silently; the /agent status poll after
+          // the next listing refresh will reconcile.
+        }
+        return
+      }
       const key = actionKey(action)
       if (seenActionKeysRef.current.has(key)) return
       seenActionKeysRef.current.add(key)
@@ -282,14 +329,7 @@ export default function Dashboard() {
     if (hunt === null) void onStart()
   }, [location.pathname, location.state, navigate, profile, username, hunt])
 
-  if (!isReady || profile === null) {
-    return (
-      <div className="flex min-h-screen items-center justify-center bg-canvas font-sans text-[15px] text-ink-muted">
-        Loading…
-      </div>
-    )
-  }
-
+  const isBootstrapping = !isReady || profile === null || initialLoading
   const isActive = uiStatus === 'running' || uiStatus === 'starting'
   const isStopping = uiStatus === 'stopping'
   const isStarting = uiStatus === 'starting'
@@ -322,6 +362,10 @@ export default function Dashboard() {
           </div>
         </header>
 
+        {isBootstrapping || profile === null ? (
+          <DashboardSkeleton />
+        ) : (
+        <>
         <section className="page-frame overflow-hidden">
           <div className="flex flex-col gap-6 px-6 py-8 sm:px-8 lg:flex-row lg:items-start lg:justify-between lg:px-10">
             <div className="min-w-0 flex-1">
@@ -357,11 +401,30 @@ export default function Dashboard() {
             </div>
           </div>
 
-          <div className="grid border-t border-hairline sm:grid-cols-3">
-            <Stat label="Listings" value={String(listings.length)} />
-            <Stat label="Best fit" value={topScorePct(listings)} />
-            <Stat label="Move-in" value={moveInLabel(profile)} note={moveInNote(profile)} />
-          </div>
+          {isBackfilling && hunt !== null && hunt.backfillTotal !== null ? (
+            <div className="border-t border-hairline px-6 py-5 sm:px-8 lg:px-10">
+              <div className="flex items-baseline justify-between gap-3">
+                <span className="text-[11px] uppercase tracking-[0.14em] text-ink-muted">
+                  Setting up your shortlist
+                </span>
+                <span className="text-[13px] tabular-nums text-ink">
+                  {hunt.backfillDone ?? 0} / {hunt.backfillTotal}
+                </span>
+              </div>
+              <ProgressBar
+                value={hunt.backfillDone ?? 0}
+                max={hunt.backfillTotal}
+                className="mt-3"
+                aria-label="Evaluating existing listings"
+              />
+            </div>
+          ) : (
+            <div className="grid border-t border-hairline sm:grid-cols-3">
+              <Stat label="Listings" value={String(listings.length)} />
+              <Stat label="Best fit" value={topScorePct(listings)} />
+              <Stat label="Move-in" value={moveInLabel(profile)} note={moveInNote(profile)} />
+            </div>
+          )}
 
           {errorMessage ? (
             <div className="border-t border-hairline px-6 py-4 sm:px-8 lg:px-10">
@@ -406,9 +469,93 @@ export default function Dashboard() {
             </div>
           )}
         </section>
+        </>
+        )}
       </div>
       <ListingDrawer open={openListing !== null} listing={openListing} onClose={() => setOpenListing(null)} />
     </div>
+  )
+}
+
+function DashboardSkeleton() {
+  return (
+    <>
+      <section className="page-frame overflow-hidden animate-pulse" aria-hidden aria-busy>
+        <div className="flex flex-col gap-6 px-6 py-8 sm:px-8 lg:flex-row lg:items-start lg:justify-between lg:px-10">
+          <div className="min-w-0 flex-1 space-y-4">
+            <div className="flex flex-wrap items-center gap-3">
+              <div className="h-10 w-64 rounded bg-surface-raised sm:h-14 sm:w-80" />
+              <div className="h-6 w-20 rounded-full bg-surface-raised" />
+            </div>
+            <div className="h-4 w-80 max-w-full rounded bg-surface-raised" />
+          </div>
+          <div className="shrink-0">
+            <div className="h-10 w-36 rounded-full bg-surface-raised" />
+          </div>
+        </div>
+        <div className="grid border-t border-hairline sm:grid-cols-3">
+          <StatSkeleton />
+          <StatSkeleton />
+          <StatSkeleton withNote />
+        </div>
+      </section>
+
+      <section className="page-frame overflow-hidden animate-pulse" aria-hidden aria-busy>
+        <div className="flex flex-wrap items-end justify-between gap-4 border-b border-hairline px-6 py-5 sm:px-8 lg:px-10">
+          <div className="h-8 w-44 rounded bg-surface-raised" />
+          <div className="h-8 w-28 rounded-full bg-surface-raised" />
+        </div>
+        <div className="flex flex-wrap items-center gap-3 border-b border-hairline px-6 py-4 sm:px-8 lg:px-10">
+          <div className="h-8 w-24 rounded-full bg-surface-raised" />
+          <div className="h-8 w-40 rounded-full bg-surface-raised" />
+          <div className="ml-auto h-4 w-20 rounded bg-surface-raised" />
+        </div>
+        <ul className="divide-y divide-hairline">
+          <ListingRowSkeleton />
+          <ListingRowSkeleton />
+          <ListingRowSkeleton />
+        </ul>
+      </section>
+    </>
+  )
+}
+
+function StatSkeleton({ withNote = false }: { withNote?: boolean }) {
+  return (
+    <div className="border-t border-hairline px-6 py-5 first:border-t-0 sm:border-t-0 sm:border-l first:sm:border-l-0 sm:px-8 lg:px-10">
+      <div className="h-3 w-16 rounded bg-surface-raised" />
+      <div className="mt-3 h-8 w-24 rounded bg-surface-raised" />
+      {withNote ? <div className="mt-3 h-3 w-32 rounded bg-surface-raised" /> : null}
+    </div>
+  )
+}
+
+function ListingRowSkeleton() {
+  return (
+    <li className="grid w-full gap-4 px-5 py-5 sm:grid-cols-[176px_minmax(0,1fr)]">
+      <div className="aspect-[4/3] w-full rounded border border-hairline bg-surface-raised" />
+      <div className="min-w-0 space-y-3">
+        <div className="flex items-start justify-between gap-3">
+          <div className="h-6 w-2/3 rounded bg-surface-raised" />
+          <div className="h-6 w-16 shrink-0 rounded-full bg-surface-raised" />
+        </div>
+        <div className="h-3 w-1/2 rounded bg-surface-raised" />
+        <div className="flex gap-6 pt-2">
+          <div className="space-y-2">
+            <div className="h-3 w-10 rounded bg-surface-raised" />
+            <div className="h-4 w-16 rounded bg-surface-raised" />
+          </div>
+          <div className="space-y-2">
+            <div className="h-3 w-10 rounded bg-surface-raised" />
+            <div className="h-4 w-14 rounded bg-surface-raised" />
+          </div>
+          <div className="space-y-2">
+            <div className="h-3 w-14 rounded bg-surface-raised" />
+            <div className="h-4 w-24 rounded bg-surface-raised" />
+          </div>
+        </div>
+      </div>
+    </li>
   )
 }
 
