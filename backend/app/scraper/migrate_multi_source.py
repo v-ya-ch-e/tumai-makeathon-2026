@@ -5,8 +5,9 @@ script is **idempotent** — every step inspects the current schema /
 data state first and skips work that's already done, so it's safe to
 re-run after a partial failure.
 
-Three steps, ordered per the rollout plan
-(`docs/MULTI_SOURCE_SCRAPER_PLAN.md` D-2 + D-11):
+Four steps, ordered per the rollout plan
+(`docs/MULTI_SOURCE_SCRAPER_PLAN.md` D-2 + D-11; step 4 added per
+`docs/SCRAPER_LOCAL_AND_FRESHNESS_PLAN.md` §4):
 
   1. Widen `listingrow` text columns (`url`, `title`, `city`, `district`,
      `address`, `description`, `scrape_error`) from `VARCHAR(255)` to
@@ -24,10 +25,18 @@ Three steps, ordered per the rollout plan
      The scraper's existing `_needs_scrape` re-fetches anything not
      `'full'`, so the next pass overwrites the silently-truncated
      descriptions with the now-untruncated ones.
+  4. Wipe the global listing pool so the relaunched (laptop) scraper
+     repopulates it from scratch, while preserving user identity, search
+     profiles, and the action log: `UPDATE useractionrow SET listing_id = NULL`,
+     then `DELETE FROM userlistingrow / photorow / listingrow`. One
+     transaction (children before parents). Idempotent — skipped when
+     `listingrow` is already empty.
 
-The scraper + backend containers MUST be stopped while this runs (so
-they don't race the namespacing UPDATE on `listingrow.id`). Restart
-them after.
+The backend container MUST be stopped while this runs (so it doesn't
+race the namespacing UPDATE on `listingrow.id`). The scraper is no
+longer a cloud service (per `docs/SCRAPER_LOCAL_AND_FRESHNESS_PLAN.md`)
+— just confirm no laptop pass is running, then restart the backend
+after the script returns.
 
 Usage:
 
@@ -38,6 +47,8 @@ Usage:
 Add `--dry-run` to print the planned actions without executing them.
 Add `--skip-rescrape` to skip step 3 (useful if you want to widen the
 columns and namespace ids, but not force a full rescrape).
+Add `--skip-wipe` to skip step 4 (useful when you want a soft re-fetch
+via step 3 without losing the existing rows).
 """
 
 from __future__ import annotations
@@ -257,8 +268,55 @@ def step_3_force_rescrape(session: Session, *, dry_run: bool) -> None:
     )
 
 
+def step_4_wipe_listings(session: Session, *, dry_run: bool) -> None:
+    """Wipe the global listing pool so the relaunched scraper reseeds it.
+
+    Per `docs/SCRAPER_LOCAL_AND_FRESHNESS_PLAN.md` G4: zero rows in
+    `listingrow` / `photorow` / `userlistingrow` and every
+    `useractionrow.listing_id` set to NULL (rows preserved). Children
+    nulled / deleted before the parent so no FK constraint is violated
+    mid-transaction. Idempotent: a no-op when `listingrow` is already
+    empty.
+    """
+    logger.info("=== Step 4: wipe global listing pool ===")
+
+    listing_count = _scalar(session, "SELECT COUNT(*) FROM listingrow")
+    if listing_count == 0:
+        logger.info("listingrow already empty; nothing to wipe")
+        return
+
+    photo_count = _scalar(session, "SELECT COUNT(*) FROM photorow")
+    user_listing_count = _scalar(session, "SELECT COUNT(*) FROM userlistingrow")
+    action_fk_count = _scalar(
+        session,
+        "SELECT COUNT(*) FROM useractionrow WHERE listing_id IS NOT NULL",
+    )
+    logger.info(
+        "Will wipe %d listingrow + %d photorow + %d userlistingrow rows; "
+        "null %d useractionrow.listing_id values",
+        listing_count,
+        photo_count,
+        user_listing_count,
+        action_fk_count,
+    )
+
+    if dry_run:
+        logger.info("(dry-run) would null useractionrow.listing_id, then DELETE userlistingrow / photorow / listingrow inside one transaction")
+        return
+
+    # One transaction; children first to keep FKs valid throughout.
+    _exec(
+        session,
+        "UPDATE useractionrow SET listing_id = NULL WHERE listing_id IS NOT NULL",
+        dry_run=False,
+    )
+    _exec(session, "DELETE FROM userlistingrow", dry_run=False)
+    _exec(session, "DELETE FROM photorow", dry_run=False)
+    _exec(session, "DELETE FROM listingrow", dry_run=False)
+
+
 def verify(session: Session) -> None:
-    """Print the post-migration state per plan G1, G2, G9."""
+    """Print the post-migration state per plan G1, G2, G9, G_WIPE."""
     logger.info("=== Verification ===")
 
     bare = _scalar(
@@ -288,6 +346,22 @@ def verify(session: Session) -> None:
         truncated,
     )
 
+    listing_count = _scalar(session, "SELECT COUNT(*) FROM listingrow")
+    photo_count = _scalar(session, "SELECT COUNT(*) FROM photorow")
+    user_listing_count = _scalar(session, "SELECT COUNT(*) FROM userlistingrow")
+    action_fk_count = _scalar(
+        session,
+        "SELECT COUNT(*) FROM useractionrow WHERE listing_id IS NOT NULL",
+    )
+    logger.info(
+        "G_WIPE: %d rows in listingrow, %d in photorow, %d in userlistingrow, "
+        "%d useractionrow rows with listing_id IS NOT NULL",
+        listing_count,
+        photo_count,
+        user_listing_count,
+        action_fk_count,
+    )
+
 
 def main() -> None:
     parser = argparse.ArgumentParser(description=__doc__)
@@ -300,6 +374,14 @@ def main() -> None:
         "--skip-rescrape",
         action="store_true",
         help="Skip step 3 (the rescrape-trigger UPDATE).",
+    )
+    parser.add_argument(
+        "--skip-wipe",
+        action="store_true",
+        help=(
+            "Skip step 4 (the global-listing-pool wipe). Use when you only "
+            "want the schema + namespacing + rescrape-trigger work."
+        ),
     )
     args = parser.parse_args()
 
@@ -320,6 +402,10 @@ def main() -> None:
                 step_3_force_rescrape(session, dry_run=args.dry_run)
             else:
                 logger.info("Skipping step 3 (rescrape) per --skip-rescrape")
+            if not args.skip_wipe:
+                step_4_wipe_listings(session, dry_run=args.dry_run)
+            else:
+                logger.info("Skipping step 4 (wipe) per --skip-wipe")
 
             if not args.dry_run:
                 session.commit()

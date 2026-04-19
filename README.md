@@ -116,6 +116,8 @@ The short version:
 
    The root [`docker-compose.yml`](./docker-compose.yml) starts an nginx frontend (port 80, with the built Vite SPA and a reverse proxy to `/api/*`) and a FastAPI backend that persists its SQLite database to the `wg_data` named volume.
 
+   > The scraper runs **locally** (laptop) against the shared MySQL — it is no longer a cloud service. The cloud deploy is backend + frontend only. See [`backend/app/scraper/README.md`](./backend/app/scraper/README.md#local-scraper-run-laptop).
+
 5. Verify: `curl http://<EC2_PUBLIC_IP>/api/health` → `{"status":"ok"}`. Open `http://<EC2_PUBLIC_IP>/` for the app and `/docs` for interactive API docs.
 
 ### Continuous deployment

@@ -8,7 +8,8 @@ from __future__ import annotations
 import asyncio
 import json
 import logging
-from datetime import date, datetime
+import os
+from datetime import date, datetime, timedelta, timezone
 from typing import Any, Optional
 
 import httpx
@@ -139,6 +140,29 @@ def _parse_iso_to_date(value: Optional[str]) -> Optional[date]:
         return None
 
 
+def _parse_iso_to_datetime(value: Optional[str]) -> Optional[datetime]:
+    """Same as `_parse_iso_to_date`, but returns the full naive UTC datetime.
+
+    Used by the freshness filter on `publicationDate` / `createdAt`. Falls
+    back to `None` on malformed input rather than raising; the agent treats
+    a missing `posted_at` as "fresh" so a parser regression never silently
+    halts the pass.
+    """
+    if not value:
+        return None
+    s = value.replace("Z", "+00:00")
+    try:
+        dt = datetime.fromisoformat(s)
+    except ValueError:
+        return None
+    if dt.tzinfo is not None:
+        # Normalize to naive UTC so the cutoff comparison stays in
+        # `datetime.utcnow()` space (the convention used everywhere else
+        # in the scraper, e.g. `ScraperAgent._needs_scrape`).
+        dt = dt.astimezone(tz=timezone.utc).replace(tzinfo=None)
+    return dt
+
+
 def _tags_bool(tags: Optional[list[str]], needle: str) -> Optional[bool]:
     t = tags or []
     return True if needle in t else None
@@ -172,7 +196,7 @@ def _stub_from_listings_item(item: dict[str, Any]) -> Listing:
         if preview_id
         else None
     )
-    return Listing(
+    stub = Listing(
         id=f"tum-living:{uuid}",
         url=f"https://living.tum.de/listings/{uuid}/view",
         title=f"{listing_type} · {item['numberOfRooms']}R · {item['city']}",
@@ -194,6 +218,10 @@ def _stub_from_listings_item(item: dict[str, Any]) -> Listing:
         languages=[],
         cover_photo_url=cover,
     )
+    stub.posted_at = _parse_iso_to_datetime(
+        item.get("publicationDate") or item.get("createdAt")
+    )
+    return stub
 
 
 def _sorted_image_urls(item: dict[str, Any], *, limit: int = 12) -> list[str]:
@@ -337,6 +365,15 @@ class TumLivingSource:
             "Accept-Language": "en-US,en;q=0.9",
             "Content-Type": "application/json",
         }
+        # Same env knob the agent reads. The GraphQL `MOST_RECENT` order
+        # is strictly chronological, so once the first stub on a page is
+        # older than the cutoff we can short-circuit the rest.
+        try:
+            max_age_days = int(os.environ.get("SCRAPER_MAX_AGE_DAYS", "14") or "14")
+        except ValueError:
+            max_age_days = 14
+        cutoff = datetime.utcnow() - timedelta(days=max_age_days)
+
         out: list[Listing] = []
         async with httpx.AsyncClient(
             base_url=BASE_URL,
@@ -368,6 +405,15 @@ class TumLivingSource:
                 body = resp.json()
                 batch = _parse_listings_response(body)
                 out.extend(batch)
+                # Early-stop on `MOST_RECENT`-sorted pagination: the first stub
+                # being too old means every subsequent stub is too old. The
+                # agent's per-stub gate still drops the too-old tail of THIS
+                # batch; this just avoids paying for pages we already know
+                # we'll discard.
+                if batch:
+                    first_posted = batch[0].posted_at
+                    if first_posted is not None and first_posted < cutoff:
+                        break
                 if len(batch) < 25:
                     break
                 if page + 1 < self.max_pages:

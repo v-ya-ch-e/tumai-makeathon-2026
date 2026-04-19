@@ -212,6 +212,106 @@ def test_dry_run_does_not_mutate(monkeypatch) -> None:
     assert full_count == 2
 
 
+# --- Step 4: wipe-and-reseed ---------------------------------------------
+
+
+def test_step_4_wipes_listings_and_nulls_action_fk(monkeypatch) -> None:
+    """G4 (SCRAPER_LOCAL_AND_FRESHNESS_PLAN.md): listingrow / photorow /
+    userlistingrow are emptied; useractionrow rows survive with listing_id
+    nulled; user / search-profile / credentials rows are untouched."""
+    from app.wg_agent.db_models import (
+        SearchProfileRow,
+        WgCredentialsRow,
+    )
+
+    engine = _make_engine()
+    monkeypatch.setattr(db_module, "engine", engine)
+    _seed_pre_migration(engine)
+
+    # Add a search profile so we can prove it survives the wipe.
+    with Session(engine) as session:
+        session.add(
+            SearchProfileRow(
+                username="alice",
+                price_max_eur=2000,
+                main_locations=[],
+                preferences=[],
+                rescan_interval_minutes=30,
+                schedule="periodic",
+                updated_at=datetime.utcnow(),
+            )
+        )
+        session.commit()
+
+    with Session(engine) as session:
+        migrate_multi_source.step_4_wipe_listings(session, dry_run=False)
+        session.commit()
+
+    with Session(engine) as session:
+        listings = session.exec(__sm_select(ListingRow)).all()
+        photos = session.exec(__sm_select(PhotoRow)).all()
+        user_listings = session.exec(__sm_select(UserListingRow)).all()
+        actions = session.exec(__sm_select(UserActionRow)).all()
+        users = session.exec(__sm_select(UserRow)).all()
+        search_profiles = session.exec(__sm_select(SearchProfileRow)).all()
+        credentials = session.exec(__sm_select(WgCredentialsRow)).all()
+
+    assert listings == []
+    assert photos == []
+    assert user_listings == []
+    # Action rows survive, but their listing_id FK is nulled out.
+    assert len(actions) > 0
+    assert all(a.listing_id is None for a in actions)
+    # Identity / configuration tables are untouched.
+    assert len(users) == 1 and users[0].username == "alice"
+    assert len(search_profiles) == 1 and search_profiles[0].username == "alice"
+    assert credentials == []  # we never seeded credentials, but the table stays
+
+
+def test_step_4_idempotent_on_empty_db(monkeypatch) -> None:
+    """Running the wipe twice is a no-op the second time (no exceptions, all
+    counts still 0)."""
+    engine = _make_engine()
+    monkeypatch.setattr(db_module, "engine", engine)
+    _seed_pre_migration(engine)
+
+    with Session(engine) as session:
+        migrate_multi_source.step_4_wipe_listings(session, dry_run=False)
+        session.commit()
+
+    # Second pass: nothing left to do.
+    with Session(engine) as session:
+        migrate_multi_source.step_4_wipe_listings(session, dry_run=False)
+        session.commit()
+
+    with Session(engine) as session:
+        assert session.exec(__sm_select(ListingRow)).all() == []
+        assert session.exec(__sm_select(PhotoRow)).all() == []
+        assert session.exec(__sm_select(UserListingRow)).all() == []
+
+
+def test_step_4_dry_run_writes_nothing(monkeypatch) -> None:
+    engine = _make_engine()
+    monkeypatch.setattr(db_module, "engine", engine)
+    _seed_pre_migration(engine)
+
+    with Session(engine) as session:
+        migrate_multi_source.step_4_wipe_listings(session, dry_run=True)
+        session.commit()
+
+    with Session(engine) as session:
+        listings = session.exec(__sm_select(ListingRow)).all()
+        photos = session.exec(__sm_select(PhotoRow)).all()
+        user_listings = session.exec(__sm_select(UserListingRow)).all()
+        actions = session.exec(__sm_select(UserActionRow)).all()
+
+    # Dry-run preserves every seeded row, FK included.
+    assert len(listings) > 0
+    assert len(photos) > 0
+    assert len(user_listings) > 0
+    assert any(a.listing_id is not None for a in actions)
+
+
 def __sm_select(model):
     """Tiny helper to keep imports tidy in the assertions above."""
     from sqlmodel import select  # local import to avoid top-level noise

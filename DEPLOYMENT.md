@@ -256,7 +256,7 @@ WG_NOTIFY_THRESHOLD=0.9
 WG_RESCAN_INTERVAL_MINUTES=3
 ```
 
-Keep `.env` out of git (it already is via `.gitignore`). Both the `backend` and `scraper` services load it via `env_file: .env` in [`docker-compose.yml`](./docker-compose.yml), but only `backend` actually calls SES today.
+Keep `.env` out of git (it already is via `.gitignore`). The `backend` service loads it via `env_file: .env` in [`docker-compose.yml`](./docker-compose.yml). The scraper now runs from a developer laptop against the shared RDS rather than as a cloud service, so it reads the same `.env` directly there.
 
 ### 5. Redeploy and smoke-test
 

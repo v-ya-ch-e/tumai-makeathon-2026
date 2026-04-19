@@ -14,13 +14,13 @@ import os
 import random
 import re
 from dataclasses import dataclass
-from datetime import date
+from datetime import date, datetime, timedelta
 from pathlib import Path
 from typing import Optional
 from urllib.parse import urlencode, urljoin
 
 import httpx
-from bs4 import BeautifulSoup, Tag
+from bs4 import BeautifulSoup, NavigableString, Tag
 from playwright.async_api import (
     Browser,
     BrowserContext,
@@ -92,6 +92,53 @@ def _parse_date(text: str) -> Optional[date]:
                 return date(year, month, day)
             except ValueError:
                 return None
+    return None
+
+
+# Unit table for the relative `Online: <n> <unit>` form on wg-gesucht cards
+# (`Online: 25 Minuten`, `Online: 1 Stunde`, …). `Monat`/`Monate` shouldn't
+# appear in practice — the absolute `dd.mm.yyyy` form takes over well before
+# 30 days — but include both so a future site change doesn't crash the parser.
+_RELATIVE_UNIT_SECONDS = {
+    "sekunde": 1,
+    "sekunden": 1,
+    "minute": 60,
+    "minuten": 60,
+    "stunde": 3600,
+    "stunden": 3600,
+    "tag": 86400,
+    "tage": 86400,
+    "woche": 604800,
+    "wochen": 604800,
+    "monat": 2592000,
+    "monate": 2592000,
+}
+
+
+def _parse_wgg_online_value(raw: str) -> Optional[datetime]:
+    """Parse the value half of `Online: <X>` from a wg-gesucht search card.
+
+    Two verified formats:
+      - relative: "<n> <unit>" with unit in `_RELATIVE_UNIT_SECONDS`
+        (`Minuten`, `Stunde`, `Tage`, …). Returns `now - delta`.
+      - absolute: "dd.mm.yyyy". Returns midnight on that day.
+    Returns None if the string matches neither shape.
+    """
+    raw = (raw or "").strip()
+    m = re.match(r"(\d+)\s+([A-Za-zäöüÄÖÜ]+)", raw)
+    if m:
+        n = int(m.group(1))
+        unit = m.group(2).lower()
+        secs = _RELATIVE_UNIT_SECONDS.get(unit)
+        if secs is not None:
+            return datetime.utcnow() - timedelta(seconds=n * secs)
+    m = re.match(r"(\d{2})\.(\d{2})\.(\d{4})", raw)
+    if m:
+        d, mo, y = (int(x) for x in m.groups())
+        try:
+            return datetime(y, mo, d)
+        except ValueError:
+            return None
     return None
 
 
@@ -358,22 +405,34 @@ def parse_search_page(html: str, seen_ids: set[str] | None = None) -> list[Listi
 
         online_viewing = "Online-Besichtigung" in card_text
 
-        out.append(
-            Listing(
-                id=listing_id,
-                url=url,
-                title=title or f"Listing {bare_id}",
-                kind="wg",
-                city=city,
-                district=district,
-                address=address,
-                price_eur=int(float(price_match.group(1))) if price_match else None,
-                size_m2=float(size_match.group(1).replace(",", ".")) if size_match else None,
-                wg_size=int(wg_match.group(1)) if wg_match else None,
-                available_from=avail_from,
-                online_viewing=online_viewing,
-            )
+        # Anchor at the start so 'Online-Besichtigung' (the unrelated
+        # online-viewing flag, often present on the same card) doesn't match.
+        posted_at: Optional[datetime] = None
+        online_node = card.find(
+            string=lambda s: isinstance(s, NavigableString)
+            and re.match(r"^\s*Online\s*:", str(s)) is not None
         )
+        if online_node is not None:
+            raw_value = re.sub(r"^\s*Online\s*:\s*", "", str(online_node)).strip()
+            posted_at = _parse_wgg_online_value(raw_value)
+
+        listing = Listing(
+            id=listing_id,
+            url=url,
+            title=title or f"Listing {bare_id}",
+            kind="wg",
+            city=city,
+            district=district,
+            address=address,
+            price_eur=int(float(price_match.group(1))) if price_match else None,
+            size_m2=float(size_match.group(1).replace(",", ".")) if size_match else None,
+            wg_size=int(wg_match.group(1)) if wg_match else None,
+            available_from=avail_from,
+            online_viewing=online_viewing,
+        )
+        if posted_at is not None:
+            listing.posted_at = posted_at
+        out.append(listing)
     return out
 
 

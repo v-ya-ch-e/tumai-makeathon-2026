@@ -224,6 +224,11 @@ class Listing(BaseModel):
     best_commute_label: Optional[str] = None
     best_commute_mode: Optional[str] = None
 
+    # Transient: populated by per-source search/detail parsers and consumed by
+    # `ScraperAgent._is_fresh_enough` to drop stale listings before persistence.
+    # NOT a `ListingRow` column — `repo.upsert_global_listing` ignores it.
+    posted_at: Optional[datetime] = None
+
     # Populated by the evaluator after scoring.
     score: Optional[float] = Field(default=None, ge=0, le=1)
     score_reason: Optional[str] = None

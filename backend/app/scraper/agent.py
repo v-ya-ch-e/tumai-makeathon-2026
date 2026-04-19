@@ -78,6 +78,7 @@ class ScraperAgent:
             else _env_int("SCRAPER_REFRESH_HOURS", 24)
         )
         self._deletion_passes = _env_int("SCRAPER_DELETION_PASSES", 2)
+        self._max_age_days = _env_int("SCRAPER_MAX_AGE_DAYS", 14)
         self._sources: list[Source] = sources if sources is not None else build_sources()
         # Per-source miss counters: { source_name: { listing_id: missed_passes } }.
         self._missing_passes: dict[str, dict[str, int]] = {
@@ -107,6 +108,19 @@ class ScraperAgent:
             return "stub"
         return "full"
 
+    def _is_fresh_enough(self, listing: Listing) -> bool:
+        """True iff `listing.posted_at` is within the freshness window.
+
+        Listings without a `posted_at` are treated as fresh (defensive: a
+        parser regression should not stop scraping; the existing refresh /
+        deletion sweep handles stale data the slow way).
+        """
+        posted_at = getattr(listing, "posted_at", None)
+        if posted_at is None:
+            return True
+        cutoff = datetime.utcnow() - timedelta(days=self._max_age_days)
+        return posted_at >= cutoff
+
     async def _scrape_and_save_via(self, source: Source, stub: Listing) -> None:
         try:
             enriched = await source.scrape_detail(stub)
@@ -119,6 +133,21 @@ class ScraperAgent:
                     status="failed",
                     scrape_error=str(exc),
                 )
+            return
+
+        # Freshness gate runs after the detail fetch so sources that only
+        # expose `posted_at` on the detail page (kleinanzeigen) can still
+        # opt out before we persist a stale row. Sources with stub-time
+        # `posted_at` (wg-gesucht, tum-living) are already filtered in
+        # `_run_source` and never reach this branch with a stale stub.
+        if not self._is_fresh_enough(enriched):
+            logger.info(
+                "[%s] dropping stale listing %s (posted_at=%s, max_age_days=%d)",
+                source.name,
+                enriched.id,
+                enriched.posted_at,
+                self._max_age_days,
+            )
             return
 
         status = self._status_for(enriched)
@@ -152,6 +181,13 @@ class ScraperAgent:
 
             for stub in stubs:
                 seen_for_source.add(stub.id)
+                # Cheap pre-filter: if the stub already carries a too-old
+                # `posted_at` (wg-gesucht / tum-living), skip the detail
+                # fetch entirely. Kleinanzeigen stubs lack `posted_at` so
+                # they fall through to the post-detail gate inside
+                # `_scrape_and_save_via`.
+                if not self._is_fresh_enough(stub):
+                    continue
                 with Session(db_module.engine) as session:
                     existing = session.get(ListingRow, stub.id)
                 if not self._needs_scrape(existing, source):

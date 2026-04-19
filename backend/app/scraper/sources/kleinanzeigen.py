@@ -9,7 +9,7 @@ import asyncio
 import json
 import logging
 import re
-from datetime import date
+from datetime import date, datetime, timedelta
 from typing import Optional
 
 import httpx
@@ -80,6 +80,35 @@ def _parse_price_eur_from_text(price_text: str) -> Optional[int]:
         return int(float(raw))
     except ValueError:
         return None
+
+
+def _parse_posting_date_de(span_text: str) -> Optional[datetime]:
+    """Parse the value of `#viewad-extra-info > div:first-child > span`.
+
+    Verified format on the recon ads is `dd.mm.yyyy` (`07.04.2026`,
+    `17.04.2026`, `14.04.2026`). `Heute` / `Gestern` are also accepted as
+    a defensive fallback in case Kleinanzeigen ever swaps in relative
+    labels for very fresh ads (the recon never observed them, but the
+    cost of supporting them is one extra branch).
+    """
+    if not span_text:
+        return None
+    raw = span_text.strip()
+    low = raw.lower()
+    if low == "heute":
+        today = date.today()
+        return datetime(today.year, today.month, today.day)
+    if low == "gestern":
+        y = date.today() - timedelta(days=1)
+        return datetime(y.year, y.month, y.day)
+    m = re.match(r"(\d{2})\.(\d{2})\.(\d{4})", raw)
+    if m:
+        d, mo, y = (int(x) for x in m.groups())
+        try:
+            return datetime(y, mo, d)
+        except ValueError:
+            return None
+    return None
 
 
 def _parse_month_year_de(val: str) -> Optional[date]:
@@ -330,6 +359,19 @@ def parse_listing_page_ka(html: str, listing: Listing) -> Listing:
         listing.cover_photo_url = listing.photo_urls[0]
     else:
         listing.cover_photo_url = None
+
+    # Posting date lives on the detail page only — search cards don't
+    # expose it on Kleinanzeigen. The agent's freshness gate consumes
+    # `posted_at` after `scrape_detail` returns, so a stale ad costs us
+    # one detail fetch but never a write. Selector pinned per the plan
+    # (`docs/SCRAPER_LOCAL_AND_FRESHNESS_PLAN.md` §3.2): the date sits
+    # in the FIRST `<div>` child of `#viewad-extra-info`; `#viewad-cntr`
+    # (the view counter) is a sibling div we must NOT match.
+    date_span = soup.select_one("#viewad-extra-info > div:first-child > span")
+    if date_span is not None:
+        listing.posted_at = _parse_posting_date_de(
+            date_span.get_text(" ", strip=True)
+        )
 
     return listing
 

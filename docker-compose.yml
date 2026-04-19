@@ -11,19 +11,6 @@ services:
       - "8000"
     restart: unless-stopped
 
-  scraper:
-    build: ./backend
-    command: ["python", "-m", "app.scraper.main"]
-    env_file:
-      - .env
-    environment:
-      - PYTHONUNBUFFERED=1
-    volumes:
-      - wg_data:/root/.wg_hunter
-    depends_on:
-      - backend
-    restart: unless-stopped
-
   frontend:
     build:
       context: ./frontend

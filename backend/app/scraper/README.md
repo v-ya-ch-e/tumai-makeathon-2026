@@ -74,8 +74,8 @@ These behaviors apply to **every** source — the per-site docs only specify the
 
 Items 1–4 from the original "pending refactors" list are now landed (see [ADR-020](../../../docs/DECISIONS.md#adr-020-multi-source-listing-identifiers-via-string-namespacing) + [ADR-021](../../../docs/DECISIONS.md#adr-021-listing-kind-as-a-first-class-column) and [`docs/MULTI_SOURCE_SCRAPER_PLAN.md`](../../../docs/MULTI_SOURCE_SCRAPER_PLAN.md)). The remaining work is one-shot DB surgery on the shared RDS, then flipping an env var:
 
-1. **Stop the scraper + backend containers** so they don't race the namespacing UPDATE on `listingrow.id`.
-2. **Run the idempotent migration script** ([`./migrate_multi_source.py`](./migrate_multi_source.py)). It widens the seven text columns to `TEXT`, adds the `kind` column + index, namespaces every existing wg-gesucht id (with matching FK rewrites in one transaction), and flips every `'full'` row to `'stub'` so the next pass re-fetches the now-untruncated descriptions:
+1. **Stop the backend container** so it doesn't race the namespacing UPDATE on `listingrow.id`. The scraper is no longer in compose (see [`docs/SCRAPER_LOCAL_AND_FRESHNESS_PLAN.md`](../../../docs/SCRAPER_LOCAL_AND_FRESHNESS_PLAN.md)) — just confirm no laptop pass is running (`ps -ef | rg scraper.main`).
+2. **Run the idempotent migration script** ([`./migrate_multi_source.py`](./migrate_multi_source.py)). It widens the seven text columns to `TEXT`, adds the `kind` column + index, namespaces every existing wg-gesucht id (with matching FK rewrites in one transaction), flips every `'full'` row to `'stub'` so the next pass re-fetches the now-untruncated descriptions, and (step 4) wipes the global listing pool so the relaunched laptop scraper repopulates it from scratch:
    ```bash
    # Dry-run first.
    cd backend && venv/bin/python -m app.scraper.migrate_multi_source --dry-run
@@ -83,10 +83,23 @@ Items 1–4 from the original "pending refactors" list are now landed (see [ADR-
    # Then for real (stops at any error and rolls back the transaction).
    venv/bin/python -m app.scraper.migrate_multi_source
    ```
-   The script is idempotent — re-running after a partial failure skips already-done steps. Use `--skip-rescrape` if you want to widen + namespace without forcing a full rescrape.
-3. **Restart the containers.** With the default `SCRAPER_ENABLED_SOURCES=wg-gesucht`, behavior is unchanged. Set `SCRAPER_ENABLED_SOURCES=wg-gesucht,tum-living,kleinanzeigen` to opt in to the new sources.
+   The script is idempotent — re-running after a partial failure skips already-done steps. Use `--skip-rescrape` if you want to widen + namespace without forcing a full rescrape, or `--skip-wipe` to preserve the existing rows (e.g. when re-running on a virgin DB).
+3. **Restart the backend container.** With the default `SCRAPER_ENABLED_SOURCES=wg-gesucht`, behavior is unchanged once the laptop scraper resumes writing. Set `SCRAPER_ENABLED_SOURCES=wg-gesucht,tum-living,kleinanzeigen` to opt in to the new sources.
 
 After ~2 hours of cycling at default cadence, [`MULTI_SOURCE_SCRAPER_PLAN.md`](../../../docs/MULTI_SOURCE_SCRAPER_PLAN.md) G9 is satisfied: previously-truncated descriptions are progressively replaced with the full `parse_listing_page` output.
+
+## Local scraper run (laptop)
+
+Per [`docs/SCRAPER_LOCAL_AND_FRESHNESS_PLAN.md`](../../../docs/SCRAPER_LOCAL_AND_FRESHNESS_PLAN.md), the scraper is no longer a cloud service — a developer runs it on their laptop against the shared RDS using the same `.env` the backend reads:
+
+```bash
+# From the repo root, with .env populated.
+cd backend
+source venv/bin/activate           # or: python -m venv venv && source venv/bin/activate && pip install -r requirements.txt
+python -m app.scraper.main
+```
+
+The agent listens for the same env knobs as before (`SCRAPER_CITY`, `SCRAPER_MAX_RENT`, `SCRAPER_MAX_PAGES`, `SCRAPER_INTERVAL_SECONDS`, `SCRAPER_REFRESH_HOURS`, `SCRAPER_ENABLED_SOURCES`, `SCRAPER_DELETION_PASSES`) plus one new one introduced by the local-run plan: `SCRAPER_MAX_AGE_DAYS` (default `14`), which drops listings whose source-reported posting date is older than the cutoff before they're persisted.
 
 ## See also
 
