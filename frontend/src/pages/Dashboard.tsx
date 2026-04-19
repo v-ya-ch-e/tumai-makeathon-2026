@@ -56,6 +56,12 @@ function huntIdForUsername(username: string): string {
   return `user:${encodeURIComponent(username)}`
 }
 
+function hasActiveBackfill(hunt: Hunt | null): boolean {
+  if (hunt === null) return false
+  if (hunt.backfillTotal === null || hunt.backfillTotal <= 0) return false
+  return (hunt.backfillDone ?? 0) < hunt.backfillTotal
+}
+
 function topScorePct(listings: Listing[]): string {
   const scored = listings.map((listing) => listing.score).filter((score): score is number => score !== null)
   if (scored.length === 0) return '—'
@@ -88,6 +94,21 @@ export default function Dashboard() {
   const [viewMode, setViewMode] = useState<'list' | 'map'>('list')
   const [filters, setFilters] = useState<ListingFilters>(DEFAULT_LISTING_FILTERS)
   const [initialLoading, setInitialLoading] = useState(true)
+  // Captures the `autoStart` intent coming from the onboarding flow at mount
+  // time. React Router clears `location.state` once the autoStart effect
+  // fires, so we snapshot it here. Two places use the snapshot: the
+  // bootstrap effect polls `/agent` briefly so the skeleton can transition
+  // straight into the live backfill progress bar, and the skeleton itself
+  // renders the progress-shaped variant so that transition isn't jarring.
+  const [hasAutoStartIntent] = useState(() => {
+    const s = location.state
+    return Boolean(
+      s &&
+        typeof s === 'object' &&
+        'autoStart' in s &&
+        (s as { autoStart?: boolean }).autoStart === true,
+    )
+  })
 
   // Prefer the backfill baseline (bumped on material profile edits) over
   // raw account-creation time: listings scored by the silent re-backfill
@@ -115,11 +136,7 @@ export default function Dashboard() {
     () => applyListingFilters(listings, filters, baselineAt, isListingHidden),
     [listings, filters, baselineAt, isListingHidden],
   )
-  const isBackfilling =
-    hunt !== null &&
-    hunt.backfillTotal !== null &&
-    hunt.backfillTotal > 0 &&
-    (hunt.backfillDone ?? 0) < hunt.backfillTotal
+  const isBackfilling = hasActiveBackfill(hunt)
   const seenActionKeysRef = useRef<Set<string>>(new Set())
   const autoStartTriggeredRef = useRef(false)
   const refreshTimerRef = useRef<number | null>(null)
@@ -174,7 +191,27 @@ export default function Dashboard() {
         if (storedId !== huntId) {
           localStorage.setItem(LS_HUNT_ID, huntId)
         }
-        const nextHunt = await refreshHunt(huntId)
+        let nextHunt = await refreshHunt(huntId)
+        // Fresh-from-onboarding flow: the backend spawned the matcher in
+        // `PUT /search-profile`, but the one-shot backfill may not have
+        // published its `{done, total}` snapshot yet when we query
+        // `/agent` for the first time. Poll briefly so the skeleton
+        // transitions straight into the live progress bar instead of
+        // flashing the idle "0 listings" stats row. We also poll when we
+        // already have a hunt mid-backfill so the first render reflects
+        // that state up front.
+        if (!cancelled && (hasAutoStartIntent || hasActiveBackfill(nextHunt))) {
+          const deadline = Date.now() + 3000
+          while (
+            !cancelled &&
+            Date.now() < deadline &&
+            !hasActiveBackfill(nextHunt)
+          ) {
+            await new Promise((resolve) => setTimeout(resolve, 250))
+            if (cancelled) return
+            nextHunt = await refreshHunt(huntId)
+          }
+        }
         if (cancelled) return
         setProfile(searchProfile)
         applyHunt(nextHunt)
@@ -185,7 +222,7 @@ export default function Dashboard() {
     return () => {
       cancelled = true
     }
-  }, [isReady, username, navigate, refreshHunt, applyHunt])
+  }, [isReady, username, navigate, refreshHunt, applyHunt, hasAutoStartIntent])
 
   useEffect(() => {
     const huntId = hunt?.id
@@ -363,7 +400,7 @@ export default function Dashboard() {
         </header>
 
         {isBootstrapping || profile === null ? (
-          <DashboardSkeleton />
+          <DashboardSkeleton variant={hasAutoStartIntent ? 'progress' : 'stats'} />
         ) : (
         <>
         <section className="page-frame overflow-hidden">
@@ -477,7 +514,7 @@ export default function Dashboard() {
   )
 }
 
-function DashboardSkeleton() {
+function DashboardSkeleton({ variant = 'stats' }: { variant?: 'stats' | 'progress' }) {
   return (
     <>
       <section className="page-frame overflow-hidden animate-pulse" aria-hidden aria-busy>
@@ -493,11 +530,21 @@ function DashboardSkeleton() {
             <div className="h-10 w-36 rounded-full bg-surface-raised" />
           </div>
         </div>
-        <div className="grid border-t border-hairline sm:grid-cols-3">
-          <StatSkeleton />
-          <StatSkeleton />
-          <StatSkeleton withNote />
-        </div>
+        {variant === 'progress' ? (
+          <div className="border-t border-hairline px-6 py-5 sm:px-8 lg:px-10">
+            <div className="flex items-baseline justify-between gap-3">
+              <div className="h-3 w-40 rounded bg-surface-raised" />
+              <div className="h-4 w-14 rounded bg-surface-raised" />
+            </div>
+            <div className="mt-3 h-1.5 w-full rounded-full bg-surface-raised" />
+          </div>
+        ) : (
+          <div className="grid border-t border-hairline sm:grid-cols-3">
+            <StatSkeleton />
+            <StatSkeleton />
+            <StatSkeleton withNote />
+          </div>
+        )}
       </section>
 
       <section className="page-frame overflow-hidden animate-pulse" aria-hidden aria-busy>
