@@ -10,6 +10,10 @@ export type ListingListProps = {
    * "NEW" badge. Defaults to flagging listings whose `firstSeenAt` is
    * within the last 24 hours. */
   isNew?: (listing: Listing) => boolean
+  /** Predicate + handler for the per-row hide toggle. When both are
+   * provided, a small eye button appears in the top-right of each card. */
+  isHidden?: (listing: Listing) => boolean
+  onToggleHide?: (listing: Listing) => void
 }
 
 const NEW_BADGE_TTL_MS = 24 * 60 * 60 * 1000
@@ -68,7 +72,14 @@ function subline(listing: Listing): string {
   return parts.join(' · ')
 }
 
-export function ListingList({ listings, onOpen, emptyLabel, isNew }: ListingListProps) {
+export function ListingList({
+  listings,
+  onOpen,
+  emptyLabel,
+  isNew,
+  isHidden,
+  onToggleHide,
+}: ListingListProps) {
   if (listings.length === 0) {
     return (
       <p className="px-6 py-8 text-[13px] text-ink-muted sm:px-8 lg:px-10">
@@ -78,24 +89,29 @@ export function ListingList({ listings, onOpen, emptyLabel, isNew }: ListingList
   }
 
   const flagAsNew = isNew ?? defaultIsNew
+  const canHide = typeof onToggleHide === 'function'
   return (
     <ul className="divide-y divide-hairline">
       {listings.map((listing) => {
         const fresh = flagAsNew(listing)
+        const hidden = isHidden ? isHidden(listing) : false
         return (
-          <li key={listing.id}>
+          <li key={listing.id} className="relative">
             <button
               type="button"
               onClick={() => onOpen(listing)}
-              className="group grid w-full gap-4 px-5 py-5 text-left transition-colors duration-150 ease-out hover:bg-surface-raised sm:grid-cols-[176px_minmax(0,1fr)]"
+              className={`group grid w-full gap-4 px-5 py-5 text-left transition-colors duration-150 ease-out hover:bg-surface-raised sm:grid-cols-[176px_minmax(0,1fr)] ${hidden ? 'opacity-60' : ''}`}
             >
               <div className="relative overflow-hidden rounded border border-hairline bg-surface-raised">
                 {fresh ? (
                   <span
-                    className="absolute left-2 top-2 z-10 inline-flex items-center gap-1 rounded-full bg-accent px-2 py-0.5 text-[10px] font-semibold uppercase tracking-[0.14em] text-white shadow-sm"
+                    className="absolute left-2 top-2 z-10 inline-flex items-center gap-1.5 rounded-full bg-accent px-2.5 py-1 text-[10px] font-bold uppercase tracking-[0.18em] text-white ring-2 ring-white/95 shadow-[0_2px_6px_rgba(0,0,0,0.35)]"
                     aria-label="New listing"
                   >
-                    <span aria-hidden className="inline-block h-1.5 w-1.5 rounded-full bg-white/90" />
+                    <span aria-hidden className="relative inline-flex h-1.5 w-1.5">
+                      <span className="absolute inline-flex h-full w-full animate-ping rounded-full bg-white opacity-75" />
+                      <span className="relative inline-flex h-1.5 w-1.5 rounded-full bg-white" />
+                    </span>
                     New
                   </span>
                 ) : null}
@@ -148,10 +164,45 @@ export function ListingList({ listings, onOpen, emptyLabel, isNew }: ListingList
                 </div>
               </div>
             </button>
+            {canHide ? (
+              <button
+                type="button"
+                onClick={(event) => {
+                  event.stopPropagation()
+                  onToggleHide?.(listing)
+                }}
+                aria-pressed={hidden}
+                aria-label={hidden ? 'Unhide listing' : 'Hide listing'}
+                title={hidden ? 'Unhide listing' : 'Hide listing'}
+                className="absolute right-3 top-3 z-20 inline-flex h-8 w-8 items-center justify-center rounded-full border border-hairline bg-surface/90 text-ink-muted shadow-sm backdrop-blur transition-colors hover:border-ink hover:text-ink focus:border-ink focus:outline-none"
+              >
+                {hidden ? <EyeOffIcon /> : <EyeIcon />}
+              </button>
+            ) : null}
           </li>
         )
       })}
     </ul>
+  )
+}
+
+function EyeIcon() {
+  return (
+    <svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round" aria-hidden>
+      <path d="M2 12s3.5-7 10-7 10 7 10 7-3.5 7-10 7S2 12 2 12z" />
+      <circle cx="12" cy="12" r="3" />
+    </svg>
+  )
+}
+
+function EyeOffIcon() {
+  return (
+    <svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round" aria-hidden>
+      <path d="M3 3l18 18" />
+      <path d="M10.58 10.58A3 3 0 0 0 12 15a3 3 0 0 0 2.83-2.01" />
+      <path d="M9.88 5.09A10.94 10.94 0 0 1 12 5c6.5 0 10 7 10 7a17.5 17.5 0 0 1-3.22 4.19" />
+      <path d="M6.1 6.1A17.5 17.5 0 0 0 2 12s3.5 7 10 7a10.94 10.94 0 0 0 5.17-1.32" />
+    </svg>
   )
 }
 

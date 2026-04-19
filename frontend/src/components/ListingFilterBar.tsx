@@ -15,12 +15,14 @@ export type ListingFilters = {
   sort: ListingSort
   kind: ListingKindFilter
   onlyNew: boolean
+  showHidden: boolean
 }
 
 export const DEFAULT_LISTING_FILTERS: ListingFilters = {
   sort: 'score',
   kind: 'all',
   onlyNew: false,
+  showHidden: false,
 }
 
 const SORT_OPTIONS: Array<{ value: ListingSort; label: string }> = [
@@ -43,6 +45,7 @@ export type ListingFilterBarProps = {
   newCount: number
   totalCount: number
   visibleCount: number
+  hiddenCount: number
 }
 
 export function ListingFilterBar({
@@ -51,6 +54,7 @@ export function ListingFilterBar({
   newCount,
   totalCount,
   visibleCount,
+  hiddenCount,
 }: ListingFilterBarProps) {
   const sortId = useId()
   const filtered = visibleCount !== totalCount
@@ -127,6 +131,23 @@ export function ListingFilterBar({
           Only new
           <span className="text-ink-muted">({newCount})</span>
         </button>
+
+        <button
+          type="button"
+          onClick={() => onChange({ ...value, showHidden: !value.showHidden })}
+          aria-pressed={value.showHidden}
+          disabled={hiddenCount === 0 && !value.showHidden}
+          className={clsx(
+            'inline-flex min-h-9 items-center gap-2 rounded-full border px-3 py-1.5 text-[12px] font-medium transition-colors',
+            value.showHidden
+              ? 'border-ink bg-surface-raised text-ink'
+              : 'border-hairline bg-surface text-ink-muted hover:border-ink hover:text-ink',
+            hiddenCount === 0 && !value.showHidden ? 'cursor-not-allowed opacity-50' : '',
+          )}
+        >
+          Show hidden
+          <span className="text-ink-muted">({hiddenCount})</span>
+        </button>
       </div>
 
       <div className="text-[12px] text-ink-muted">
@@ -162,12 +183,16 @@ export function applyListingFilters(
   listings: Listing[],
   filters: ListingFilters,
   userCreatedAt: string | null,
+  isHidden: (listing: Listing) => boolean = () => false,
 ): Listing[] {
   const filtered = listings.filter((listing) => {
     if (filters.kind !== 'all' && listing.kind && listing.kind !== filters.kind) {
       return false
     }
     if (filters.onlyNew && !isListingNew(listing, userCreatedAt)) {
+      return false
+    }
+    if (!filters.showHidden && isHidden(listing)) {
       return false
     }
     return true

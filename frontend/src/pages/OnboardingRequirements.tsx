@@ -216,8 +216,8 @@ export default function OnboardingRequirements() {
             </Chip>
             <span
               role="note"
-              title="Always considered"
-              className="inline-flex min-h-9 cursor-default items-center rounded border border-hairline bg-surface px-3 py-1.5 text-[12px] text-ink-muted"
+              title="Public transport is always considered"
+              className="inline-flex min-h-9 cursor-default items-center rounded border border-accent bg-accent-muted px-3 py-1.5 text-[12px] text-ink"
             >
               Public transport
             </span>

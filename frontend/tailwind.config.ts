@@ -18,8 +18,9 @@ export default {
         bad: 'var(--bad)',
       },
       fontFamily: {
-        sans: ['Geist', 'ui-sans-serif', 'system-ui', 'sans-serif'],
-        mono: ['Geist Mono', 'ui-monospace', 'SFMono-Regular', 'monospace'],
+        sans: ['Inter', 'ui-sans-serif', 'system-ui', 'sans-serif'],
+        serif: ['Fraunces', 'ui-serif', 'Georgia', 'serif'],
+        mono: ['JetBrains Mono', 'ui-monospace', 'SFMono-Regular', 'monospace'],
       },
       borderRadius: {
         DEFAULT: '8px',
