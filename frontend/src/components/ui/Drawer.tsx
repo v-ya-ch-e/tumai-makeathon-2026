@@ -16,7 +16,7 @@ export function Drawer({
   onClose,
   title,
   children,
-  widthClass = 'w-[480px]',
+  widthClass = 'w-screen sm:w-[480px]',
 }: DrawerProps) {
   const [render, setRender] = useState(open)
   const [entered, setEntered] = useState(false)
@@ -51,12 +51,12 @@ export function Drawer({
         aria-modal
         role="dialog"
         className={clsx(
-          'pointer-events-auto fixed top-0 right-0 z-50 flex h-full flex-col rounded-l-drawer border-l border-hairline bg-surface shadow-drawer transition-transform duration-[220ms] ease-in-out',
+          'pointer-events-auto fixed inset-0 z-50 flex max-w-full flex-col bg-surface shadow-drawer transition-transform duration-[220ms] ease-in-out sm:inset-y-0 sm:right-0 sm:left-auto sm:border-l sm:border-hairline sm:rounded-l-drawer',
           widthClass,
           entered ? 'translate-x-0' : 'translate-x-full',
         )}
       >
-        <header className="flex shrink-0 items-start justify-between gap-4 border-b border-hairline px-6 py-5">
+        <header className="flex shrink-0 items-start justify-between gap-4 border-b border-hairline px-4 py-4 sm:px-6 sm:py-5">
           {title != null ? (
             <div className="min-w-0 flex-1 text-[15px] font-semibold text-ink">{title}</div>
           ) : (
@@ -71,7 +71,7 @@ export function Drawer({
             <span className="text-lg leading-none">✕</span>
           </button>
         </header>
-        <div className="min-h-0 flex-1 overflow-y-auto p-6">{children}</div>
+        <div className="min-h-0 flex-1 overflow-x-hidden overflow-y-auto p-4 sm:p-6">{children}</div>
       </div>
     </div>,
     document.body,

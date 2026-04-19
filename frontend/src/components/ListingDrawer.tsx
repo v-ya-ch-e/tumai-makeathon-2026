@@ -167,11 +167,11 @@ export function ListingDrawer({ open, listing, onClose }: ListingDrawerProps) {
     <Drawer
       open={open}
       onClose={onClose}
-      widthClass="w-[560px]"
+      widthClass="w-screen sm:w-[560px]"
       title={
         activeListing ? (
-          <div className="flex items-center gap-3">
-            <span className="truncate">{activeListing.title ?? `Listing ${activeListing.id}`}</span>
+          <div className="flex flex-wrap items-center gap-3">
+            <span className="min-w-0 flex-1 truncate">{activeListing.title ?? `Listing ${activeListing.id}`}</span>
             {activeListing.kind ? (
               <StatusPill tone="idle">{activeListing.kind === 'flat' ? 'Whole flat' : 'WG room'}</StatusPill>
             ) : null}
@@ -208,7 +208,7 @@ export function ListingDrawer({ open, listing, onClose }: ListingDrawerProps) {
           ) : null}
 
           <Section title="Listing facts">
-            <dl className="grid grid-cols-2 gap-x-4 gap-y-4 text-[14px]">
+            <dl className="grid grid-cols-1 gap-x-4 gap-y-4 text-[14px] sm:grid-cols-2">
               <Stat label="Price" value={activeListing.priceEur !== null ? `${activeListing.priceEur} EUR` : '—'} />
               <Stat label="Size" value={activeListing.sizeM2 !== null ? `${activeListing.sizeM2} m²` : '—'} />
               <Stat label="WG size" value={activeListing.wgSize !== null ? `${activeListing.wgSize} people` : '—'} />
