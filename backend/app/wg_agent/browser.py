@@ -56,6 +56,21 @@ def _city_slug_and_id(city: str) -> tuple[int, str]:
     return CITY_CATALOGUE["Muenchen"]
 
 
+# wg-gesucht numeric category ids, harvested from the homepage type
+# selector (`<select>` options on `https://www.wg-gesucht.de/`):
+#   "WG-Zimmer (value: 0), 1-Zimmer-Wohnung (value: 1),
+#    Wohnung (value: 2), Haus (value: 3)"
+# The URL slug differs per category: WG rooms use `/wg-zimmer-in-<City>...`,
+# whole flats use `/wohnungen-in-<City>...`. Both share the same
+# `.{cityId}.{categoryId}.{rentType}.{page}.html` tail.
+_CATEGORY_SLUG = {
+    0: "wg-zimmer-in",
+    1: "1-zimmer-wohnungen-in",
+    2: "wohnungen-in",
+    3: "haeuser-in",
+}
+
+
 def build_search_url(
     req: SearchProfile,
     page_index: int = 0,
@@ -70,15 +85,17 @@ def build_search_url(
     the chronological sort knobs (``sort_column=0`` = "Online seit",
     ``sort_order=0`` = newest first).
 
-    `category_id` selects the wg-gesucht vertical (`0` = WG room, the only
-    verified id today; flat-vertical ids are still TODO — see ROADMAP.md).
+    `category_id` selects the wg-gesucht vertical:
+        0 = WG room (default), 1 = 1-room flat, 2 = whole flat, 3 = house.
+    Each category uses its own URL slug (see ``_CATEGORY_SLUG``).
     """
     city_id, slug = _city_slug_and_id(req.city)
-    path = f"/wg-zimmer-in-{slug}.{city_id}.{category_id}.{int(req.rent_type)}.{page_index}.html"
+    cat_slug = _CATEGORY_SLUG.get(category_id, _CATEGORY_SLUG[0])
+    path = f"/{cat_slug}-{slug}.{city_id}.{category_id}.{int(req.rent_type)}.{page_index}.html"
     qs: dict[str, str] = {
         "rMax": str(req.max_rent_eur),
-        # Sort newest first so the agent can stop pagination on the first
-        # stale stub (`SCRAPER_MAX_AGE_DAYS`).
+        # Sort newest first so the agent can drop stale stubs deterministically
+        # (`SCRAPER_MAX_AGE_DAYS`).
         "sort_column": "0",
         "sort_order": "0",
     }
@@ -335,12 +352,18 @@ def _parse_photo_urls(soup: BeautifulSoup) -> list[str]:
 _LISTING_ID_RE = re.compile(r"[./](\d{5,9})\.html")
 
 
-def parse_search_page(html: str, seen_ids: set[str] | None = None) -> list[Listing]:
+def parse_search_page(
+    html: str, seen_ids: set[str] | None = None, *, kind: str = "wg"
+) -> list[Listing]:
     """Parse a search-results page into `Listing` stubs.
 
     We only populate the fields visible on the card (id, url, title, price, size,
     wg_size, district, address, available_from, online_viewing). The full
     description is fetched later via `scrape_listing`.
+
+    `kind` stamps `listing.kind` on every emitted stub (defaults to `'wg'`
+    for back-compat with the legacy WG-only callers; pass `'flat'` for the
+    `/wohnungen-in-…` vertical). The card DOM is identical across verticals.
     """
     soup = BeautifulSoup(html, "html.parser")
     seen_ids = seen_ids if seen_ids is not None else set()
@@ -436,7 +459,7 @@ def parse_search_page(html: str, seen_ids: set[str] | None = None) -> list[Listi
             id=listing_id,
             url=url,
             title=title or f"Listing {bare_id}",
-            kind="wg",
+            kind=kind,
             city=city,
             district=district,
             address=address,

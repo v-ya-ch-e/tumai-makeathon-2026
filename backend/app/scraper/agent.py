@@ -2,15 +2,17 @@
 
 Drives a list of `Source` plugins (`backend/app/scraper/sources/*.py`)
 sequentially per pass. For each `(source, kind)` it walks the source's
-`search_pages` async iterator one page at a time. Inside each page it
-processes stubs in order; the moment a stub's `posted_at` is older than
-`SCRAPER_MAX_AGE_DAYS` it stops the entire `(source, kind)` walk
-because results are sorted newest-first by the source URL.
+`search_pages` async iterator up to `SCRAPER_MAX_PAGES` pages
+(default 6). Inside each page it processes stubs in order; if a stub's
+`posted_at` is older than `SCRAPER_MAX_AGE_DAYS` the stub is dropped
+without persisting and the loop continues with the next stub. Pagination
+terminates only on the page cap, an empty page, an HTTP error, or a
+block-like response — never on a single stale stub (see ADR-027).
 
 For wg-gesucht and tum-living the stub already carries `posted_at`, so
 the staleness check is free. For kleinanzeigen the date only appears on
-the detail page, so the stop fires after the first stale `scrape_detail`
-in that `(source, kind)`.
+the detail page, so a stale ad costs us one detail fetch but never a
+write.
 
 `SCRAPER_KIND` (env, one of `wg` | `flat` | `both`; default `both`)
 restricts which verticals each source iterates. `SCRAPER_ENABLED_SOURCES`
@@ -116,6 +118,7 @@ class ScraperAgent:
             else _env_int("SCRAPER_REFRESH_HOURS", 24)
         )
         self._max_age_days = _env_int("SCRAPER_MAX_AGE_DAYS", 4)
+        self._max_pages = _env_int("SCRAPER_MAX_PAGES", 6)
         self._enrich_enabled = (
             enrich_enabled
             if enrich_enabled is not None
@@ -239,8 +242,10 @@ class ScraperAgent:
         stub: Listing,
     ) -> Optional[Listing]:
         """Deep-scrape one stub and persist the result. Returns the enriched
-        listing on success, or `None` on scrape failure (which has already
-        been recorded as `scrape_status='failed'`)."""
+        listing on success, `None` on scrape failure (recorded as
+        `scrape_status='failed'`) OR on detail-revealed staleness
+        (sources like kleinanzeigen whose `posted_at` only appears on
+        the detail page — the listing is dropped without persisting)."""
         try:
             enriched = await source.scrape_detail(stub)
         except Exception as exc:  # noqa: BLE001
@@ -252,6 +257,19 @@ class ScraperAgent:
                     status="failed",
                     scrape_error=str(exc),
                 )
+            return None
+
+        # Detail-revealed staleness: sources whose stub lacks `posted_at`
+        # (kleinanzeigen) only learn the date here. Drop without
+        # persisting so the global pool stays free of stale ads.
+        if self._is_stale(enriched.posted_at):
+            logger.info(
+                "[%s] dropping stale detail %s (posted_at=%s, max_age_days=%d)",
+                source.name,
+                enriched.id,
+                enriched.posted_at,
+                self._max_age_days,
+            )
             return None
 
         await self._maybe_enrich(source, enriched)
@@ -270,7 +288,7 @@ class ScraperAgent:
         """True iff `posted_at` is set and older than the freshness cutoff.
 
         Unknown freshness (`None`) is treated as fresh — a parser
-        regression must never silently halt the scraper.
+        regression must never silently drop every listing.
         """
         if posted_at is None:
             return False
@@ -303,8 +321,7 @@ class ScraperAgent:
                 continue
 
             page_index = 0
-            stop_kind = False
-            while not stop_kind:
+            while page_index < self._max_pages:
                 try:
                     batch = await page_iter.__anext__()
                 except StopAsyncIteration:
@@ -332,22 +349,22 @@ class ScraperAgent:
                 )
 
                 for stub in batch:
-                    # Stub-time freshness check (free for sources whose
+                    # Stub-time freshness drop (free for sources whose
                     # search card already carries a date — wg-gesucht,
-                    # tum-living). Sorted newest-first by the source URL,
-                    # so the first stale stub means everything after it
-                    # is also stale.
+                    # tum-living). Stale stubs are dropped without a
+                    # detail fetch and without persisting; the loop
+                    # keeps walking the rest of the page + remaining
+                    # pages up to `SCRAPER_MAX_PAGES` (ADR-027).
                     if self._is_stale(stub.posted_at):
                         logger.info(
-                            "[%s] kind=%s stopping at stub %s (posted_at=%s, max_age_days=%d)",
+                            "[%s] kind=%s skipping stale stub %s (posted_at=%s, max_age_days=%d)",
                             source.name,
                             kind,
                             stub.id,
                             stub.posted_at,
                             self._max_age_days,
                         )
-                        stop_kind = True
-                        break
+                        continue
 
                     with Session(db_module.engine) as session:
                         existing = session.get(ListingRow, stub.id)
@@ -359,24 +376,15 @@ class ScraperAgent:
                         continue
                     scraped += 1
 
-                    # Detail-time freshness check for sources whose stub
-                    # lacks a date (kleinanzeigen). The stub couldn't be
-                    # rejected up-front; the detail revealed it's stale,
-                    # and the same newest-first sort guarantees the rest
-                    # of this kind is stale too.
-                    if self._is_stale(enriched.posted_at):
-                        logger.info(
-                            "[%s] kind=%s stopping after detail %s (posted_at=%s, max_age_days=%d)",
-                            source.name,
-                            kind,
-                            enriched.id,
-                            enriched.posted_at,
-                            self._max_age_days,
-                        )
-                        stop_kind = True
-                        break
-
                 page_index += 1
+
+            if page_index >= self._max_pages:
+                logger.info(
+                    "[%s] kind=%s reached page cap (max_pages=%d); stopping",
+                    source.name,
+                    kind,
+                    self._max_pages,
+                )
 
         return scraped
 
@@ -397,10 +405,12 @@ class ScraperAgent:
 
     async def run_forever(self) -> None:
         logger.info(
-            "Starting scraper agent: interval=%ds, sources=%s, kind=%s",
+            "Starting scraper agent: interval=%ds, sources=%s, kind=%s, max_pages=%d, max_age_days=%d",
             self._interval,
             ",".join(s.name for s in self._sources),
             self._kind_filter,
+            self._max_pages,
+            self._max_age_days,
         )
         while True:
             try:

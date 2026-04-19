@@ -8,7 +8,7 @@ Background reading: [BACKEND.md](./BACKEND.md) (file-by-file tour + agent loop),
 
 | Prefix          | Site                              | Status        |
 | --------------- | --------------------------------- | ------------- |
-| `wg-gesucht`    | `https://www.wg-gesucht.de`       | live (WG vertical only — flat vertical queued in [ROADMAP.md](./ROADMAP.md)) |
+| `wg-gesucht`    | `https://www.wg-gesucht.de`       | live (WG and flat verticals)                                                  |
 | `tum-living`    | `https://living.tum.de`           | live (both verticals) |
 | `kleinanzeigen` | `https://www.kleinanzeigen.de`    | live (both verticals) |
 
@@ -40,11 +40,11 @@ Each scraped listing declares what it represents — a room in a shared flat (`'
 
 | Source           | `kind='wg'` selector                                                            | `kind='flat'` selector                                                  |
 | ---------------- | ------------------------------------------------------------------------------- | ----------------------------------------------------------------------- |
-| `wg-gesucht`     | `/wg-zimmer-in-…` URL pattern (category `0`) — wired today                      | flat-vertical category id **not yet verified** — see [ROADMAP.md](./ROADMAP.md) |
+| `wg-gesucht`     | `/wg-zimmer-in-…` URL pattern (category `0`) — wired today                      | `/wohnungen-in-…` URL pattern (category `2`) — wired today                      |
 | `tum-living`     | GraphQL `type == "SHARED_APARTMENT"`                                            | GraphQL `type == "APARTMENT"` (treat `HOUSE` as `'flat'` too)           |
 | `kleinanzeigen`  | `/s-auf-zeit-wg/…/c199…` URL pattern                                            | `/s-mietwohnung/…/c203…` URL pattern                                    |
 
-Sources that support both verticals iterate them in two passes per cycle (one with `kind='wg'`, one with `kind='flat'`). `SCRAPER_KIND` (env, one of `wg` | `flat` | `both`, default `both`) intersects with each source's `kind_supported` set, so a `flat`-only run skips wg-gesucht entirely and only iterates the flat verticals on Kleinanzeigen / TUM Living. The matcher then filters by `SearchProfile.mode` when reading the global pool.
+Sources that support both verticals iterate them in two passes per cycle (one with `kind='wg'`, one with `kind='flat'`). `SCRAPER_KIND` (env, one of `wg` | `flat` | `both`, default `both`) intersects with each source's `kind_supported` set; pagination is hard-capped at `SCRAPER_MAX_PAGES` (default 6) per `(source, kind)` and stale stubs (`posted_at` older than `SCRAPER_MAX_AGE_DAYS`, default 4 days) are skipped without persisting (ADR-027). The matcher then filters by `SearchProfile.mode` when reading the global pool.
 
 ### Per-source scraper contract
 
@@ -89,7 +89,7 @@ Everything on the site is built around **stable, predictable URLs**. We do not n
 
 - `<City>` is the URL-slugified city name (`Muenchen`, `Berlin`, `Hamburg`, `Muenster` …). Umlauts become `ae/oe/ue`.
 - `<cityId>` is the integer city id. Confirmed: München=`90`, Berlin=`8`, Hamburg=`55`, Frankfurt=`41`. You can discover more by visiting `https://www.wg-gesucht.de/wg-zimmer.html` and watching the city autocomplete API (`/ajax/staedte.php?query=...`).
-- `<categoryId>` — **`0`** (WG room) is the default we use. Other values exist for 1-room flats, apartments, houses, but the wg-gesucht flat-vertical category id is **not verified** in this repo — see [ROADMAP.md "wg-gesucht flat-vertical scraping"](./ROADMAP.md).
+- `<categoryId>` — `0` = WG room (slug `wg-zimmer-in-`), `1` = 1-room flat (slug `1-zimmer-wohnungen-in-`), `2` = whole flat (slug `wohnungen-in-`), `3` = house (slug `haeuser-in-`). Verified on 2026-04-19 by reading the homepage type-selector `<select>` options. The scraper wires `wg` → `0` and `flat` → `2`; the per-listing detail-page DOM is identical across categories, so `parse_listing_page` doesn't dispatch on kind. Source code: `_CATEGORY_SLUG` table + `build_search_url(category_id=…)` in [`browser.py`](../backend/app/wg_agent/browser.py); `_KIND_TO_CATEGORY_ID` in [`wg_gesucht.py`](../backend/app/scraper/sources/wg_gesucht.py).
 - `<rentType>` — **`1`** (unlimited), `2` (temporary), `3` (overnight). We default to `1` (`unbefristet`).
 - `<page>` — 0-indexed pagination (so page `0` = first page).
 
@@ -195,7 +195,7 @@ Source code: `parse_listing_page` and `_parse_map_lat_lng` in [`../backend/app/w
 | `lat`, `lng` | — | `_parse_map_lat_lng` reads the first marker out of the embedded `var map_config = { ... markers: [{"lat":…,"lng":…}] }` block. Falls back to `geocoder.geocode(address or "<district>, <city>")` only when the map block is absent or unparseable. |
 | `online_viewing` | substring `"Online-Besichtigung"` in card text | — |
 | `photo_urls`, `cover_photo_url` | — | `_parse_photo_urls` walks `og:image`, `[data-full-image]`, `img[data-src/data-lazy/src]`, `source[srcset]`; filters out logos/avatars/icons/placeholder gallery elements; capped at 12. `cover_photo_url = photo_urls[0]`. |
-| `posted_at` (transient — used by `ScraperAgent._is_stale`) | `parse_search_page` finds the first `<span>` text matching `^\s*Online\s*:` inside the card, strips the `Online:` prefix, then `_parse_wgg_online_value` returns either `now - <n*unit>` for the relative form (`Online: 25 Minuten`, `Online: 1 Stunde`, `Online: 2 Tage`) or `datetime(y, m, d)` for the absolute form (`Online: 12.03.2026`). The regex is **anchored at the start of the string** so it doesn't catch `Online-Besichtigung` (the unrelated online-viewing flag). The relative form fires for ads <24h old; the absolute form (`dd.mm.yyyy`) takes over from ≥24h. With `sort_column=0&sort_order=0` (set unconditionally by `build_search_url`), results are strictly newest-first and the agent uses the per-stub freshness stop in `_run_source` to halt pagination on the first stale stub. | `<b>` next to `<span class="section_panel_detail">Online:</span>` inside a `div.row` — currently unused by the parser since the search-card value is always populated. |
+| `posted_at` (transient — used by `ScraperAgent._is_stale`) | `parse_search_page` finds the first `<span>` text matching `^\s*Online\s*:` inside the card, strips the `Online:` prefix, then `_parse_wgg_online_value` returns either `now - <n*unit>` for the relative form (`Online: 25 Minuten`, `Online: 1 Stunde`, `Online: 2 Tage`) or `datetime(y, m, d)` for the absolute form (`Online: 12.03.2026`). The regex is **anchored at the start of the string** so it doesn't catch `Online-Besichtigung` (the unrelated online-viewing flag). The relative form fires for ads <24h old; the absolute form (`dd.mm.yyyy`) takes over from ≥24h. With `sort_column=0&sort_order=0` (set unconditionally by `build_search_url`), results are newest-first; stale stubs cluster at the tail and the agent drops them without persisting (skip-and-continue, ADR-027) until either the page cap (`SCRAPER_MAX_PAGES`, default 6) is reached or pagination ends naturally. | `<b>` next to `<span class="section_panel_detail">Online:</span>` inside a `div.row` — currently unused by the parser since the search-card value is always populated. |
 
 Fields on the `Listing` domain model that this source **never** populates (filled later by the matcher per user, not by the scraper): `score`, `score_reason`, `match_reasons`, `mismatch_reasons`, `components`, `veto_reason`, `best_commute_minutes`.
 
@@ -693,7 +693,7 @@ What was actually observed:
 
 **HTML-parser gotcha (Python 3.14):** Kleinanzeigen ships an unterminated numeric character reference `&#8203` (zero-width space, no trailing `;`). bs4's bundled `html.parser` raises `ValueError: invalid literal for int() with base 10` on it. Pre-process raw HTML with `re.sub(r"&#(\d+)(?![\d;])", r"&#\1;", html)` before feeding to BeautifulSoup. The recipe at the bottom of this section shows the fix.
 
-**Pagination:** Kleinanzeigen uses a `/seite:<N>` path segment inserted **before** the `sortierung:neuste/c<cat>l<loc>` token, e.g. `https://www.kleinanzeigen.de/s-auf-zeit-wg/muenchen/seite:2/sortierung:neuste/c199l6411`. **Robots.txt cap:** `Disallow: /*/seite:6*` through `/*/seite:59*` — pages 1-5 are crawl-allowed, pages 6+ are not. The plugin no longer enforces a `max_pages` ceiling itself; pagination continues until either (a) the page contains zero `article.aditem` cards, (b) the response trips `looks_like_block_page`, or (c) the agent decides to stop because a stub's `posted_at` (revealed by `scrape_detail`, since Kleinanzeigen doesn't expose dates on the search card) is older than `SCRAPER_MAX_AGE_DAYS`. With `sortierung:neuste` the first stale detail means everything after it is also stale, so the agent halts that `(source, kind)` walk immediately. The 5-page robots cap is therefore a **soft natural ceiling** rather than a hard one: in practice the freshness gate fires well before page 5 in Munich, and reaching page 5 means the next page would be 6 (disallowed) at which point we'd stop on the empty-page condition.
+**Pagination:** Kleinanzeigen uses a `/seite:<N>` path segment inserted **before** the `sortierung:neuste/c<cat>l<loc>` token, e.g. `https://www.kleinanzeigen.de/s-auf-zeit-wg/muenchen/seite:2/sortierung:neuste/c199l6411`. **Robots.txt cap:** `Disallow: /*/seite:6*` through `/*/seite:59*` — pages 1-5 are crawl-allowed, pages 6+ are not. The plugin doesn't enforce its own ceiling; the agent enforces `SCRAPER_MAX_PAGES` (default 6) and additionally pagination terminates when (a) the page contains zero `article.aditem` cards or (b) the response trips `looks_like_block_page`. Stale stubs (revealed by `scrape_detail`, since Kleinanzeigen doesn't expose posting dates on the search card) are dropped without persisting and the walk continues — one detail fetch per stale ad is the price of the date being detail-only. With `SCRAPER_MAX_PAGES=6` the agent walks `seite:1` through `seite:6`; `seite:6` falls inside the robots cap. We accept this trade-off for the same reason as `sortierung:neuste` (operator-opted-in via `SCRAPER_ENABLED_SOURCES`), and in practice the page count rarely matters because freshness-driven thinning leaves few stubs after a couple of pages.
 
 ### How to read one listing (kleinanzeigen detail)
 
@@ -946,7 +946,8 @@ The agent listens for these env knobs:
 - `SCRAPER_INTERVAL_SECONDS` — between full passes. Default `300`.
 - `SCRAPER_REFRESH_HOURS` — re-scrape threshold for full listings. Default `24`.
 - `SCRAPER_KIND` — restrict which verticals the agent iterates. One of `wg`, `flat`, `both`. Default `both`.
-- `SCRAPER_MAX_AGE_DAYS` — drives the per-stub pagination stop. Default `4`. Source URLs request newest-first; the moment a stub's posting date is older than the cutoff the agent stops the `(source, kind)` walk. There is no `SCRAPER_MAX_PAGES` knob.
+- `SCRAPER_MAX_AGE_DAYS` — drop listings whose posting date is older than this. Default `4`. Stale stubs are skipped without persisting and the walk continues with the next stub (ADR-027). For sources whose stub lacks `posted_at` (kleinanzeigen — date is detail-only) the same drop fires post-`scrape_detail`, costing one detail fetch per stale ad.
+- `SCRAPER_MAX_PAGES` — hard cap on pages walked per `(source, kind)` per pass. Default `6`. The cap is per `(source, kind)` rather than per source, so a source that supports both verticals can do up to `2 × SCRAPER_MAX_PAGES` pages per pass.
 - `SCRAPER_ENRICH_ENABLED` / `SCRAPER_ENRICH_MODEL` / `SCRAPER_ENRICH_MIN_DESC_CHARS` — optional LLM enrichment of missing structured fields (`furnished`, `wg_size`, …) when the description states them clearly. Default off (`false` / `gpt-4o-mini` / `200`); requires `OPENAI_API_KEY`. Coordinates remain on the deterministic Google Geocoding fallback path. See [DECISIONS.md ADR-025](./DECISIONS.md#adr-025-llm-driven-enrichment-of-missing-structured-fields).
 
 ## Migration verification
@@ -964,5 +965,5 @@ After running [`migrate_multi_source.py`](../backend/app/scraper/migrate_multi_s
 - [BACKEND.md "Agent loop"](./BACKEND.md#agent-loop) — end-to-end sequence diagrams for one scraper pass and one match pass.
 - [DATA_MODEL.md](./DATA_MODEL.md) — `ListingRow` columns + the three-layer rule.
 - [DECISIONS.md ADR-018](./DECISIONS.md#adr-018-separate-scraper-container--global-listingrow-mysql-only), [ADR-020](./DECISIONS.md#adr-020-multi-source-listing-identifiers-via-string-namespacing), [ADR-021](./DECISIONS.md#adr-021-listing-kind-as-a-first-class-column) — the relevant ADRs.
-- [ROADMAP.md](./ROADMAP.md) — queued: wg-gesucht flat-vertical scraping, deterministic pre-filter on search results.
+- [ROADMAP.md](./ROADMAP.md) — queued: deterministic pre-filter on search results.
 - [context/TUM_SYSTEMS.md](../context/TUM_SYSTEMS.md) — broader TUM API + scraping notes.

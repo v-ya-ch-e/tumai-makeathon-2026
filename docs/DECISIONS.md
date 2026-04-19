@@ -463,3 +463,35 @@ The deletion sweep also wasn't earning its complexity: matched-listing rows are 
 - **Soft refresh of stale rows.** A listing that disappears from a source is no longer marked `'deleted'` and no longer filtered out at read time. It just stops getting refreshed (`_needs_scrape` keeps returning `False` because the stale row is still `scrape_status='full'` and within `SCRAPER_REFRESH_HOURS` of the last successful scrape — eventually that window expires and the next pass would re-attempt the URL, returning a 404 / removed-listing page → `scrape_status='failed'`). The UI keeps showing the last known data with the original `scraped_at`. For the hackathon this is fine; if production ever needs a hard "this listing is gone" signal, the right place to add it is a small `mark_failed_listings_unavailable` job that runs against `scrape_status='failed'` rows older than some cutoff, completely decoupled from the search-result diffing that was the original sweep's bug source.
 
 **Introduced in:** this commit
+
+---
+
+## ADR-027: Cap pagination and drop stale stubs without halting the walk
+
+- **Date:** 2026-04-19
+- **Status:** Accepted
+- **Refines:** [ADR-026](#adr-026-drop-the-deletion-sweep-stop-pagination-on-the-first-stale-stub) (per-stub stale stops the entire walk) and [ADR-024](#adr-024-scraper-pagination-terminates-on-first-stub-freshness-not-page-count) (no fixed page cap).
+
+**Context:** Two operational pain points emerged from running the ADR-026 design against the production pool:
+
+1. **No upper bound on pagination.** With pagination terminating only on the first stale stub, a kind walk could fetch arbitrarily many pages when a source returned a long run of fresh listings (or a parser regression returned `posted_at=None` for everything — the unknown-freshness fall-through is intentional, but it means there's no second line of defense when it fires). We want a hard cap so a single bad pass cannot run away with unbounded HTTP traffic.
+2. **Halting on first stale stub is too aggressive.** Source URLs are sorted newest-first, but the assumption "the rest of the page is also stale" doesn't survive every edge case (e.g. boosted/featured listings on wg-gesucht get pinned to the top with stale `Online:` dates, or a parser hiccup mis-stamps one stub as old). Halting the entire `(source, kind)` walk on a single bad stub silently drops the genuinely-fresh listings that follow it. The user's specific complaint motivating this ADR was wanting "6 full pages so the database fills up", with stale stubs simply dropped rather than treated as a stop signal.
+3. **Detail-revealed stale ads were being persisted before the freshness check.** ADR-026's kleinanzeigen path did `upsert_global_listing` first, then halted the walk. The row stayed in the global pool, so the matcher would still score it. We want stale detail-pages to never reach `repo.upsert_global_listing` at all.
+
+**Decision:** Replace the halt-on-stale rule with skip-and-continue, and add an explicit page cap.
+
+1. New `SCRAPER_MAX_PAGES` env var (default `6`). `ScraperAgent._run_source` walks at most `max_pages` pages per `(source, kind)` per pass; when the cap is reached the walk terminates cleanly with an info log. The cap is per `(source, kind)`, not summed, so a source supporting both verticals can do up to `2 × max_pages` pages per pass.
+2. The stub-time freshness check now **drops the stub and continues** (`continue` instead of `stop_kind = True; break`). The stale stub is never persisted; the rest of the page and the remaining pages still get walked.
+3. The post-`scrape_detail` freshness check moves into `_scrape_and_persist` and fires **before** `repo.upsert_global_listing`. Stale detail-pages return `None` from `_scrape_and_persist` without writing anything to MySQL. Kleinanzeigen still pays the detail fetch (the date is detail-only) but the row stays out of the global pool.
+4. Pagination still terminates naturally on (a) `StopAsyncIteration` from the source generator, (b) an empty page yield, (c) an HTTP error after page 0, or (d) the page cap from #1.
+5. The `cap is reached` log fires at info level so a Munich pass with `SCRAPER_MAX_PAGES=6` produces at most one extra log line per `(source, kind)` per pass.
+
+**Consequences:**
+
+- **Bounded HTTP traffic.** Worst-case per pass: `len(sources) × len(kinds_per_source) × SCRAPER_MAX_PAGES × stubs_per_page` requests. With the default config (2 sources × ~1.5 kinds × 6 pages × ~25 stubs) that's a few hundred stubs per pass before the unique-id dedup and `_needs_scrape` short-circuit cut most of them out.
+- **Wider freshness window in practice.** Skip-and-continue means a single mis-dated stub no longer cuts off the rest of the page. Pools fill faster and stale rows simply never enter the database.
+- **Kleinanzeigen pays the same per-stale-ad cost** — one detail fetch — that ADR-026 already paid; the difference is that the row now isn't persisted.
+- **Implicitly relaxes the "first stale stub means everything after is also stale" invariant** that ADR-026 leaned on for sort correctness. We no longer need to trust the source sort to be perfect; we just need it to be good enough that the page cap × age window window catches enough fresh listings to be useful.
+- **The previously "soft natural ceiling" page count for kleinanzeigen** (its `robots.txt` disallows `seite:6+`) becomes a real concern — with `SCRAPER_MAX_PAGES=6` the agent will request `seite:6`, which sits inside the disallowed range. We accept this for the same reason as the existing `sortierung:neuste` violation (operator-opted-in via `SCRAPER_ENABLED_SOURCES`); operators who care can lower `SCRAPER_MAX_PAGES` to `5`.
+
+**Introduced in:** this commit

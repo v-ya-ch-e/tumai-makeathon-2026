@@ -7,7 +7,7 @@ Post-[ADR-018](./DECISIONS.md#adr-018-separate-scraper-container--global-listing
 - The **scraper** container (see [`backend/app/scraper/`](../backend/app/scraper/)) is the sole writer of `ListingRow` and `PhotoRow`. Per [ADR-020](./DECISIONS.md#adr-020-multi-source-listing-identifiers-via-string-namespacing), it keys listings by `f"{source}:{external_id}"` (e.g. `"wg-gesucht:12345678"`, `"tum-living:cf76dd26-…"`, `"kleinanzeigen:3362398693"`) — one row per listing per source, dedup-collision-proof across sources.
 - The **backend** container writes only `UserListingRow` (per-user), `UserActionRow` (per-user), and everything user / profile / credentials related.
 
-A `UserListingRow` row is the **user ↔ listing membership record**: the frontend's matched-listings view ([`list_user_listings`](../backend/app/wg_agent/repo.py)) joins `userlistingrow JOIN listingrow`, so a listing only appears in a user's dashboard after the matcher has scored it (including `score=0.0` veto rows). Listings that disappear from a source eventually fall out of the matcher's working set via the per-stub freshness stop ([ADR-026](./DECISIONS.md#adr-026-drop-the-deletion-sweep-stop-pagination-on-the-first-stale-stub)) — the row stays in the pool with its last known `scraped_at`, but no new `UserListingRow` rows are written for it once it's outside `SCRAPER_MAX_AGE_DAYS`.
+A `UserListingRow` row is the **user ↔ listing membership record**: the frontend's matched-listings view ([`list_user_listings`](../backend/app/wg_agent/repo.py)) joins `userlistingrow JOIN listingrow`, so a listing only appears in a user's dashboard after the matcher has scored it (including `score=0.0` veto rows). Listings that disappear from a source eventually fall out of the matcher's working set via the per-stub freshness drop ([ADR-027](./DECISIONS.md#adr-027-cap-pagination-and-drop-stale-stubs-without-halting-the-walk)) — the row stays in the pool with its last known `scraped_at`, but no new `UserListingRow` rows are written for it once it's outside `SCRAPER_MAX_AGE_DAYS`.
 
 ## Entities
 
@@ -380,9 +380,10 @@ Values below are illustrative; timestamps are ISO-8601 strings as JSON would sho
 
 1. **Source dispatch** — [`ScraperAgent.run_once`](../backend/app/scraper/agent.py) iterates the registry from [`backend/app/scraper/sources/`](../backend/app/scraper/sources/) (selected by `SCRAPER_ENABLED_SOURCES`, default `wg-gesucht`). For each source, for each `kind` in the supported set ∩ `SCRAPER_KIND` (default `both`).
 2. **Search stub** — `Source.search_pages(kind=..., profile=...)` yields one batch of domain `Listing` stubs per source page, sorted newest-first by the source URL (wg-gesucht `sort_column=0&sort_order=0`; kleinanzeigen `/sortierung:neuste/`; tum-living `orderBy: MOST_RECENT`). Stubs carry the namespaced `id` and the final `kind` (immutable downstream).
-3. **Per-stub freshness stop** — Before doing any work for a stub, the agent compares `stub.posted_at` against `now - SCRAPER_MAX_AGE_DAYS`. If stale, the entire `(source, kind)` walk halts (newest-first sort guarantees the rest is also stale). Stubs without `posted_at` (kleinanzeigen — date is detail-only) skip this gate; the post-scrape variant in step 5 catches them.
-4. **Refresh gate** — `ScraperAgent._needs_scrape` skips listings whose `scrape_status == 'full'` and whose `scraped_at` is within the source's `refresh_hours` (24h for wg-gesucht / Kleinanzeigen, 48h for TUM Living).
-5. **Deep scrape + persist** — `Source.scrape_detail(stub)` fills description, address/district, photos, etc. On HTTP failure the stub is persisted with `scrape_status='failed'` and `scrape_error`. On block-page detection (each source declares its own `looks_like_block_page`), the unmodified stub is persisted with `scrape_status='stub'`. On success, `repo.upsert_global_listing` writes/merges `ListingRow` (including `kind`) with `scrape_status='full'` when description + coords are present (otherwise `'stub'`), preserving `first_seen_at` and bumping `last_seen_at` + `scraped_at`. `repo.save_photos` replaces `PhotoRow`s. Then the same per-stub freshness check runs against `enriched.posted_at` to halt the walk for kleinanzeigen.
+3. **Page cap** — Each `(source, kind)` walk is hard-capped at `SCRAPER_MAX_PAGES` (default 6) — see [ADR-027](./DECISIONS.md#adr-027-cap-pagination-and-drop-stale-stubs-without-halting-the-walk). Pagination also terminates naturally on an empty page or a block-like response.
+4. **Per-stub freshness drop** — Before doing any work for a stub, the agent compares `stub.posted_at` against `now - SCRAPER_MAX_AGE_DAYS`. If stale, the stub is dropped without persisting and the loop continues with the next stub (skip-and-continue). Stubs without `posted_at` (kleinanzeigen — date is detail-only) skip this gate; the post-scrape variant in step 6 catches them.
+5. **Refresh gate** — `ScraperAgent._needs_scrape` skips listings whose `scrape_status == 'full'` and whose `scraped_at` is within the source's `refresh_hours` (24h for wg-gesucht / Kleinanzeigen, 48h for TUM Living).
+6. **Deep scrape + persist** — `Source.scrape_detail(stub)` fills description, address/district, photos, etc. On HTTP failure the stub is persisted with `scrape_status='failed'` and `scrape_error`. On block-page detection (each source declares its own `looks_like_block_page`), the unmodified stub is persisted with `scrape_status='stub'`. After `scrape_detail` returns, the per-stub freshness check fires again against `enriched.posted_at` (catches kleinanzeigen ads whose date only appeared on the detail page) — stale ads are dropped without persisting. On a fresh detail, `repo.upsert_global_listing` writes/merges `ListingRow` (including `kind`) with `scrape_status='full'` when description + coords are present (otherwise `'stub'`), preserving `first_seen_at` and bumping `last_seen_at` + `scraped_at`. `repo.save_photos` replaces `PhotoRow`s.
 
 **Backend container, per user** (matcher, writes only `UserListingRow` + `UserActionRow`):
 
@@ -401,17 +402,18 @@ sequenceDiagram
   participant Brain as brain.vibe_score
   participant DB as MySQL
 
-  loop per source × per kind in (kind_supported ∩ SCRAPER_KIND)
+  loop per source × per kind in (kind_supported ∩ SCRAPER_KIND), up to SCRAPER_MAX_PAGES
     SA->>SRC: search_pages(kind, profile)
     SRC-->>SA: Listing stubs page (newest-first, namespaced id + kind)
     alt stub.posted_at older than SCRAPER_MAX_AGE_DAYS
-      SA->>SA: stop (source, kind) walk
+      SA->>SA: drop stub, continue with next stub
     else fresh
       SA->>SRC: scrape_detail(stub)
       SRC-->>SA: enriched Listing
-      SA->>DB: upsert_global_listing (ListingRow, status=full) + save_photos (PhotoRow)
-      opt enriched.posted_at older than SCRAPER_MAX_AGE_DAYS (kleinanzeigen)
-        SA->>SA: stop (source, kind) walk
+      alt enriched.posted_at older than SCRAPER_MAX_AGE_DAYS (kleinanzeigen)
+        SA->>SA: drop, do not persist, continue
+      else
+        SA->>DB: upsert_global_listing (ListingRow, status=full) + save_photos (PhotoRow)
       end
     end
   end

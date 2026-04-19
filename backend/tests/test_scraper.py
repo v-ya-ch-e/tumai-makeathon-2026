@@ -1,12 +1,12 @@
 """ScraperAgent tests (in-memory DB, fake Source plugin).
 
-Post-freshness-pagination refactor: `ScraperAgent` consumes `Source`
-plugins from `app/scraper/sources/`. Plugins now expose `search_pages`
-as an async iterator (one yield per source page); the agent decides
-when to stop based on per-page first-stub freshness instead of a fixed
-`max_pages`. These tests drive the agent through `_FakeSource`
-fixtures rather than the real wg-gesucht network seam, so the per-page
-control flow can be exercised without hitting `httpx`.
+`ScraperAgent` consumes `Source` plugins from `app/scraper/sources/`.
+Plugins expose `search_pages` as an async iterator (one yield per source
+page); the agent walks up to `SCRAPER_MAX_PAGES` per `(source, kind)`
+and drops stale stubs without persisting (skip-and-continue, ADR-027).
+These tests drive the agent through `_FakeSource` fixtures rather than
+the real wg-gesucht network seam, so the per-page control flow can be
+exercised without hitting `httpx`.
 """
 
 from __future__ import annotations
@@ -142,12 +142,15 @@ def _agent(
     *,
     sources: list[_FakeSource],
     max_age_days: Optional[int] = None,
+    max_pages: Optional[int] = None,
     enrich_enabled: bool = False,
     enrich_min_desc_chars: int = 200,
     kind_filter: str = "both",
 ) -> ScraperAgent:
     if max_age_days is not None:
         os.environ["SCRAPER_MAX_AGE_DAYS"] = str(max_age_days)
+    if max_pages is not None:
+        os.environ["SCRAPER_MAX_PAGES"] = str(max_pages)
     return ScraperAgent(
         city="München",
         max_rent_eur=2000,
@@ -266,48 +269,52 @@ def test_scraper_refreshes_stale_listings(monkeypatch) -> None:
     assert fake.detail_calls == ["wg-gesucht:stale"]
 
 
-# --- Per-stub freshness stop (sources are now sorted newest-first) ---------
+# --- Per-stub freshness drop (skip-and-continue, ADR-027) ------------------
 
 
-def test_pagination_stops_at_first_stale_stub(monkeypatch) -> None:
-    """Stubs are sorted newest-first by the source URL. The first stale
-    stub stops the rest of the `(source, kind)` walk; the fresh tail
-    after it on the same page is also dropped."""
+def test_skips_stale_stubs_and_continues(monkeypatch) -> None:
+    """Stale stubs are dropped without persisting; the loop keeps
+    walking the rest of the page and remaining pages (up to the
+    `SCRAPER_MAX_PAGES` cap). No detail fetch is made for stale stubs."""
     engine = _make_engine()
     monkeypatch.setattr(db_module, "engine", engine)
 
     p0 = [
         _stub_listing("wg-gesucht:p0a", posted_at=_fresh()),
-        _stub_listing("wg-gesucht:p0b", posted_at=_fresh()),
-        _stub_listing("wg-gesucht:p0c", posted_at=_stale()),  # stops here
-        _stub_listing("wg-gesucht:p0d", posted_at=_fresh()),  # never reached
+        _stub_listing("wg-gesucht:p0b", posted_at=_stale()),  # dropped
+        _stub_listing("wg-gesucht:p0c", posted_at=_fresh()),  # still scraped
+        _stub_listing("wg-gesucht:p0d", posted_at=_stale()),  # dropped
     ]
-    p1 = [_stub_listing("wg-gesucht:p1a", posted_at=_fresh())]  # never reached
+    p1 = [_stub_listing("wg-gesucht:p1a", posted_at=_fresh())]
     fake = _FakeSource(pages=[p0, p1])
 
     scraped = asyncio.run(_agent(sources=[fake]).run_once())
 
-    assert scraped == 2
-    assert set(fake.detail_calls) == {"wg-gesucht:p0a", "wg-gesucht:p0b"}
+    assert scraped == 3
+    assert set(fake.detail_calls) == {
+        "wg-gesucht:p0a",
+        "wg-gesucht:p0c",
+        "wg-gesucht:p1a",
+    }
     with Session(engine) as session:
-        for lid in ("wg-gesucht:p0a", "wg-gesucht:p0b"):
+        for lid in ("wg-gesucht:p0a", "wg-gesucht:p0c", "wg-gesucht:p1a"):
             assert session.get(ListingRow, lid) is not None, lid
-        for lid in ("wg-gesucht:p0c", "wg-gesucht:p0d", "wg-gesucht:p1a"):
+        for lid in ("wg-gesucht:p0b", "wg-gesucht:p0d"):
             assert session.get(ListingRow, lid) is None, lid
 
 
-def test_kleinanzeigen_stops_after_first_stale_detail(monkeypatch) -> None:
+def test_kleinanzeigen_drops_stale_detail_and_continues(monkeypatch) -> None:
     """Kleinanzeigen stubs lack `posted_at`. The agent only learns the
-    date after `scrape_detail`; the first stale detail persists the
-    listing then stops the walk so the rest of the (newest-first
-    sorted) results aren't even fetched."""
+    date after `scrape_detail`; a stale detail is dropped without
+    persisting and the walk continues (the cost of one detail fetch
+    per stale ad is the price of the date being detail-only)."""
     engine = _make_engine()
     monkeypatch.setattr(db_module, "engine", engine)
 
     page = [
         _stub_listing("kleinanzeigen:a"),
-        _stub_listing("kleinanzeigen:b"),  # first stale → stops here
-        _stub_listing("kleinanzeigen:c"),  # never reached
+        _stub_listing("kleinanzeigen:b"),  # detail reveals stale → dropped
+        _stub_listing("kleinanzeigen:c"),
     ]
 
     async def detail(stub: Listing) -> Listing:
@@ -320,13 +327,21 @@ def test_kleinanzeigen_stops_after_first_stale_detail(monkeypatch) -> None:
     scraped = asyncio.run(_agent(sources=[fake]).run_once())
 
     assert scraped == 2
-    assert fake.detail_calls == ["kleinanzeigen:a", "kleinanzeigen:b"]
+    assert fake.detail_calls == [
+        "kleinanzeigen:a",
+        "kleinanzeigen:b",
+        "kleinanzeigen:c",
+    ]
+    with Session(engine) as session:
+        for lid in ("kleinanzeigen:a", "kleinanzeigen:c"):
+            assert session.get(ListingRow, lid) is not None, lid
+        assert session.get(ListingRow, "kleinanzeigen:b") is None
 
 
 def test_unknown_freshness_keeps_paginating(monkeypatch) -> None:
     """If neither the stub nor the detail set `posted_at`, the agent
-    must keep going — better to over-scrape than to silently halt on a
-    parser regression."""
+    must keep going — better to over-scrape than to silently drop
+    everything on a parser regression."""
     engine = _make_engine()
     monkeypatch.setattr(db_module, "engine", engine)
 
@@ -344,6 +359,67 @@ def test_unknown_freshness_keeps_paginating(monkeypatch) -> None:
 
     assert scraped == 2
     assert fake.pages_yielded == 2
+
+
+# --- Page cap (`SCRAPER_MAX_PAGES`) ----------------------------------------
+
+
+def test_max_pages_caps_per_source_kind(monkeypatch) -> None:
+    """The agent walks at most `max_pages` pages per (source, kind).
+    Pages past the cap are not requested, regardless of freshness."""
+    engine = _make_engine()
+    monkeypatch.setattr(db_module, "engine", engine)
+
+    pages = [
+        [_stub_listing(f"wg-gesucht:p{i}", posted_at=_fresh())]
+        for i in range(8)
+    ]
+    fake = _FakeSource(pages=pages)
+
+    scraped = asyncio.run(_agent(sources=[fake], max_pages=3).run_once())
+
+    assert scraped == 3
+    assert fake.pages_yielded == 3
+    assert fake.detail_calls == [
+        "wg-gesucht:p0",
+        "wg-gesucht:p1",
+        "wg-gesucht:p2",
+    ]
+
+
+def test_max_pages_applies_independently_per_kind(monkeypatch) -> None:
+    """Cap is per (source, kind), not summed across kinds — a 3-page
+    cap with two kinds yields up to 6 pages of work for the source."""
+    engine = _make_engine()
+    monkeypatch.setattr(db_module, "engine", engine)
+
+    yielded: dict[str, int] = {}
+
+    class _PerKindCounter(_FakeSource):
+        async def search_pages(self, *, kind, profile):  # noqa: ARG002
+            self.search_pages_calls += 1
+            for i in range(8):
+                yielded[kind] = yielded.get(kind, 0) + 1
+                yield [
+                    _stub_listing(
+                        f"kleinanzeigen:{kind}-p{i}",
+                        posted_at=_fresh(),
+                    )
+                ]
+
+    fake = _PerKindCounter(
+        name="kleinanzeigen",
+        kind_supported=frozenset({"wg", "flat"}),
+    )
+    scraped = asyncio.run(_agent(sources=[fake], max_pages=3).run_once())
+
+    # Two kinds × 3 pages × 1 stub per page = 6.
+    assert scraped == 6
+    # Each generator yields page #N just before the agent loop checks
+    # `page_index < max_pages`. So with max_pages=3 the count is 3 per
+    # kind (page 0, 1, 2 are all yielded; page 3 never gets yielded
+    # because the agent never calls __anext__ a fourth time).
+    assert yielded == {"wg": 3, "flat": 3}
 
 
 # --- SCRAPER_KIND filter ----------------------------------------------------
