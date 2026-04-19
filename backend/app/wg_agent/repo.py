@@ -17,8 +17,10 @@ from . import crypto
 from .db_models import (
     ListingRow,
     PhotoRow,
+    ScraperEventRow,
     SearchProfileRow,
     UserActionRow,
+    UserAgentStateRow,
     UserListingRow,
     UserRow,
     WgCredentialsRow,
@@ -415,6 +417,87 @@ def list_usernames_with_search_profile(session: Session) -> list[str]:
     return [row for row in rows]
 
 
+def set_user_agent_paused(session: Session, *, username: str, paused: bool) -> None:
+    """Persist the user's explicit pause/resume decision.
+
+    Upserts a `UserAgentStateRow`. Called by `POST /agent/pause` (paused=True)
+    and `POST /agent/start` (paused=False). A missing row is treated as
+    `paused=False` everywhere this flag is read, so calling this only on
+    explicit stop/resume keeps the row absent for the common "never touched"
+    case.
+    """
+    row = session.get(UserAgentStateRow, username)
+    now = datetime.utcnow()
+    if row is None:
+        session.add(
+            UserAgentStateRow(username=username, paused=paused, updated_at=now)
+        )
+    else:
+        row.paused = paused
+        row.updated_at = now
+    session.commit()
+
+
+def is_user_agent_paused(session: Session, *, username: str) -> bool:
+    """True iff the user has explicitly stopped their agent (persisted flag)."""
+    row = session.get(UserAgentStateRow, username)
+    return bool(row and row.paused)
+
+
+def list_usernames_to_resume_on_boot(session: Session) -> list[str]:
+    """Usernames whose matcher should auto-start when the backend boots.
+
+    = users with a search profile, minus users whose persisted
+    `UserAgentStateRow.paused` is True. A user who pressed "Stop" stays
+    stopped across backend restarts until they press "Resume".
+    """
+    sp_usernames = session.exec(select(SearchProfileRow.username)).all()
+    paused_usernames = set(
+        session.exec(
+            select(UserAgentStateRow.username).where(UserAgentStateRow.paused == True)  # noqa: E712
+        ).all()
+    )
+    return [u for u in sp_usernames if u not in paused_usernames]
+
+
+def insert_scraper_event(
+    session: Session, *, listing_id: str, kind: str = "new_listing"
+) -> None:
+    """Append one event to the scraper outbox (scraper only)."""
+    session.add(
+        ScraperEventRow(
+            listing_id=listing_id,
+            kind=kind,
+            created_at=datetime.utcnow(),
+        )
+    )
+    session.commit()
+
+
+def list_scraper_events_after(
+    session: Session, *, after_id: int, limit: int = 500
+) -> list[ScraperEventRow]:
+    """Id-ordered tail of the outbox; the watcher calls this with its watermark."""
+    stmt = (
+        select(ScraperEventRow)
+        .where(ScraperEventRow.id > after_id)
+        .order_by(ScraperEventRow.id)
+        .limit(limit)
+    )
+    return list(session.exec(stmt).all())
+
+
+def max_scraper_event_id(session: Session) -> int:
+    """Highest outbox id; the watcher uses this as its boot-time watermark."""
+    from sqlalchemy import func
+
+    stmt = select(func.max(ScraperEventRow.id))
+    value = session.exec(stmt).first()
+    if value is None:
+        return 0
+    return int(value)
+
+
 def row_to_domain_listing(row: ListingRow) -> Listing:
     """Rehydrate a global `ListingRow` into a domain `Listing` without a score.
 
@@ -493,6 +576,7 @@ def _listing_from_row(
         smoking_ok=row.smoking_ok,
         cover_photo_url=cover_photo_url,
         best_commute_minutes=_best_commute_minutes(match_row),
+        first_seen_at=row.first_seen_at,
         score=score,
         score_reason=reason,
         match_reasons=match_reasons,

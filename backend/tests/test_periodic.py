@@ -42,6 +42,7 @@ from app.wg_agent.periodic import (  # noqa: E402
     _ACTIVE_AGENTS,
     _NOTIFY_STATE,
     _SUBSCRIBERS,
+    resume_user_agents,
     subscribe,
     unsubscribe,
 )
@@ -400,9 +401,11 @@ def test_commute_times_reach_evaluator_and_persist(monkeypatch) -> None:
     with Session(engine) as session:
         match_row = session.get(UserListingRow, ("u3", "lst1"))
     assert match_row is not None
-    assert match_row.travel_minutes == {
-        "ChIJ_TUM": {"mode": "TRANSIT", "minutes": 18}
-    }
+    # Per-location map now carries every computed mode side-by-side
+    # ({mode_lower: minutes}) so the drawer can show transit/bike/drive next
+    # to each other; the old single-mode shape is only kept around for
+    # backward-compat reads in api._travel_minutes_by_label.
+    assert match_row.travel_minutes == {"ChIJ_TUM": {"transit": 18}}
     # The matcher stamps scored_against_scraped_at with the listing's scraped_at.
     assert match_row.scored_against_scraped_at is not None
 
@@ -581,6 +584,10 @@ def test_new_listings_trigger_single_batched_email(monkeypatch) -> None:
     one digest email containing every queued listing."""
     engine = _make_engine()
     monkeypatch.setattr(db_module, "engine", engine)
+    # Disable the freshness window so the fixed 2024-06-01 `first_seen_at`
+    # below is not rejected as stale. The freshness-window gate has its own
+    # dedicated tests.
+    monkeypatch.setenv("WG_NOTIFY_FRESH_WINDOW_MINUTES", "0")
     _reset_notify_state("u-new")
 
     async def evaluate_stub(
@@ -639,6 +646,7 @@ def test_cooldown_suppresses_second_email_and_releases_after(monkeypatch) -> Non
     engine = _make_engine()
     monkeypatch.setattr(db_module, "engine", engine)
     monkeypatch.setenv("WG_NOTIFY_COOLDOWN_MINUTES", "5")
+    monkeypatch.setenv("WG_NOTIFY_FRESH_WINDOW_MINUTES", "0")
     _reset_notify_state("u-cool")
 
     async def evaluate_stub(
@@ -697,3 +705,259 @@ def test_cooldown_suppresses_second_email_and_releases_after(monkeypatch) -> Non
         assert len(items) == 1
         assert items[0].listing_url.endswith("c2.html")
         assert _NOTIFY_STATE["u-cool"].pending == []
+
+
+def test_stale_listing_outside_fresh_window_is_not_emailed(monkeypatch) -> None:
+    """A listing first-seen before `WG_NOTIFY_FRESH_WINDOW_MINUTES` ago must
+    not produce an email, even if every other gate passes.
+
+    Guards "pay more attention to how new the listing is": backlog scored
+    long after it was posted should stay out of the inbox.
+    """
+    engine = _make_engine()
+    monkeypatch.setattr(db_module, "engine", engine)
+    monkeypatch.setenv("WG_NOTIFY_FRESH_WINDOW_MINUTES", "60")
+    _reset_notify_state("u-stale")
+
+    async def evaluate_stub(
+        _lst: Listing, _sp: SearchProfile, *, travel_times=None, nearby_places=None
+    ) -> EvaluationResult:
+        return _stub_result(0.95)
+
+    now = datetime.utcnow()
+    with Session(engine) as session:
+        _seed_user(
+            session,
+            "u-stale",
+            SearchProfile(
+                city="München",
+                max_rent_eur=900,
+                rescan_interval_minutes=30,
+                schedule="one_shot",
+            ),
+            email="u-stale@example.com",
+        )
+        _set_user_created_at(session, "u-stale", now - timedelta(days=7))
+        _seed_listings(session, ("old",))
+        # First seen AFTER signup but outside the 60-minute window.
+        _set_listing_first_seen_at(session, "old", now - timedelta(hours=3))
+
+    agent = UserAgent("u-stale")
+
+    with (
+        patch(
+            "app.wg_agent.periodic.evaluator.evaluate",
+            new=AsyncMock(side_effect=evaluate_stub),
+        ),
+        patch(
+            "app.wg_agent.periodic.notifier.send_digest_email",
+            return_value=True,
+        ) as mocked_send,
+    ):
+        asyncio.run(agent.run_match_pass())
+
+    mocked_send.assert_not_called()
+    assert _NOTIFY_STATE.get("u-stale") is None or not _NOTIFY_STATE["u-stale"].pending
+
+
+def test_fresh_listing_inside_window_is_emailed(monkeypatch) -> None:
+    """A listing first-seen inside `WG_NOTIFY_FRESH_WINDOW_MINUTES` flushes
+    on the first pass that scores it (companion to the stale-window test)."""
+    engine = _make_engine()
+    monkeypatch.setattr(db_module, "engine", engine)
+    monkeypatch.setenv("WG_NOTIFY_FRESH_WINDOW_MINUTES", "60")
+    _reset_notify_state("u-fresh")
+
+    async def evaluate_stub(
+        _lst: Listing, _sp: SearchProfile, *, travel_times=None, nearby_places=None
+    ) -> EvaluationResult:
+        return _stub_result(0.95)
+
+    now = datetime.utcnow()
+    with Session(engine) as session:
+        _seed_user(
+            session,
+            "u-fresh",
+            SearchProfile(
+                city="München",
+                max_rent_eur=900,
+                rescan_interval_minutes=30,
+                schedule="one_shot",
+            ),
+            email="u-fresh@example.com",
+        )
+        _set_user_created_at(session, "u-fresh", now - timedelta(days=7))
+        _seed_listings(session, ("fresh",))
+        _set_listing_first_seen_at(session, "fresh", now - timedelta(minutes=5))
+
+    agent = UserAgent("u-fresh")
+
+    with (
+        patch(
+            "app.wg_agent.periodic.evaluator.evaluate",
+            new=AsyncMock(side_effect=evaluate_stub),
+        ),
+        patch(
+            "app.wg_agent.periodic.notifier.send_digest_email",
+            return_value=True,
+        ) as mocked_send,
+    ):
+        asyncio.run(agent.run_match_pass())
+
+    assert mocked_send.call_count == 1
+    items = list(mocked_send.call_args.kwargs["items"])
+    assert [i.listing_id for i in items] == ["fresh"]
+
+
+def test_digest_never_queues_the_same_listing_twice(monkeypatch) -> None:
+    """Once a listing is in the pending buffer or has already been emailed,
+    a second call to `_maybe_queue_digest_item` for the same listing is a
+    no-op. Defends against the matcher re-entering the queue path for a
+    listing that is mid-flight in a held (cooldown) digest.
+    """
+    engine = _make_engine()
+    monkeypatch.setattr(db_module, "engine", engine)
+    monkeypatch.setenv("WG_NOTIFY_FRESH_WINDOW_MINUTES", "0")
+    _reset_notify_state("u-dedup")
+
+    now = datetime.utcnow()
+    with Session(engine) as session:
+        _seed_user(
+            session,
+            "u-dedup",
+            SearchProfile(
+                city="München",
+                max_rent_eur=900,
+                rescan_interval_minutes=30,
+                schedule="one_shot",
+            ),
+            email="u-dedup@example.com",
+        )
+        _set_user_created_at(session, "u-dedup", now - timedelta(days=7))
+        _seed_listings(session, ("dup",))
+        _set_listing_first_seen_at(session, "dup", now - timedelta(minutes=1))
+        row = session.get(ListingRow, "dup")
+        assert row is not None
+
+    agent = UserAgent("u-dedup")
+    listing = Listing(
+        id="dup",
+        url=HttpUrl("https://www.wg-gesucht.de/dup.html"),
+        title="Dup",
+        price_eur=500,
+        description="d",
+        score=0.95,
+        match_reasons=[],
+    )
+
+    def queue_once() -> None:
+        with Session(engine) as s:
+            r = s.get(ListingRow, "dup")
+            assert r is not None
+            agent._maybe_queue_digest_item(
+                row=r,
+                listing=listing,
+                user_email="u-dedup@example.com",
+                user_created_at=now - timedelta(days=7),
+            )
+
+    # Two back-to-back queue calls with pending not yet flushed.
+    queue_once()
+    queue_once()
+    assert [i.listing_id for i in _NOTIFY_STATE["u-dedup"].pending] == ["dup"]
+
+    # Flush succeeds, emailed_ids now tracks "dup".
+    with patch(
+        "app.wg_agent.periodic.notifier.send_digest_email",
+        return_value=True,
+    ) as mocked_send:
+        from app.wg_agent.periodic import _try_flush_digest
+
+        assert _try_flush_digest("u-dedup", "u-dedup@example.com") == 1
+        mocked_send.assert_called_once()
+
+    assert _NOTIFY_STATE["u-dedup"].emailed_ids == {"dup"}
+    assert _NOTIFY_STATE["u-dedup"].pending == []
+
+    # A third queue attempt after the flush must not re-queue.
+    queue_once()
+    assert _NOTIFY_STATE["u-dedup"].pending == []
+
+
+# --- Persisted agent pause state ---------------------------------------------
+
+
+def test_resume_user_agents_skips_paused_users(monkeypatch) -> None:
+    """A user with `UserAgentStateRow.paused=True` must NOT get an auto-spawned
+    matcher on backend boot. Regression for the "Stop should survive a restart
+    until the user presses Resume" requirement.
+    """
+    engine = _make_engine()
+    monkeypatch.setattr(db_module, "engine", engine)
+
+    with Session(engine) as session:
+        _seed_user(
+            session,
+            "u-paused",
+            SearchProfile(
+                city="München",
+                max_rent_eur=900,
+                rescan_interval_minutes=30,
+                schedule="one_shot",
+            ),
+        )
+        _seed_user(
+            session,
+            "u-running",
+            SearchProfile(
+                city="München",
+                max_rent_eur=900,
+                rescan_interval_minutes=30,
+                schedule="one_shot",
+            ),
+        )
+        repo.set_user_agent_paused(session, username="u-paused", paused=True)
+
+    spawned: list[str] = []
+    monkeypatch.setattr(
+        "app.wg_agent.periodic.spawn_user_agent",
+        lambda username, **kwargs: spawned.append(username),
+    )
+
+    asyncio.run(resume_user_agents())
+
+    assert "u-running" in spawned
+    assert "u-paused" not in spawned
+
+
+def test_set_user_agent_paused_roundtrip(monkeypatch) -> None:
+    """`set_user_agent_paused` + `is_user_agent_paused` round-trip both
+    true/false, including upserting over an existing row.
+    """
+    engine = _make_engine()
+    monkeypatch.setattr(db_module, "engine", engine)
+
+    with Session(engine) as session:
+        _seed_user(
+            session,
+            "u-flip",
+            SearchProfile(
+                city="München",
+                max_rent_eur=900,
+                rescan_interval_minutes=30,
+                schedule="one_shot",
+            ),
+        )
+
+    with Session(engine) as session:
+        assert repo.is_user_agent_paused(session, username="u-flip") is False
+
+    with Session(engine) as session:
+        repo.set_user_agent_paused(session, username="u-flip", paused=True)
+    with Session(engine) as session:
+        assert repo.is_user_agent_paused(session, username="u-flip") is True
+
+    with Session(engine) as session:
+        repo.set_user_agent_paused(session, username="u-flip", paused=False)
+    with Session(engine) as session:
+        assert repo.is_user_agent_paused(session, username="u-flip") is False

@@ -27,8 +27,14 @@ _NOTIFY_THRESHOLD = float(os.environ.get("WG_NOTIFY_THRESHOLD", "0.9"))
 
 @dataclass(frozen=True)
 class DigestItem:
-    """One listing entry inside a batched notification email."""
+    """One listing entry inside a batched notification email.
 
+    `listing_id` is not rendered in the email body; it exists so the matcher
+    can track which listings have already been delivered and avoid queueing
+    the same one into a later digest.
+    """
+
+    listing_id: str
     listing_title: str
     listing_url: str
     score: float

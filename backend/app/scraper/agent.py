@@ -276,12 +276,27 @@ class ScraperAgent:
 
         status = self._status_for(enriched)
         with Session(db_module.engine) as session:
+            existed_before = session.get(ListingRow, enriched.id) is not None
             repo.upsert_global_listing(session, listing=enriched, status=status)
             repo.save_photos(
                 session,
                 listing_id=enriched.id,
                 urls=list(enriched.photo_urls),
             )
+            # Outbox event: emit once, on the first time a new listing lands
+            # as `full`. Refreshes of an already-scored listing don't wake
+            # matchers (they'd find nothing new anyway).
+            if not existed_before and status == "full":
+                try:
+                    repo.insert_scraper_event(
+                        session, listing_id=enriched.id, kind="new_listing"
+                    )
+                except Exception:  # noqa: BLE001
+                    logger.exception(
+                        "[%s] failed to append scraper event for %s",
+                        source.name,
+                        enriched.id,
+                    )
         return enriched
 
     def _is_stale(self, posted_at: Optional[datetime]) -> bool:

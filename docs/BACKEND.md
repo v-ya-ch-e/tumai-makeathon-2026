@@ -34,7 +34,7 @@ backend/app/wg_agent/
   geocoder.py                    Server-side Google Geocoding client with an in-process cache; used by `browser.anonymous_scrape_listing`
   models.py                      Domain Pydantic models + enums + `CITY_CATALOGUE`
   places.py                      Google Places API client for nearby amenity distances on user preferences
-  periodic.py                    `UserAgent` matcher, `PeriodicUserMatcher` loop, per-user task registry, `spawn_user_agent` / `cancel_user_agent` / `is_agent_running` / `resume_user_agents`
+  periodic.py                    `UserAgent` matcher, `PeriodicUserMatcher` loop, per-user task registry, `spawn_user_agent` / `cancel_user_agent` / `is_agent_running` / `resume_user_agents` (skips users with persisted `UserAgentStateRow.paused=True`)
   repo.py                        Domain ↔ `*Row` conversions; narrow CRUD surface for users, per-user matches, actions, and the global listing pool
 ```
 
@@ -120,7 +120,9 @@ Narrow surface (domain in/out unless noted). Write ownership is split: the scrap
 | `list_stale_listings` | Listings whose `scraped_at < older_than` (scraper refresh input) |
 | `append_user_action` | Insert `UserActionRow` |
 | `list_actions_for_user` | Ordered `AgentAction` list (optional `limit`) |
-| `list_usernames_with_search_profile` | Every `SearchProfileRow.username`; used by `resume_user_agents` to decide which agents to respawn on boot |
+| `list_usernames_with_search_profile` | Every `SearchProfileRow.username`; internal helper, kept for tests and future use |
+| `list_usernames_to_resume_on_boot` | `SearchProfileRow.username` rows **minus** users whose `UserAgentStateRow.paused=True`; what `resume_user_agents` actually calls so a user who pressed "Stop" stays stopped across restarts |
+| `set_user_agent_paused` / `is_user_agent_paused` | Upsert / read the persisted per-user agent pause flag. Called from `POST /agent/pause` (paused=True) and `POST /agent/start` (paused=False). A missing row is treated as not-paused. |
 | `row_to_domain_listing` | Rehydrate a global `ListingRow` into a domain `Listing` without a score (matcher uses this before evaluation) |
 
 Internal helpers: `_listing_from_row`, `_components_from_row`, `_cover_photo_url`, `_best_commute_minutes`, `_kind_from_row` (safe row → domain coercion of the `kind` column), `_default_requirements`, `_user_row_to_profile`, `_parse_preference`.
@@ -132,7 +134,7 @@ Internal helpers: `_listing_from_row`, `_components_from_row`, `_cover_photo_url
 | POST | `/api/users` | Create local user (409 on duplicate username or email) | `CreateUserBody` → `UserDTO` |
 | GET | `/api/users/{username}` | Fetch user | `UserDTO` |
 | PUT | `/api/users/{username}` | Update `email` / `age` / `gender` on an existing user (username stays immutable) | `UpdateUserBody` → `UserDTO` |
-| PUT | `/api/users/{username}/search-profile` | Upsert wizard profile; side effect: spawns the per-user agent (idempotent) | `UpsertSearchProfileBody` → `SearchProfileDTO` |
+| PUT | `/api/users/{username}/search-profile` | Upsert wizard profile; side effect: spawns the per-user agent (idempotent), unless the user has an explicit `UserAgentStateRow.paused=True` (editing the profile while paused does not resume) | `UpsertSearchProfileBody` → `SearchProfileDTO` |
 | GET | `/api/users/{username}/search-profile` | Fetch profile | `SearchProfileDTO` |
 | PUT | `/api/users/{username}/credentials` | Store encrypted creds | `CredentialsBody` → 204 |
 | DELETE | `/api/users/{username}/credentials` | Remove creds | 204 |
@@ -140,8 +142,8 @@ Internal helpers: `_listing_from_row`, `_components_from_row`, `_cover_photo_url
 | GET | `/api/users/{username}/listings` | Ranked matched listings for the user | `ListingDTO[]` |
 | GET | `/api/users/{username}/actions?limit=` | Paginated action log | `ActionDTO[]` |
 | GET | `/api/users/{username}/stream` | SSE: replay the most-recent 200 persisted actions, then subscribe to the per-user broadcast channel (every active SSE connection for the same user gets every published action — fixes "matches show on only one device" when the same account is open twice). No end sentinel — continuous. | `ActionDTO` |
-| POST | `/api/users/{username}/agent/start` | Spawn / refresh the per-user agent | 204 (400 if no search profile; 404 if user missing) |
-| POST | `/api/users/{username}/agent/pause` | Cancel the per-user agent task | 204 |
+| POST | `/api/users/{username}/agent/start` | Clear the persisted pause flag (`UserAgentStateRow.paused=False`) and spawn / refresh the per-user agent. This is the "Resume" path from the dashboard. | 204 (400 if no search profile; 404 if user missing) |
+| POST | `/api/users/{username}/agent/pause` | Persist `UserAgentStateRow.paused=True`, then cancel the per-user agent task. Survives backend restarts: `resume_user_agents` skips the user until they hit "Resume". | 204 |
 | GET | `/api/users/{username}/agent` | `{ running: bool }` | inline JSON |
 | GET | `/api/listings/{listing_id}` | Drawer payload | Query `username` required → `ListingDetailDTO` |
 
@@ -346,7 +348,7 @@ sequenceDiagram
 
 ### Email digest (per-user, batched, rate-limited)
 
-While the matcher processes candidates it also calls [`UserAgent._maybe_queue_digest_item`](../backend/app/wg_agent/periodic.py) for each scored listing. An item is queued on the in-memory `_NOTIFY_STATE[username]` buffer only when **all** gates pass: the user has a notification email configured, `score >= WG_NOTIFY_THRESHOLD`, and `ListingRow.first_seen_at > UserRow.created_at`. That last gate is the single source of truth for "is this a new listing?" — it mechanically excludes every listing the scraper wrote before the account was created, so the initial post-signup scoring pass never emails, and it works identically whether the scraper runs on the server or on a developer laptop (both write the same `first_seen_at` into the shared MySQL). At the end of `run_match_pass`, [`_try_flush_digest`](../backend/app/wg_agent/periodic.py) checks `datetime.utcnow() - last_sent_at >= WG_NOTIFY_COOLDOWN_MINUTES` (default `5`): if yes, [`notifier.send_digest_email`](../backend/app/wg_agent/notifier.py) sends one SES email containing every queued item, the buffer is cleared, and `last_sent_at` is stamped; if no, the buffer is preserved and the next eligible pass flushes it. Backend restarts reset the cooldown and drop pending items — that is acceptable because the same `first_seen_at` filter requeues any still-new listing on the next pass.
+While the matcher processes candidates it also calls [`UserAgent._maybe_queue_digest_item`](../backend/app/wg_agent/periodic.py) for each scored listing. An item is queued on the in-memory `_NOTIFY_STATE[username]` buffer only when **all** gates pass: the user has a notification email configured, `score >= WG_NOTIFY_THRESHOLD`, `ListingRow.first_seen_at > UserRow.created_at`, and — when `WG_NOTIFY_FRESH_WINDOW_MINUTES` is non-zero (default `60`) — `first_seen_at >= utcnow() - window`. The signup-cutoff gate excludes the initial post-signup backlog; the freshness-window gate keeps listings first seen hours ago out of the inbox even when the matcher gets around to scoring them late. Both gates are pure DB state (`ListingRow.first_seen_at` vs `UserRow.created_at` / the wall clock) so they work identically whether the scraper runs on the server or on a developer laptop. Before appending, `_maybe_queue_digest_item` also skips any `listing_id` that is already in `pending` or in `_NotifyState.emailed_ids` — the in-process exactly-once guard. At the end of `run_match_pass`, [`_try_flush_digest`](../backend/app/wg_agent/periodic.py) checks `datetime.utcnow() - last_sent_at >= WG_NOTIFY_COOLDOWN_MINUTES` (default `30`): if yes, [`notifier.send_digest_email`](../backend/app/wg_agent/notifier.py) sends one SES email containing every queued item, the buffer is cleared, every flushed `listing_id` is added to `emailed_ids`, and `last_sent_at` is stamped; if no, the buffer is preserved and the next eligible pass flushes it. Backend restarts reset the cooldown, drop pending items, and clear `emailed_ids` — that is acceptable because `list_scorable_listings_for_user` excludes any listing with a `UserListingRow` row, so a post-restart pass cannot re-emit a listing that was already scored (and therefore potentially emailed) before the restart.
 
 ### Membership invariant
 
@@ -369,7 +371,9 @@ While the matcher processes candidates it also calls [`UserAgent._maybe_queue_di
 
 ### Resumption
 
-[`resume_user_agents`](../backend/app/wg_agent/periodic.py) queries `repo.list_usernames_with_search_profile()` using the process-global engine, then for each username re-reads `SearchProfile` (defaulting rescan to **30** minutes if missing) and calls `spawn_user_agent`. This is why per-user agents survive `uvicorn --reload` or other backend-container restarts: the durable `SearchProfileRow` existence is the source of truth, and in-memory registries (`_ACTIVE_AGENTS` plus the per-user `_SUBSCRIBERS` fan-out list populated lazily on the next SSE connection) are rebuilt on boot. The scraper container has its own simple recovery path — `run_forever` always starts fresh after a crash / restart, and its `_missing_passes` counter is in-memory only.
+[`resume_user_agents`](../backend/app/wg_agent/periodic.py) queries `repo.list_usernames_to_resume_on_boot()` using the process-global engine, then for each username re-reads `SearchProfile` (defaulting rescan to **30** minutes if missing) and calls `spawn_user_agent`. This is why per-user agents survive `uvicorn --reload` or other backend-container restarts: the durable `SearchProfileRow` existence is the source of truth, and in-memory registries (`_ACTIVE_AGENTS` plus the per-user `_SUBSCRIBERS` fan-out list populated lazily on the next SSE connection) are rebuilt on boot. The scraper container has its own simple recovery path — `run_forever` always starts fresh after a crash / restart, and its `_missing_passes` counter is in-memory only.
+
+Users who explicitly paused their agent (pressed "Stop" in the dashboard → `POST /agent/pause`) are persisted with `UserAgentStateRow.paused=True` and filtered out of `list_usernames_to_resume_on_boot`, so a backend restart does not silently revive an agent the user killed (e.g. because they already found a room). They resume only when they visit the site and press "Resume" — which hits `POST /agent/start`, clears the flag, and spawns the task. `PUT /search-profile` also respects the flag: editing the profile while paused does not re-spawn the agent, because a profile edit is not the same signal as pressing "Resume".
 
 ## Tests
 

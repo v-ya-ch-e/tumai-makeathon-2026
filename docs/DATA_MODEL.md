@@ -59,8 +59,21 @@ One-to-one requirements/preferences schedule slice persisted for the wizard. Map
 | `schedule` | `str` | `"one_shot"` or `"periodic"`. |
 | `updated_at` | `datetime` | Bumped on upsert. |
 
-- **SET**: [`repo.upsert_search_profile`](../backend/app/wg_agent/repo.py) on `PUT /api/users/{username}/search-profile` (also auto-spawns the per-user agent as a side effect).
+- **SET**: [`repo.upsert_search_profile`](../backend/app/wg_agent/repo.py) on `PUT /api/users/{username}/search-profile` (also auto-spawns the per-user agent as a side effect, unless `UserAgentStateRow.paused=True`).
 - **READ**: [`repo.get_search_profile`](../backend/app/wg_agent/repo.py) for the matcher pass, agent resumption, and `GET` search profile.
+
+### UserAgentStateRow
+
+Per-user agent lifecycle flag. Written only when the user explicitly pauses or resumes their agent from the dashboard; absence of a row is treated everywhere as "not paused" so new users never need a row.
+
+| Field | Type | Notes |
+| ----- | ---- | ----- |
+| `username` | `str` | PK + FK → `userrow.username`. |
+| `paused` | `bool` | `True` when the user pressed "Stop" (e.g. they already found a room). `resume_user_agents` skips these users on backend boot. |
+| `updated_at` | `datetime` | Bumped on every pause/resume write. |
+
+- **SET**: [`repo.set_user_agent_paused`](../backend/app/wg_agent/repo.py) from `POST /api/users/{username}/agent/pause` (paused=True, before cancel) and `POST /api/users/{username}/agent/start` (paused=False, before spawn).
+- **READ**: [`repo.is_user_agent_paused`](../backend/app/wg_agent/repo.py) by `PUT /api/users/{username}/search-profile` (skips spawn when paused), and [`repo.list_usernames_to_resume_on_boot`](../backend/app/wg_agent/repo.py) by [`periodic.resume_user_agents`](../backend/app/wg_agent/periodic.py) on boot.
 
 ### ListingRow
 
@@ -156,6 +169,7 @@ Every relationship below is declared as a SQL-level foreign key on MySQL via the
 ```mermaid
 erDiagram
   UserRow ||--o| WgCredentialsRow : "optional"
+  UserRow ||--o| UserAgentStateRow : "paused flag"
   UserRow ||--|| SearchProfileRow : "one"
   UserRow ||--o{ UserListingRow : "scored"
   UserRow ||--o{ UserActionRow : "logs"

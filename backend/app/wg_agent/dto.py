@@ -132,6 +132,7 @@ class ListingDTO(BaseModel):
     best_commute_minutes: Optional[int] = None
     best_commute_label: Optional[str] = None
     best_commute_mode: Optional[str] = None
+    first_seen_at: Optional[datetime] = None
     score: Optional[float] = None
     score_reason: Optional[str] = None
     match_reasons: list[str] = Field(default_factory=list)
@@ -338,4 +339,5 @@ def listing_to_dto(l: Listing, *, username: Optional[str] = None) -> ListingDTO:
         mismatch_reasons=[normalize_score_text(item) or "" for item in l.mismatch_reasons],
         components=[component_to_dto(c) for c in l.components],
         veto_reason=l.veto_reason,
+        first_seen_at=l.first_seen_at,
     )
