@@ -16,6 +16,7 @@ export type ListingFilters = {
   kind: ListingKindFilter
   onlyNew: boolean
   showHidden: boolean
+  showLowScore: boolean
 }
 
 export const DEFAULT_LISTING_FILTERS: ListingFilters = {
@@ -23,6 +24,16 @@ export const DEFAULT_LISTING_FILTERS: ListingFilters = {
   kind: 'all',
   onlyNew: false,
   showHidden: false,
+  showLowScore: false,
+}
+
+// Listings scoring below this threshold are hidden by default and only
+// revealed when the user toggles "Show low-score". Listings with a pending
+// (null) score are never treated as low-score.
+export const LOW_SCORE_THRESHOLD = 0.5
+
+export function isLowScore(listing: Listing): boolean {
+  return listing.score !== null && listing.score < LOW_SCORE_THRESHOLD
 }
 
 const SORT_OPTIONS: Array<{ value: ListingSort; label: string }> = [
@@ -46,6 +57,7 @@ export type ListingFilterBarProps = {
   totalCount: number
   visibleCount: number
   hiddenCount: number
+  lowScoreCount: number
 }
 
 export function ListingFilterBar({
@@ -55,6 +67,7 @@ export function ListingFilterBar({
   totalCount,
   visibleCount,
   hiddenCount,
+  lowScoreCount,
 }: ListingFilterBarProps) {
   const sortId = useId()
   const filtered = visibleCount !== totalCount
@@ -148,6 +161,23 @@ export function ListingFilterBar({
           Show hidden
           <span className="text-ink-muted">({hiddenCount})</span>
         </button>
+
+        <button
+          type="button"
+          onClick={() => onChange({ ...value, showLowScore: !value.showLowScore })}
+          aria-pressed={value.showLowScore}
+          disabled={lowScoreCount === 0 && !value.showLowScore}
+          className={clsx(
+            'inline-flex min-h-9 items-center gap-2 rounded-full border px-3 py-1.5 text-[12px] font-medium transition-colors',
+            value.showLowScore
+              ? 'border-ink bg-surface-raised text-ink'
+              : 'border-hairline bg-surface text-ink-muted hover:border-ink hover:text-ink',
+            lowScoreCount === 0 && !value.showLowScore ? 'cursor-not-allowed opacity-50' : '',
+          )}
+        >
+          {`Show <${Math.round(LOW_SCORE_THRESHOLD * 100)}%`}
+          <span className="text-ink-muted">({lowScoreCount})</span>
+        </button>
       </div>
 
       <div className="text-[12px] text-ink-muted">
@@ -196,6 +226,9 @@ export function applyListingFilters(
       return false
     }
     if (!filters.showHidden && isHidden(listing)) {
+      return false
+    }
+    if (!filters.showLowScore && isLowScore(listing)) {
       return false
     }
     return true

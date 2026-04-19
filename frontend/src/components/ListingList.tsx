@@ -100,15 +100,15 @@ export function ListingList({
             <button
               type="button"
               onClick={() => onOpen(listing)}
-              className={`grid w-full gap-4 px-5 py-5 text-left transition-colors duration-150 ease-out group-hover:bg-surface-raised sm:grid-cols-[176px_minmax(0,1fr)] ${hidden ? 'opacity-60' : ''}`}
+              className={`grid w-full gap-4 px-5 py-5 text-left transition-colors duration-150 ease-out group-hover:bg-surface-raised sm:grid-cols-[176px_minmax(0,1fr)] sm:pr-14 ${hidden ? 'opacity-60' : ''}`}
             >
               <div className="relative overflow-hidden rounded border border-hairline bg-surface-raised">
                 {fresh ? (
                   <span
-                    className="absolute left-2 top-2 z-10 inline-flex h-7 items-center gap-1.5 rounded-full bg-accent/95 px-2.5 text-[10px] font-semibold uppercase tracking-[0.14em] text-white shadow-[0_1px_3px_rgba(0,0,0,0.25)] backdrop-blur-sm"
+                    className="absolute left-2 top-2 z-10 inline-flex h-6 items-center gap-1.5 rounded-full border border-accent/25 bg-accent-muted px-2 text-[10px] font-semibold uppercase tracking-[0.14em] text-accent shadow-[0_1px_2px_rgba(0,0,0,0.08)]"
                     aria-label="New listing"
                   >
-                    <span aria-hidden className="h-1.5 w-1.5 rounded-full bg-white/95" />
+                    <span aria-hidden className="h-1.5 w-1.5 rounded-full bg-accent" />
                     New
                   </span>
                 ) : null}
@@ -171,7 +171,7 @@ export function ListingList({
                 aria-pressed={hidden}
                 aria-label={hidden ? 'Unhide listing' : 'Hide listing'}
                 title={hidden ? 'Unhide listing' : 'Hide listing'}
-                className={`absolute right-7 top-7 z-20 inline-flex h-7 w-7 items-center justify-center rounded-full bg-ink/70 text-white/95 shadow-[0_1px_4px_rgba(0,0,0,0.3)] backdrop-blur-sm transition-all duration-150 hover:bg-ink/90 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-white/70 sm:right-auto sm:left-40 ${
+                className={`absolute right-7 top-7 z-20 inline-flex h-7 w-7 items-center justify-center rounded-full border border-hairline bg-surface/95 text-ink-muted shadow-sm backdrop-blur-sm transition-all duration-150 hover:border-ink hover:bg-surface hover:text-ink focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ink/30 sm:right-5 sm:top-5 ${
                   hidden
                     ? 'opacity-100'
                     : 'opacity-0 group-hover:opacity-100 focus-visible:opacity-100'

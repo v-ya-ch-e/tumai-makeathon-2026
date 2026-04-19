@@ -111,7 +111,7 @@ function Section({
   className?: string
 }) {
   return (
-    <section className={clsx('rounded-card border border-hairline bg-surface p-5', className)}>
+    <section className={clsx('rounded-card border border-hairline bg-surface p-4 sm:p-5', className)}>
       <h3 className="text-[15px] font-semibold text-ink">{title}</h3>
       <div className="mt-3">{children}</div>
     </section>
@@ -167,11 +167,13 @@ export function ListingDrawer({ open, listing, onClose }: ListingDrawerProps) {
     <Drawer
       open={open}
       onClose={onClose}
-      widthClass="w-[560px]"
+      widthClass="w-full sm:w-[560px]"
       title={
         activeListing ? (
-          <div className="flex items-center gap-3">
-            <span className="truncate">{activeListing.title ?? `Listing ${activeListing.id}`}</span>
+          <div className="flex min-w-0 flex-wrap items-center gap-x-3 gap-y-2">
+            <span className="min-w-0 basis-full truncate sm:basis-auto">
+              {activeListing.title ?? `Listing ${activeListing.id}`}
+            </span>
             {activeListing.kind ? (
               <StatusPill tone="idle">{activeListing.kind === 'flat' ? 'Whole flat' : 'WG room'}</StatusPill>
             ) : null}

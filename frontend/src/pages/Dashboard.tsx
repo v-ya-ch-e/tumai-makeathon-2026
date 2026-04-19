@@ -8,6 +8,7 @@ import {
   ListingFilterBar,
   applyListingFilters,
   isListingNew,
+  isLowScore,
   type ListingFilters,
 } from '../components/ListingFilterBar'
 import { ListingList } from '../components/ListingList'
@@ -131,6 +132,10 @@ export default function Dashboard() {
   const hiddenCount = useMemo(
     () => listings.reduce((acc, listing) => (hiddenIds.has(listing.id) ? acc + 1 : acc), 0),
     [listings, hiddenIds],
+  )
+  const lowScoreCount = useMemo(
+    () => listings.reduce((acc, listing) => (isLowScore(listing) ? acc + 1 : acc), 0),
+    [listings],
   )
   const visibleListings = useMemo(
     () => applyListingFilters(listings, filters, baselineAt, isListingHidden),
@@ -484,6 +489,7 @@ export default function Dashboard() {
             totalCount={listings.length}
             visibleCount={visibleListings.length}
             hiddenCount={hiddenCount}
+            lowScoreCount={lowScoreCount}
           />
           {viewMode === 'list' ? (
             <div className="max-h-[820px] overflow-y-auto">
