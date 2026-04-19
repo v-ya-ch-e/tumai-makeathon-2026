@@ -40,8 +40,10 @@ from app.wg_agent.periodic import (  # noqa: E402
     PeriodicUserMatcher,
     UserAgent,
     _ACTIVE_AGENTS,
-    _EVENT_QUEUES,
     _NOTIFY_STATE,
+    _SUBSCRIBERS,
+    subscribe,
+    unsubscribe,
 )
 
 
@@ -152,8 +154,7 @@ def test_user_agent_scores_every_pool_listing_once(monkeypatch) -> None:
         )
         _seed_listings(session, ("a", "b", "c"))
 
-    q: asyncio.Queue = asyncio.Queue()
-    agent = UserAgent("u1", q)
+    agent = UserAgent("u1")
 
     with (
         patch(
@@ -210,8 +211,7 @@ def test_user_agent_sees_listings_added_between_passes(monkeypatch) -> None:
         )
         _seed_listings(session, ("a", "b"))
 
-    q: asyncio.Queue = asyncio.Queue()
-    agent = UserAgent("u1b", q)
+    agent = UserAgent("u1b")
 
     with patch(
         "app.wg_agent.periodic.evaluator.evaluate",
@@ -259,15 +259,12 @@ def test_periodic_user_matcher_cancels_cleanly(monkeypatch) -> None:
         return _stub_result(0.5)
 
     async def scenario() -> None:
-        q: asyncio.Queue = asyncio.Queue()
         matcher = PeriodicUserMatcher(
             username="u-cancel",
-            event_queue=q,
             interval_minutes=1,
         )
         task = asyncio.create_task(matcher.start())
         _ACTIVE_AGENTS["u-cancel"] = task
-        _EVENT_QUEUES["u-cancel"] = q
         try:
             await asyncio.wait_for(started_event.wait(), timeout=2.0)
             # Give the task a moment to finish the first pass and enter sleep.
@@ -279,7 +276,6 @@ def test_periodic_user_matcher_cancels_cleanly(monkeypatch) -> None:
                 pass
         finally:
             _ACTIVE_AGENTS.pop("u-cancel", None)
-            _EVENT_QUEUES.pop("u-cancel", None)
 
     with patch(
         "app.wg_agent.periodic.evaluator.evaluate",
@@ -288,7 +284,67 @@ def test_periodic_user_matcher_cancels_cleanly(monkeypatch) -> None:
         asyncio.run(scenario())
 
     assert "u-cancel" not in _ACTIVE_AGENTS
-    assert "u-cancel" not in _EVENT_QUEUES
+    assert "u-cancel" not in _SUBSCRIBERS
+
+
+def test_publish_fans_out_to_every_subscriber(monkeypatch) -> None:
+    """Two SSE subscribers for the same user must each receive every event.
+
+    Regression for the "matches show on only one device when the same user
+    is open in two browsers" bug: a single shared `asyncio.Queue` would
+    deliver each item to only one waiter.
+    """
+    engine = _make_engine()
+    monkeypatch.setattr(db_module, "engine", engine)
+
+    async def evaluate_stub(
+        _lst: Listing, _sp: SearchProfile, *, travel_times=None, nearby_places=None
+    ) -> EvaluationResult:
+        return _stub_result(0.7)
+
+    with Session(engine) as session:
+        _seed_user(
+            session,
+            "u-fanout",
+            SearchProfile(
+                city="München",
+                max_rent_eur=900,
+                rescan_interval_minutes=30,
+                schedule="one_shot",
+            ),
+        )
+        _seed_listings(session, ("fan1", "fan2"))
+
+    async def run() -> None:
+        device_a = subscribe("u-fanout")
+        device_b = subscribe("u-fanout")
+        try:
+            agent = UserAgent("u-fanout")
+            await agent.run_match_pass()
+
+            def drain(q: asyncio.Queue) -> list[ActionKind]:
+                kinds: list[ActionKind] = []
+                while not q.empty():
+                    kinds.append(q.get_nowait().kind)
+                return kinds
+
+            return drain(device_a), drain(device_b)
+        finally:
+            unsubscribe("u-fanout", device_a)
+            unsubscribe("u-fanout", device_b)
+
+    with patch(
+        "app.wg_agent.periodic.evaluator.evaluate",
+        new=AsyncMock(side_effect=evaluate_stub),
+    ):
+        events_a, events_b = asyncio.run(run())
+
+    # 1 search + 2 (new_listing + evaluate) per candidate = 5 events each.
+    assert events_a == events_b
+    assert events_a.count(ActionKind.new_listing) == 2
+    assert events_a.count(ActionKind.evaluate) == 2
+    assert events_a.count(ActionKind.search) == 1
+    assert "u-fanout" not in _SUBSCRIBERS
 
 
 def test_commute_times_reach_evaluator_and_persist(monkeypatch) -> None:
@@ -325,8 +381,7 @@ def test_commute_times_reach_evaluator_and_persist(monkeypatch) -> None:
         )
         _seed_listings(session, ("lst1",), lat=48.13, lng=11.50)
 
-    q: asyncio.Queue = asyncio.Queue()
-    agent = UserAgent("u3", q)
+    agent = UserAgent("u3")
 
     with (
         patch(
@@ -389,8 +444,7 @@ def test_nearby_places_reach_evaluator_and_persist(monkeypatch) -> None:
         )
         _seed_listings(session, ("lst-nearby",), lat=48.13, lng=11.50)
 
-    q: asyncio.Queue = asyncio.Queue()
-    agent = UserAgent("u-nearby", q)
+    agent = UserAgent("u-nearby")
 
     with (
         patch(
@@ -439,8 +493,7 @@ def test_commute_skipped_when_listing_lacks_coords(monkeypatch) -> None:
         )
         _seed_listings(session, ("lst2",))  # lat/lng default None
 
-    q: asyncio.Queue = asyncio.Queue()
-    agent = UserAgent("u4", q)
+    agent = UserAgent("u4")
     travel_mock = AsyncMock(return_value={})
 
     with (
@@ -508,8 +561,7 @@ def test_initial_evaluation_does_not_send_email(monkeypatch) -> None:
         return_value=True,
     )
 
-    q: asyncio.Queue = asyncio.Queue()
-    agent = UserAgent("u-initial", q)
+    agent = UserAgent("u-initial")
 
     with (
         patch(
@@ -556,8 +608,7 @@ def test_new_listings_trigger_single_batched_email(monkeypatch) -> None:
                 session, lid, datetime(2024, 6, 1)
             )
 
-    q: asyncio.Queue = asyncio.Queue()
-    agent = UserAgent("u-new", q)
+    agent = UserAgent("u-new")
 
     with (
         patch(
@@ -611,8 +662,7 @@ def test_cooldown_suppresses_second_email_and_releases_after(monkeypatch) -> Non
         _seed_listings(session, ("c1",))
         _set_listing_first_seen_at(session, "c1", datetime(2024, 6, 1))
 
-    q: asyncio.Queue = asyncio.Queue()
-    agent = UserAgent("u-cool", q)
+    agent = UserAgent("u-cool")
 
     with (
         patch(

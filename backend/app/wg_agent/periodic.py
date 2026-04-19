@@ -168,15 +168,21 @@ def _nearby_places_detail(
 
 
 _ACTIVE_AGENTS: dict[str, asyncio.Task[None]] = {}
-_EVENT_QUEUES: dict[str, asyncio.Queue[AgentAction]] = {}
+# Per-user fan-out: every active SSE connection for a username appends its own
+# queue here, and every action is published to *all* of them. An asyncio.Queue
+# delivers each item to exactly one waiter, so a single shared queue would
+# starve every device but the first one when the same user is open in multiple
+# browsers/tabs.
+_SUBSCRIBERS: dict[str, list[asyncio.Queue[AgentAction]]] = {}
 _RUNTIME_LOOP: asyncio.AbstractEventLoop | None = None
 
 
-def _safe_put(queue: asyncio.Queue[AgentAction], action: AgentAction) -> None:
-    try:
-        queue.put_nowait(action)
-    except asyncio.QueueFull:
-        pass
+def _publish(username: str, action: AgentAction) -> None:
+    for queue in _SUBSCRIBERS.get(username, ()):
+        try:
+            queue.put_nowait(action)
+        except asyncio.QueueFull:
+            pass
 
 
 def set_runtime_loop(loop: asyncio.AbstractEventLoop | None) -> None:
@@ -210,17 +216,13 @@ class UserAgent:
     """Per-user match + rank engine.
 
     Never scrapes — the scraper container is the sole writer of `ListingRow`.
-    Logs actions via `repo.append_user_action` (persisted) and onto a shared
-    asyncio.Queue for SSE. Does not send messages or poll the inbox.
+    Logs actions via `repo.append_user_action` (persisted) and broadcasts them
+    to every active SSE subscriber for this user via `_publish`. Does not send
+    messages or poll the inbox.
     """
 
-    def __init__(
-        self,
-        username: str,
-        event_queue: asyncio.Queue[AgentAction],
-    ) -> None:
+    def __init__(self, username: str) -> None:
         self._username = username
-        self._event_queue = event_queue
 
     async def run_match_pass(self, *, max_listings: int = 15) -> int:
         with Session(db_module.engine) as session:
@@ -249,7 +251,7 @@ class UserAgent:
         )
         with Session(db_module.engine) as session:
             _append(session, self._username, search_action)
-        _safe_put(self._event_queue, search_action)
+        _publish(self._username, search_action)
 
         for row in candidate_rows:
             listing = repo.row_to_domain_listing(row)
@@ -260,7 +262,7 @@ class UserAgent:
             )
             with Session(db_module.engine) as session:
                 _append(session, self._username, nl)
-            _safe_put(self._event_queue, nl)
+            _publish(self._username, nl)
 
             try:
                 travel_times: dict[tuple[str, str], int] = {}
@@ -305,7 +307,7 @@ class UserAgent:
                 )
                 with Session(db_module.engine) as session:
                     _append(session, self._username, err)
-                _safe_put(self._event_queue, err)
+                _publish(self._username, err)
                 continue
 
             travel_minutes = (
@@ -366,7 +368,7 @@ class UserAgent:
                 )
             with Session(db_module.engine) as session:
                 _append(session, self._username, ev)
-            _safe_put(self._event_queue, ev)
+            _publish(self._username, ev)
 
         _try_flush_digest(self._username, user_email)
         return new_count
@@ -415,12 +417,10 @@ class PeriodicUserMatcher:
     def __init__(
         self,
         username: str,
-        event_queue: asyncio.Queue[AgentAction],
         *,
         interval_minutes: int,
     ) -> None:
         self._username = username
-        self._event_queue = event_queue
         self._interval = interval_minutes
         raw = os.environ.get("WG_RESCAN_INTERVAL_MINUTES")
         if raw is not None:
@@ -430,7 +430,7 @@ class PeriodicUserMatcher:
                     self._interval = v
             except ValueError:
                 pass
-        self._agent = UserAgent(username, event_queue)
+        self._agent = UserAgent(username)
 
     def _sleep_seconds(self) -> float:
         return float(max(self._interval, 1)) * 60.0
@@ -442,7 +442,7 @@ class PeriodicUserMatcher:
         )
         with Session(db_module.engine) as session:
             _append(session, self._username, act)
-        _safe_put(self._event_queue, act)
+        _publish(self._username, act)
 
     async def start(self) -> None:
         while True:
@@ -469,7 +469,7 @@ class PeriodicUserMatcher:
                     logger.exception(
                         "Failed to persist error action for %s", self._username
                     )
-                _safe_put(self._event_queue, err)
+                _publish(self._username, err)
 
             try:
                 await asyncio.sleep(self._sleep_seconds())
@@ -482,8 +482,6 @@ def spawn_user_agent(username: str, *, interval_minutes: int = 30) -> None:
     existing = _ACTIVE_AGENTS.get(username)
     if existing is not None and not existing.done():
         return
-    queue: asyncio.Queue[AgentAction] = asyncio.Queue()
-    _EVENT_QUEUES[username] = queue
     boot = AgentAction(
         kind=ActionKind.boot,
         summary=f"Agent started for {username}",
@@ -493,10 +491,9 @@ def spawn_user_agent(username: str, *, interval_minutes: int = 30) -> None:
             _append(session, username, boot)
     except Exception:  # noqa: BLE001
         logger.exception("Failed to persist boot action for %s", username)
-    _safe_put(queue, boot)
+    _publish(username, boot)
     matcher = PeriodicUserMatcher(
         username=username,
-        event_queue=queue,
         interval_minutes=FIXED_USER_AGENT_INTERVAL_MINUTES,
     )
     task = _create_task(matcher.start())
@@ -511,8 +508,28 @@ def cancel_user_agent(username: str) -> bool:
     return True
 
 
-def event_queue_for(username: str) -> asyncio.Queue[AgentAction] | None:
-    return _EVENT_QUEUES.get(username)
+def subscribe(username: str) -> asyncio.Queue[AgentAction]:
+    """Register a new SSE subscriber for `username` and return its private queue.
+
+    Every published action for `username` is fanned out to every subscriber's
+    queue, so opening the same account on two devices results in both seeing
+    every event.
+    """
+    queue: asyncio.Queue[AgentAction] = asyncio.Queue()
+    _SUBSCRIBERS.setdefault(username, []).append(queue)
+    return queue
+
+
+def unsubscribe(username: str, queue: asyncio.Queue[AgentAction]) -> None:
+    subs = _SUBSCRIBERS.get(username)
+    if not subs:
+        return
+    try:
+        subs.remove(queue)
+    except ValueError:
+        pass
+    if not subs:
+        _SUBSCRIBERS.pop(username, None)
 
 
 def is_agent_running(username: str) -> bool:

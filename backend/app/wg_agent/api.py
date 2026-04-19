@@ -38,7 +38,6 @@ from .dto import (
     user_to_dto,
 )
 from .models import (
-    AgentAction,
     Gender,
     UserProfile,
     WGCredentials,
@@ -259,43 +258,39 @@ async def stream_user_events(username: str) -> StreamingResponse:
             raise HTTPException(status_code=404, detail="User not found")
 
     async def event_source():
-        seen: set[tuple[datetime, str, str]] = set()
-        # Only replay the most-recent slice of history on connect. Emitting
-        # every historical action on every (re)connect triggers a refresh storm
-        # on the client (each `evaluate`/`new_listing` event causes a refresh).
-        with Session(engine) as s:
-            initial = repo.list_actions_for_user(
-                s, username=username, limit=200
-            )
-        for a in initial:
-            seen.add((a.at, a.kind.value, a.summary))
-            yield _sse(action_to_dto(a).model_dump(mode="json"))
-
-        while True:
-            action: AgentAction | None = None
-            queue = periodic.event_queue_for(username)
-            if queue is not None:
-                try:
-                    action = await asyncio.wait_for(queue.get(), timeout=1.0)
-                except asyncio.TimeoutError:
-                    pass
-            else:
-                await asyncio.sleep(1.0)
-
-            if action is not None:
-                key = (action.at, action.kind.value, action.summary)
-                if key not in seen:
-                    seen.add(key)
-                    yield _sse(action_to_dto(action).model_dump(mode="json"))
-
+        # Subscribe FIRST, then replay history. Doing it in this order ensures
+        # any action the matcher publishes while the replay is in flight lands
+        # on `queue` and is delivered after the historical slice — instead of
+        # falling into the gap between "replay" and "subscribe".
+        queue = periodic.subscribe(username)
+        try:
+            seen: set[tuple[datetime, str, str]] = set()
+            # Replay the most-recent slice of history on connect so a freshly
+            # opened device shows the user's existing matches without waiting
+            # for the next match pass. Capped to avoid a refresh storm on the
+            # client (each `evaluate`/`new_listing` event triggers a /listings
+            # refetch).
             with Session(engine) as s:
-                fresh = repo.list_actions_for_user(s, username=username)
-            for a in fresh:
-                key = (a.at, a.kind.value, a.summary)
-                if key not in seen:
-                    seen.add(key)
-                    yield _sse(action_to_dto(a).model_dump(mode="json"))
-            yield ": keep-alive\n\n"
+                initial = repo.list_actions_for_user(
+                    s, username=username, limit=200
+                )
+            for a in initial:
+                seen.add((a.at, a.kind.value, a.summary))
+                yield _sse(action_to_dto(a).model_dump(mode="json"))
+
+            while True:
+                try:
+                    action = await asyncio.wait_for(queue.get(), timeout=15.0)
+                except asyncio.TimeoutError:
+                    yield ": keep-alive\n\n"
+                    continue
+                key = (action.at, action.kind.value, action.summary)
+                if key in seen:
+                    continue
+                seen.add(key)
+                yield _sse(action_to_dto(action).model_dump(mode="json"))
+        finally:
+            periodic.unsubscribe(username, queue)
 
     return StreamingResponse(event_source(), media_type="text/event-stream")
 
