@@ -347,10 +347,26 @@ function isMissingLandlordInfoBody(body: unknown): boolean {
   return (detail as { code?: unknown }).code === 'missing_landlord_info'
 }
 
+export type ListingMessageDraft = {
+  message: string
+  source: 'llm' | 'user'
+  updatedAt: string | null
+}
+
+function parseDraftPayload(body: unknown): ListingMessageDraft {
+  const payload = toCamel(body) as Partial<ListingMessageDraft>
+  const source = payload.source === 'user' ? 'user' : 'llm'
+  return {
+    message: payload.message ?? '',
+    source,
+    updatedAt: payload.updatedAt ?? null,
+  }
+}
+
 export async function draftListingMessage(
   username: string,
   listingId: string,
-): Promise<{ message: string }> {
+): Promise<ListingMessageDraft> {
   const res = await fetch(
     `/api/users/${encodeURIComponent(username)}/listings/${encodeURIComponent(listingId)}/draft-message`,
     { ...fetchDefaults, method: 'POST' },
@@ -362,8 +378,41 @@ export async function draftListingMessage(
   if (!res.ok) {
     throw new ApiError(res.status, body, errorMessage(body))
   }
-  const payload = toCamel(body) as { message?: string }
-  return { message: payload.message ?? '' }
+  return parseDraftPayload(body)
+}
+
+export async function getListingMessageDraft(
+  username: string,
+  listingId: string,
+): Promise<ListingMessageDraft | null> {
+  const res = await fetch(
+    `/api/users/${encodeURIComponent(username)}/listings/${encodeURIComponent(listingId)}/draft-message`,
+    fetchDefaults,
+  )
+  const body = await readBody(res)
+  if (res.status === 404) {
+    return null
+  }
+  if (!res.ok) {
+    throw new ApiError(res.status, body, errorMessage(body))
+  }
+  return parseDraftPayload(body)
+}
+
+export async function saveListingMessageDraft(
+  username: string,
+  listingId: string,
+  message: string,
+): Promise<ListingMessageDraft> {
+  const data = await requestJson(
+    `/api/users/${encodeURIComponent(username)}/listings/${encodeURIComponent(listingId)}/draft-message`,
+    {
+      method: 'PUT',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ message }),
+    },
+  )
+  return parseDraftPayload(data)
 }
 
 export async function getListingDetail(

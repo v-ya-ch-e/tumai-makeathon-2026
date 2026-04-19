@@ -1,10 +1,12 @@
 import clsx from 'clsx'
-import { useCallback, useEffect, useState, type ReactNode } from 'react'
+import { useCallback, useEffect, useRef, useState, type ReactNode } from 'react'
 import { useNavigate } from 'react-router-dom'
 import {
   MissingLandlordInfoError,
   draftListingMessage,
   getListingDetail,
+  getListingMessageDraft,
+  saveListingMessageDraft,
 } from '../lib/api'
 import { formatGermanDateRange } from '../lib/date'
 import { useSession } from '../lib/session'
@@ -132,15 +134,43 @@ function hasLandlordInfo(user: User | null): boolean {
   return Boolean(firstName && occupation && bio && email)
 }
 
-type DraftStatus = 'idle' | 'loading' | 'ready' | 'error' | 'missing_info'
+/**
+ * Drawer draft state machine:
+ *
+ *   - `hydrating` — checking the DB for an existing draft (GET on open)
+ *   - `missing_info` — user hasn't filled "Information for landlord"
+ *   - `empty` — landlord info present, no saved draft yet → show the
+ *     prominent "Generate message" CTA
+ *   - `generating` — POST in flight
+ *   - `ready` — we have a draft (either just generated or loaded from DB)
+ *   - `error` — last generate attempt failed; `message` may still hold
+ *     the previous draft
+ */
+type DraftStatus =
+  | 'hydrating'
+  | 'missing_info'
+  | 'empty'
+  | 'generating'
+  | 'ready'
+  | 'error'
 
 type DraftState = {
   status: DraftStatus
   message: string
+  /** `true` once the user has edited since load — disables auto-save
+   * until a change actually happens. */
+  dirty: boolean
   error: string | null
 }
 
-const INITIAL_DRAFT_STATE: DraftState = { status: 'idle', message: '', error: null }
+const INITIAL_DRAFT_STATE: DraftState = {
+  status: 'hydrating',
+  message: '',
+  dirty: false,
+  error: null,
+}
+
+const AUTO_SAVE_DELAY_MS = 1200
 
 function nearbyCheckSummary(place: ListingDetail['nearbyPreferencePlaces'][number]): {
   status: string
@@ -166,6 +196,9 @@ export function ListingDrawer({ open, listing, onClose }: ListingDrawerProps) {
   const [error, setError] = useState<string | null>(null)
   const [draft, setDraft] = useState<DraftState>(INITIAL_DRAFT_STATE)
   const [copied, setCopied] = useState(false)
+  const [saveStatus, setSaveStatus] = useState<'idle' | 'saving' | 'saved' | 'error'>(
+    'idle',
+  )
 
   useEffect(() => {
     if (!open || !listing || !username) return
@@ -188,36 +221,115 @@ export function ListingDrawer({ open, listing, onClose }: ListingDrawerProps) {
     }
   }, [open, listing?.id, username])
 
-  // Reset the draft panel whenever the drawer switches to a different
-  // listing or closes — drafts are scoped to the currently open row.
+  // Hydrate the draft section when the drawer opens (or switches rows):
+  //   1. If the user has no landlord info → `missing_info`.
+  //   2. Else GET the persisted draft. If one exists → `ready`; else `empty`.
+  // Keeps the UI showing the same text between sessions without a second
+  // LLM call.
   useEffect(() => {
     setDraft(INITIAL_DRAFT_STATE)
     setCopied(false)
-  }, [listing?.id, open])
+    setSaveStatus('idle')
+    if (!open || !listing || !username) return
+    if (!hasLandlordInfo(user)) {
+      setDraft({ status: 'missing_info', message: '', dirty: false, error: null })
+      return
+    }
+    let cancelled = false
+    void (async () => {
+      try {
+        const existing = await getListingMessageDraft(username, listing.id)
+        if (cancelled) return
+        if (existing) {
+          setDraft({
+            status: 'ready',
+            message: existing.message,
+            dirty: false,
+            error: null,
+          })
+        } else {
+          setDraft({ status: 'empty', message: '', dirty: false, error: null })
+        }
+      } catch {
+        if (cancelled) return
+        // GET failures shouldn't block generation — fall through to empty.
+        setDraft({ status: 'empty', message: '', dirty: false, error: null })
+      }
+    })()
+    return () => {
+      cancelled = true
+    }
+  }, [open, listing?.id, username, user])
+
+  // Debounced auto-save for user edits. Fires only once the draft is
+  // marked `dirty` by an onChange (so loading an existing draft doesn't
+  // immediately trigger a PUT).
+  useEffect(() => {
+    if (!open || !listing || !username) return
+    if (draft.status !== 'ready') return
+    if (!draft.dirty) return
+    const trimmed = draft.message.trim()
+    if (!trimmed) {
+      setSaveStatus('idle')
+      return
+    }
+    setSaveStatus('saving')
+    const handle = window.setTimeout(() => {
+      void (async () => {
+        try {
+          await saveListingMessageDraft(username, listing.id, trimmed)
+          setSaveStatus('saved')
+          window.setTimeout(() => {
+            setSaveStatus((prev) => (prev === 'saved' ? 'idle' : prev))
+          }, 1500)
+        } catch {
+          setSaveStatus('error')
+        }
+      })()
+    }, AUTO_SAVE_DELAY_MS)
+    return () => {
+      window.clearTimeout(handle)
+    }
+  }, [draft.status, draft.dirty, draft.message, open, listing?.id, username])
 
   const activeListing: Listing | null = detail?.listing ?? listing
 
-  const handleDraftClick = useCallback(async () => {
+  // Keep a stable reference to the listing id we dispatched a generate
+  // for, so out-of-order responses (user clicks Regenerate twice) can't
+  // clobber each other.
+  const generationIdRef = useRef(0)
+
+  const handleGenerateClick = useCallback(async () => {
     if (!activeListing || !username) return
     if (!hasLandlordInfo(user)) {
-      setDraft({ status: 'missing_info', message: '', error: null })
+      setDraft({ status: 'missing_info', message: '', dirty: false, error: null })
       return
     }
-    setDraft((prev) => ({ status: 'loading', message: prev.message, error: null }))
+    const ticket = ++generationIdRef.current
+    setDraft((prev) => ({
+      status: 'generating',
+      message: prev.message,
+      dirty: false,
+      error: null,
+    }))
     setCopied(false)
+    setSaveStatus('idle')
     try {
-      const { message } = await draftListingMessage(username, activeListing.id)
-      setDraft({ status: 'ready', message, error: null })
+      const result = await draftListingMessage(username, activeListing.id)
+      if (ticket !== generationIdRef.current) return
+      setDraft({ status: 'ready', message: result.message, dirty: false, error: null })
     } catch (err) {
+      if (ticket !== generationIdRef.current) return
       if (err instanceof MissingLandlordInfoError) {
-        setDraft({ status: 'missing_info', message: '', error: null })
+        setDraft({ status: 'missing_info', message: '', dirty: false, error: null })
         return
       }
-      setDraft({
+      setDraft((prev) => ({
         status: 'error',
-        message: '',
+        message: prev.message,
+        dirty: false,
         error: err instanceof Error ? err.message : String(err),
-      })
+      }))
     }
   }, [activeListing, username, user])
 
@@ -237,13 +349,6 @@ export function ListingDrawer({ open, listing, onClose }: ListingDrawerProps) {
     navigate('/profile#landlord-info')
   }, [navigate, onClose])
 
-  const draftButtonLabel =
-    draft.status === 'loading'
-      ? 'Drafting…'
-      : draft.status === 'ready'
-        ? 'Regenerate message'
-        : 'Draft message to landlord'
-
   return (
     <Drawer
       open={open}
@@ -251,15 +356,9 @@ export function ListingDrawer({ open, listing, onClose }: ListingDrawerProps) {
       widthClass="w-full sm:w-[560px]"
       title={
         activeListing ? (
-          <div className="flex min-w-0 flex-wrap items-center gap-x-3 gap-y-2">
-            <span className="min-w-0 basis-full truncate sm:basis-auto">
-              {activeListing.title ?? `Listing ${activeListing.id}`}
-            </span>
-            {activeListing.kind ? (
-              <StatusPill tone="idle">{activeListing.kind === 'flat' ? 'Whole flat' : 'WG room'}</StatusPill>
-            ) : null}
-            <StatusPill tone={scoreTone(activeListing.score)}>{formatScore(activeListing.score)}</StatusPill>
-          </div>
+          <span className="block text-[17px] font-semibold leading-snug text-ink">
+            {activeListing.title ?? `Listing ${activeListing.id}`}
+          </span>
         ) : (
           'Listing'
         )
@@ -267,6 +366,20 @@ export function ListingDrawer({ open, listing, onClose }: ListingDrawerProps) {
     >
       {activeListing ? (
         <div className="space-y-6">
+          <div className="flex flex-wrap items-center gap-2">
+            <StatusPill tone={scoreTone(activeListing.score)}>
+              Match {formatScore(activeListing.score)}
+            </StatusPill>
+            {activeListing.kind ? (
+              <StatusPill tone="idle">
+                {activeListing.kind === 'flat' ? 'Whole flat' : 'WG room'}
+              </StatusPill>
+            ) : null}
+            {activeListing.district ? (
+              <StatusPill tone="idle">{activeListing.district}</StatusPill>
+            ) : null}
+          </div>
+
           <div className="flex flex-wrap items-center gap-3">
             <Button
               variant="primary"
@@ -277,85 +390,25 @@ export function ListingDrawer({ open, listing, onClose }: ListingDrawerProps) {
             >
               Open on WG-Gesucht
             </Button>
-            <Button
-              variant="secondary"
-              size="sm"
-              onClick={() => void handleDraftClick()}
-              disabled={draft.status === 'loading'}
-            >
-              {draftButtonLabel}
-            </Button>
           </div>
 
-          {draft.status === 'missing_info' ? (
-            <Section title="Draft a message to the landlord">
-              <p className="text-[13px] leading-6 text-ink-muted">
-                Add your "Information for landlord" in Profile settings first — a first
-                name, occupation and a short bio is all we need to personalize the
-                message.
-              </p>
-              <div className="mt-4">
-                <Button variant="primary" size="sm" onClick={goToProfileSettings}>
-                  Go to profile settings
-                </Button>
-              </div>
-            </Section>
-          ) : null}
-
-          {draft.status === 'loading' && !draft.message ? (
-            <Section title="Draft a message to the landlord">
-              <p className="text-[13px] text-ink-muted">Drafting a personalized message…</p>
-            </Section>
-          ) : null}
-
-          {(draft.status === 'ready' || (draft.status === 'loading' && draft.message)) ? (
-            <Section title="Draft a message to the landlord">
-              <p className="text-[12px] leading-5 text-ink-muted">
-                Edit if you like, then click Copy and paste it into the WG-Gesucht
-                contact dialog.
-              </p>
-              <Textarea
-                className="mt-3"
-                rows={10}
-                value={draft.message}
-                onChange={(event) =>
-                  setDraft((prev) => ({ ...prev, message: event.target.value }))
-                }
-                disabled={draft.status === 'loading'}
-              />
-              <div className="mt-3 flex flex-wrap items-center gap-2">
-                <Button
-                  variant="primary"
-                  size="sm"
-                  onClick={() => void handleCopy()}
-                  disabled={!draft.message}
-                >
-                  {copied ? 'Copied' : 'Copy'}
-                </Button>
-                <Button
-                  variant="secondary"
-                  size="sm"
-                  onClick={() => void handleDraftClick()}
-                  disabled={draft.status === 'loading'}
-                >
-                  {draft.status === 'loading' ? 'Regenerating…' : 'Regenerate'}
-                </Button>
-              </div>
-            </Section>
-          ) : null}
-
-          {draft.status === 'error' && draft.error ? (
-            <Section title="Draft a message to the landlord" className="border-bad/35 bg-bad/5">
-              <p className="text-[13px] leading-6 text-ink">
-                Could not draft a message: {draft.error}
-              </p>
-              <div className="mt-3">
-                <Button variant="secondary" size="sm" onClick={() => void handleDraftClick()}>
-                  Try again
-                </Button>
-              </div>
-            </Section>
-          ) : null}
+          <DraftMessagePanel
+            draft={draft}
+            copied={copied}
+            saveStatus={saveStatus}
+            onGenerate={() => void handleGenerateClick()}
+            onCopy={() => void handleCopy()}
+            onGoToProfileSettings={goToProfileSettings}
+            onChangeMessage={(value) =>
+              setDraft((prev) => ({
+                ...prev,
+                status: 'ready',
+                message: value,
+                dirty: true,
+                error: null,
+              }))
+            }
+          />
 
           {detail && detail.photos.length > 0 ? (
             <div className="overflow-hidden rounded-card border border-hairline bg-surface">
@@ -496,4 +549,149 @@ export function ListingDrawer({ open, listing, onClose }: ListingDrawerProps) {
       )}
     </Drawer>
   )
+}
+
+type DraftMessagePanelProps = {
+  draft: DraftState
+  copied: boolean
+  saveStatus: 'idle' | 'saving' | 'saved' | 'error'
+  onGenerate: () => void
+  onCopy: () => void
+  onGoToProfileSettings: () => void
+  onChangeMessage: (value: string) => void
+}
+
+function DraftMessagePanel({
+  draft,
+  copied,
+  saveStatus,
+  onGenerate,
+  onCopy,
+  onGoToProfileSettings,
+  onChangeMessage,
+}: DraftMessagePanelProps) {
+  const title = 'Draft a message to the landlord'
+
+  if (draft.status === 'hydrating') {
+    return (
+      <Section title={title}>
+        <p className="text-[13px] text-ink-muted">Checking for a saved draft…</p>
+      </Section>
+    )
+  }
+
+  if (draft.status === 'missing_info') {
+    return (
+      <Section
+        title={title}
+        className="border-accent/40 bg-accent-muted/30"
+      >
+        <p className="text-[14px] leading-6 text-ink">
+          Let AI write a personalized first message to this landlord, ready to paste
+          into WG-Gesucht.
+        </p>
+        <p className="mt-2 text-[13px] leading-6 text-ink-muted">
+          First, add a short "Information for landlord" in Profile settings — name,
+          occupation and a couple of sentences about you.
+        </p>
+        <div className="mt-4">
+          <Button variant="primary" size="sm" onClick={onGoToProfileSettings}>
+            Add info in profile settings
+          </Button>
+        </div>
+      </Section>
+    )
+  }
+
+  if (draft.status === 'empty') {
+    return (
+      <Section
+        title={title}
+        className="border-accent/40 bg-accent-muted/30"
+      >
+        <p className="text-[14px] leading-6 text-ink">
+          Let AI write a personalized first message to this landlord, based on your
+          profile and this listing. You can edit it before copying.
+        </p>
+        <div className="mt-4">
+          <Button variant="primary" size="md" onClick={onGenerate}>
+            Generate personalized message
+          </Button>
+        </div>
+      </Section>
+    )
+  }
+
+  if (draft.status === 'generating' && !draft.message) {
+    return (
+      <Section title={title}>
+        <p className="text-[13px] text-ink-muted">Drafting a personalized message…</p>
+      </Section>
+    )
+  }
+
+  const textareaDisabled = draft.status === 'generating'
+  const showError = draft.status === 'error' && draft.error
+
+  return (
+    <Section
+      title={title}
+      className={clsx(
+        draft.status === 'ready' && 'border-accent/40 bg-accent-muted/20',
+        showError && 'border-bad/35 bg-bad/5',
+      )}
+    >
+      <div className="flex flex-wrap items-center justify-between gap-2">
+        <p className="text-[12px] leading-5 text-ink-muted">
+          Edit if you like, then copy and paste into the WG-Gesucht contact dialog.
+        </p>
+        <SaveStatusBadge status={saveStatus} />
+      </div>
+
+      <Textarea
+        className="mt-3"
+        rows={10}
+        value={draft.message}
+        onChange={(event) => onChangeMessage(event.target.value)}
+        disabled={textareaDisabled}
+      />
+
+      <div className="mt-3 flex flex-wrap items-center gap-2">
+        <Button variant="primary" size="sm" onClick={onCopy} disabled={!draft.message}>
+          {copied ? 'Copied' : 'Copy'}
+        </Button>
+        <Button
+          variant="secondary"
+          size="sm"
+          onClick={onGenerate}
+          disabled={draft.status === 'generating'}
+        >
+          {draft.status === 'generating' ? 'Regenerating…' : 'Regenerate'}
+        </Button>
+      </div>
+
+      {showError ? (
+        <p className="mt-3 text-[13px] leading-6 text-bad">
+          Could not generate: {draft.error}
+        </p>
+      ) : null}
+    </Section>
+  )
+}
+
+function SaveStatusBadge({
+  status,
+}: {
+  status: 'idle' | 'saving' | 'saved' | 'error'
+}) {
+  if (status === 'idle') return null
+  const label =
+    status === 'saving' ? 'Saving…' : status === 'saved' ? 'Saved' : 'Save failed'
+  const tone =
+    status === 'error'
+      ? 'text-bad'
+      : status === 'saved'
+        ? 'text-good'
+        : 'text-ink-muted'
+  return <span className={clsx('text-[12px]', tone)}>{label}</span>
 }

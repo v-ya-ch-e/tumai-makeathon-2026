@@ -15,6 +15,7 @@ from sqlmodel import Session, select
 
 from . import crypto
 from .db_models import (
+    ListingMessageDraftRow,
     ListingRow,
     PhotoRow,
     ScraperEventRow,
@@ -112,6 +113,48 @@ def update_user(session: Session, *, username: str, profile: UserProfile) -> Use
     session.commit()
     session.refresh(row)
     return _user_row_to_profile(row)
+
+
+def get_listing_message_draft(
+    session: Session, *, username: str, listing_id: str
+) -> Optional[ListingMessageDraftRow]:
+    """Return the persisted draft row for (username, listing_id), or None."""
+    return session.get(ListingMessageDraftRow, (username, listing_id))
+
+
+def upsert_listing_message_draft(
+    session: Session,
+    *,
+    username: str,
+    listing_id: str,
+    message: str,
+    source: str = "llm",
+) -> ListingMessageDraftRow:
+    """Persist the latest draft for (username, listing_id).
+
+    `source='llm'` records that the text is the raw LLM output;
+    `source='user'` indicates the user has edited the textarea. The
+    distinction is kept for future UI affordances (e.g. "reset to AI
+    draft") and to make audit trails easier to read.
+    """
+    row = session.get(ListingMessageDraftRow, (username, listing_id))
+    now = datetime.utcnow()
+    if row is None:
+        row = ListingMessageDraftRow(
+            username=username,
+            listing_id=listing_id,
+            message=message,
+            source=source,
+            updated_at=now,
+        )
+        session.add(row)
+    else:
+        row.message = message
+        row.source = source
+        row.updated_at = now
+    session.commit()
+    session.refresh(row)
+    return row
 
 
 def _parse_preference(raw: object) -> Optional[PreferenceWeight]:

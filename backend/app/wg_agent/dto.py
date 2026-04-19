@@ -71,6 +71,14 @@ class DraftMessageDTO(BaseModel):
     """Response body for the draft-message endpoint."""
 
     message: str
+    source: Literal["llm", "user"] = "llm"
+    updated_at: Optional[datetime] = None
+
+
+class SaveDraftMessageBody(BaseModel):
+    """Request body for persisting a user-edited draft."""
+
+    message: str = Field(..., max_length=8000)
 
 
 class SearchProfileDTO(BaseModel):

@@ -145,6 +145,25 @@ class UserAgentStateRow(SQLModel, table=True):
     updated_at: datetime
 
 
+class ListingMessageDraftRow(SQLModel, table=True):
+    """Persisted first-message draft for a given user + listing pair.
+
+    One row per (username, listing_id). Written when the LLM generates a
+    draft (so re-opening the drawer later shows the same text instead of
+    spending another API call) and again whenever the user edits the
+    textarea (auto-save). `source` records whether the latest message is
+    the unedited LLM output or a hand-edited version — purely informational
+    today but kept for future UI (e.g. a "reset to AI draft" action).
+    """
+
+    __tablename__ = "listingmessagedraftrow"
+    username: str = Field(primary_key=True, foreign_key="userrow.username")
+    listing_id: str = Field(primary_key=True, foreign_key="listingrow.id")
+    message: str = Field(sa_column=Column(Text, nullable=False))
+    source: str = Field(default="llm")
+    updated_at: datetime
+
+
 class ScraperEventRow(SQLModel, table=True):
     """Append-only outbox the scraper writes on a newly persisted full listing.
 

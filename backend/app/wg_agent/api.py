@@ -26,6 +26,7 @@ from .dto import (
     ListingDetailDTO,
     ListingDTO,
     NearbyPlaceDTO,
+    SaveDraftMessageBody,
     SearchProfileDTO,
     UpdateUserBody,
     UpsertSearchProfileBody,
@@ -362,6 +363,32 @@ def get_listing_detail(
     return detail
 
 
+@router.get(
+    "/users/{username}/listings/{listing_id}/draft-message",
+    response_model=DraftMessageDTO,
+)
+def get_listing_draft_message(
+    username: str,
+    listing_id: str,
+    session: Session = Depends(get_session),
+) -> DraftMessageDTO:
+    """Return the persisted draft for (username, listing_id), if any.
+
+    Responds 404 when no draft has been generated or saved yet, so the
+    UI can show its "Generate message" CTA instead of an empty textarea.
+    """
+    row = repo.get_listing_message_draft(
+        session, username=username, listing_id=listing_id
+    )
+    if row is None:
+        raise HTTPException(status_code=404, detail="Draft not found")
+    return DraftMessageDTO(
+        message=row.message,
+        source="user" if row.source == "user" else "llm",
+        updated_at=row.updated_at,
+    )
+
+
 @router.post(
     "/users/{username}/listings/{listing_id}/draft-message",
     response_model=DraftMessageDTO,
@@ -371,13 +398,15 @@ def draft_listing_message(
     listing_id: str,
     session: Session = Depends(get_session),
 ) -> DraftMessageDTO:
-    """Generate a personalized first message to the landlord for `listing_id`.
+    """Generate (and persist) a personalized first message to the landlord.
 
     Returns 422 with `{code: "missing_landlord_info"}` when the user has
     not filled the Profile settings "Information for landlord" section
     (required: first name, occupation, bio, email). The frontend uses
     this code to route the user to the corresponding settings anchor
-    instead of calling the LLM.
+    instead of calling the LLM. On success the generated draft is also
+    saved via `repo.upsert_listing_message_draft` so re-opening the
+    drawer later shows the same text without a second LLM call.
     """
     user = repo.get_user(session, username=username)
     if user is None:
@@ -410,7 +439,48 @@ def draft_listing_message(
         message = brain.draft_message(listing, contact)
     except RuntimeError as exc:
         raise HTTPException(status_code=503, detail=str(exc)) from exc
-    return DraftMessageDTO(message=message)
+    saved = repo.upsert_listing_message_draft(
+        session,
+        username=username,
+        listing_id=listing_id,
+        message=message,
+        source="llm",
+    )
+    return DraftMessageDTO(message=saved.message, source="llm", updated_at=saved.updated_at)
+
+
+@router.put(
+    "/users/{username}/listings/{listing_id}/draft-message",
+    response_model=DraftMessageDTO,
+)
+def save_listing_draft_message(
+    username: str,
+    listing_id: str,
+    body: SaveDraftMessageBody,
+    session: Session = Depends(get_session),
+) -> DraftMessageDTO:
+    """Persist the current (user-edited) draft. Upserts the row.
+
+    Used by the drawer's debounced auto-save so the last version the
+    user typed survives page reloads. Empty messages are rejected — use
+    no endpoint to "delete" today; overwrite with new text instead.
+    """
+    if repo.get_user(session, username=username) is None:
+        raise HTTPException(status_code=404, detail="User not found")
+    listing_row = session.get(ListingRow, listing_id)
+    if listing_row is None:
+        raise HTTPException(status_code=404, detail="Listing not found")
+    message = body.message.strip()
+    if not message:
+        raise HTTPException(status_code=422, detail="Draft message must not be empty")
+    saved = repo.upsert_listing_message_draft(
+        session,
+        username=username,
+        listing_id=listing_id,
+        message=message,
+        source="user",
+    )
+    return DraftMessageDTO(message=saved.message, source="user", updated_at=saved.updated_at)
 
 
 # --- Debug / smoke tests ---------------------------------------------------
