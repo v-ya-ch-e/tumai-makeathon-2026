@@ -22,9 +22,9 @@ export default {
         mono: ['Geist Mono', 'ui-monospace', 'SFMono-Regular', 'monospace'],
       },
       borderRadius: {
-        DEFAULT: '6px',
-        card: '10px',
-        drawer: '14px',
+        DEFAULT: '8px',
+        card: '16px',
+        drawer: '20px',
       },
       boxShadow: {
         drawer: '0 10px 30px rgba(34, 28, 23, 0.14)',

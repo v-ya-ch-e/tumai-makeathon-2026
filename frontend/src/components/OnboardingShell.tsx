@@ -17,7 +17,9 @@ export type OnboardingShellProps = {
   showProgress?: boolean
   hideIntro?: boolean
   aside?: ReactNode
-  progressSteps?: [ProgressStepLink, ProgressStepLink, ProgressStepLink, ProgressStepLink]
+  intro?: ReactNode
+  progressSteps?: [ProgressStepLink, ProgressStepLink, ProgressStepLink]
+  backHint?: string
 }
 
 export function OnboardingShell({
@@ -35,7 +37,9 @@ export function OnboardingShell({
   showProgress = true,
   hideIntro = false,
   aside,
+  intro,
   progressSteps,
+  backHint = 'Editable anytime',
 }: OnboardingShellProps) {
   const disabled = busy || nextDisabled
   const primaryLabel = busy ? 'Continuing…' : nextLabel
@@ -43,28 +47,29 @@ export function OnboardingShell({
   return (
     <div className="min-h-screen bg-canvas">
       <div className="app-shell">
-        <div className="mb-8 flex flex-col gap-5 border-b border-hairline pb-5 sm:flex-row sm:items-end sm:justify-between">
-          <div>
-            <p className="brand-wordmark">Sherlock Homes</p>
-            <p className="mt-1 max-w-xl text-[14px] text-ink-muted">
-              A focused rental search experience built to help you compare options with confidence.
-            </p>
-          </div>
-          {showProgress ? <ProgressSteps current={step} steps={progressSteps} /> : null}
+        <div className="mb-8">
+          <p className="brand-wordmark">Sherlock Homes</p>
+          <p className="mt-1 max-w-xl text-[14px] text-ink-muted">
+            A smarter search for places in Munich that fit your lifestyle.
+          </p>
         </div>
+
+        {intro ? <div className="mb-6">{intro}</div> : null}
 
         <div className={aside ? 'grid gap-8 lg:grid-cols-[minmax(0,1fr)_320px]' : 'grid gap-6'}>
           <section className="page-frame overflow-hidden">
             {hideIntro ? null : (
               <div className="border-b border-hairline px-6 py-8 sm:px-8 lg:px-10">
-                {eyebrow ? (
-                  <p className="section-kicker mb-3 text-accent">
-                    {eyebrow}
-                  </p>
+                {showProgress ? (
+                  <ProgressSteps
+                    current={step}
+                    steps={progressSteps}
+                    className="mb-3"
+                  />
+                ) : eyebrow ? (
+                  <p className="section-kicker mb-3 text-accent">{eyebrow}</p>
                 ) : null}
-                <h1 className="page-title max-w-2xl">
-                  {title}
-                </h1>
+                <h1 className="page-title max-w-2xl">{title}</h1>
                 {description ? (
                   <p className="body-copy mt-4 max-w-2xl">{description}</p>
                 ) : null}
@@ -84,7 +89,7 @@ export function OnboardingShell({
                       Back
                     </Button>
                   ) : (
-                    <p className="text-[13px] text-ink-muted">You can revisit these details later.</p>
+                    <p className="text-[13px] text-ink-muted">{backHint}</p>
                   )}
                 </div>
                 <div className="flex items-center justify-end gap-3">
@@ -94,7 +99,13 @@ export function OnboardingShell({
                       aria-hidden
                     />
                   ) : null}
-                  <Button variant="primary" type="button" onClick={onNext} disabled={disabled}>
+                  <Button
+                    variant="primary"
+                    type="button"
+                    onClick={onNext}
+                    disabled={disabled}
+                    iconRight={<ArrowRight />}
+                  >
                     {primaryLabel}
                   </Button>
                 </div>
@@ -106,5 +117,23 @@ export function OnboardingShell({
         </div>
       </div>
     </div>
+  )
+}
+
+function ArrowRight() {
+  return (
+    <svg
+      viewBox="0 0 16 16"
+      width="14"
+      height="14"
+      fill="none"
+      stroke="currentColor"
+      strokeWidth="1.8"
+      strokeLinecap="round"
+      strokeLinejoin="round"
+    >
+      <path d="M3 8h10" />
+      <path d="M9 4l4 4-4 4" />
+    </svg>
   )
 }

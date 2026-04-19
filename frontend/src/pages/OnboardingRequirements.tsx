@@ -1,8 +1,8 @@
-import { useEffect, useMemo, useState, type ReactNode } from 'react'
+import { useEffect, useState, type ReactNode } from 'react'
 import { useNavigate } from 'react-router-dom'
 import { OnboardingShell } from '../components/OnboardingShell'
 import { PlaceAutocomplete } from '../components/PlaceAutocomplete'
-import { Card, Chip, Input } from '../components/ui'
+import { Chip, Input } from '../components/ui'
 import { ApiError, getSearchProfile, putSearchProfile } from '../lib/api'
 import { onboardingSteps } from '../lib/onboarding'
 import { useSession } from '../lib/session'
@@ -46,7 +46,6 @@ export default function OnboardingRequirements() {
   const progressSteps = onboardingSteps({
     canAccessRequirements: Boolean(username),
     canAccessPreferences: hydrated,
-    canAccessDashboard: hydrated,
   })
 
   useEffect(() => {
@@ -80,11 +79,6 @@ export default function OnboardingRequirements() {
       cancelled = true
     }
   }, [isReady, username, navigate])
-
-  const priceSummary = useMemo(() => {
-    if (!state.priceMax) return 'Flexible'
-    return `Up to ${state.priceMax} EUR`
-  }, [state.priceMax])
 
   const validate = (): ValidationErrors => {
     const nextErrors: ValidationErrors = {}
@@ -173,59 +167,33 @@ export default function OnboardingRequirements() {
       step={2}
       eyebrow="Requirements"
       title="Set your requirements"
-      description="Start with the essentials: budget, key destinations, and move-in timing. Sherlock Homes keeps checking automatically every 30 minutes."
+      description="Just the essentials: budget, area, and timing."
       onBack={() => navigate('/onboarding/profile')}
       onNext={() => void handleNext()}
       busy={busy}
       footer={footer}
       progressSteps={progressSteps}
-      aside={
-        <Card className="panel p-6">
-          <p className="section-kicker">Current brief</p>
-          <div className="mt-5 space-y-3">
-            <SummaryRow label="Budget" value={priceSummary} />
-            <SummaryRow
-              label="Anchors"
-              value={state.mainLocations.length > 0 ? `${state.mainLocations.length} places` : 'Not set'}
-            />
-            <SummaryRow label="Travel" value={mobilitySummary(state)} />
-            <SummaryRow label="Listing type" value={modeLabel(state.mode)} />
-            <SummaryRow label="Updates" value="Every 30 min" />
-          </div>
-        </Card>
-      }
     >
-      <div className="overflow-hidden rounded-card border border-hairline bg-surface">
-        <RequirementSection
-          title="Monthly rent"
-          hint={errors.price ?? 'Set the highest monthly rent you would genuinely consider.'}
-          error={Boolean(errors.price)}
-        >
-          <div className="max-w-sm">
-            <Input
-              id="req-price-max"
-              type="number"
-              inputMode="numeric"
-              min={0}
-              max={5000}
-              value={state.priceMax}
-              onChange={(event) => {
-                setState({ ...state, priceMax: event.target.value })
-                if (errors.price) setErrors((prev) => ({ ...prev, price: undefined }))
-              }}
-              placeholder="Leave blank if flexible"
-            />
-          </div>
-        </RequirementSection>
+      <div className="space-y-6">
+        <Field label="Monthly rent (EUR)" error={errors.price}>
+          <Input
+            id="req-price-max"
+            type="number"
+            inputMode="numeric"
+            min={0}
+            max={5000}
+            value={state.priceMax}
+            onChange={(event) => {
+              setState({ ...state, priceMax: event.target.value })
+              if (errors.price) setErrors((prev) => ({ ...prev, price: undefined }))
+            }}
+            placeholder="900"
+          />
+        </Field>
 
-        <RequirementSection
-          title="Places that matter"
-          hint={
-            errors.locations ??
-            errors.commute ??
-            'Add the campus, workplace, or district you actually need to reach. Each place can carry its own commute limit.'
-          }
-          error={Boolean(errors.locations || errors.commute)}
+        <Field
+          label="Places that matter"
+          error={errors.locations ?? errors.commute}
         >
           <PlaceAutocomplete
             id="req-main-locations"
@@ -234,16 +202,11 @@ export default function OnboardingRequirements() {
               setState({ ...state, mainLocations })
               setErrors((prev) => ({ ...prev, locations: undefined, commute: undefined }))
             }}
+            placeholder="City, university or address"
           />
-          <p className="mt-3 text-[13px] leading-6 text-ink-muted">
-            Use the commute field to define your comfort limit. Leave it blank if the place matters, but timing does not.
-          </p>
-        </RequirementSection>
+        </Field>
 
-        <RequirementSection
-          title="How you can travel"
-          hint="Transit is always considered. Turn on bike or car only if you would genuinely use them in daily travel."
-        >
+        <Field label="How you can travel">
           <div className="flex flex-wrap gap-2">
             <Chip selected={state.hasBike} onToggle={() => setState({ ...state, hasBike: !state.hasBike })}>
               Bike
@@ -251,13 +214,17 @@ export default function OnboardingRequirements() {
             <Chip selected={state.hasCar} onToggle={() => setState({ ...state, hasCar: !state.hasCar })}>
               Car
             </Chip>
+            <span
+              role="note"
+              title="Always considered"
+              className="inline-flex min-h-9 cursor-default items-center rounded border border-hairline bg-surface px-3 py-1.5 text-[12px] text-ink-muted"
+            >
+              Public transport
+            </span>
           </div>
-        </RequirementSection>
+        </Field>
 
-        <RequirementSection
-          title="What to search"
-          hint="Choose what you want to see most often."
-        >
+        <Field label="What to search">
           <div className="flex flex-wrap gap-2">
             <Chip selected={state.mode === 'wg'} onToggle={() => setState({ ...state, mode: 'wg' })}>
               WG room
@@ -269,105 +236,53 @@ export default function OnboardingRequirements() {
               Either
             </Chip>
           </div>
-        </RequirementSection>
+        </Field>
 
-        <RequirementSection
-          title="Move-in window"
-          hint={errors.moveInWindow ?? 'Optional, but useful when timing rules out otherwise good listings.'}
-          error={Boolean(errors.moveInWindow)}
-        >
-          <div className="grid gap-4 sm:grid-cols-2">
-            <div>
-              <label htmlFor="req-move-from" className="data-label">
-                Earliest
-              </label>
-              <Input
-                id="req-move-from"
-                type="date"
-                value={state.moveInFrom}
-                max={state.moveInUntil || undefined}
-                onChange={(event) => {
-                  setState({ ...state, moveInFrom: event.target.value })
-                  if (errors.moveInWindow) setErrors((prev) => ({ ...prev, moveInWindow: undefined }))
-                }}
-                className="mt-2"
-              />
-            </div>
-            <div>
-              <label htmlFor="req-move-until" className="data-label">
-                Latest
-              </label>
-              <Input
-                id="req-move-until"
-                type="date"
-                value={state.moveInUntil}
-                min={state.moveInFrom || undefined}
-                onChange={(event) => {
-                  setState({ ...state, moveInUntil: event.target.value })
-                  if (errors.moveInWindow) setErrors((prev) => ({ ...prev, moveInWindow: undefined }))
-                }}
-                className="mt-2"
-              />
-            </div>
-          </div>
-        </RequirementSection>
-
-        <RequirementSection
-          title="Updates"
-          hint="Sherlock Homes keeps your shortlist fresh automatically, so you do not need to configure update timing."
-        >
-          <div className="rounded-card border border-hairline bg-surface-raised p-4">
-            <p className="text-[15px] font-semibold text-ink">Automatic every 30 minutes</p>
-            <p className="mt-2 text-[14px] leading-6 text-ink-muted">
-              After onboarding, Sherlock Homes keeps checking for new listings in the background. You can pause the search later from the dashboard.
-            </p>
-          </div>
-        </RequirementSection>
+        <div className="grid gap-5 sm:grid-cols-2">
+          <Field label="Move-in earliest" error={errors.moveInWindow}>
+            <Input
+              id="req-move-from"
+              type="date"
+              value={state.moveInFrom}
+              max={state.moveInUntil || undefined}
+              onChange={(event) => {
+                setState({ ...state, moveInFrom: event.target.value })
+                if (errors.moveInWindow) setErrors((prev) => ({ ...prev, moveInWindow: undefined }))
+              }}
+            />
+          </Field>
+          <Field label="Move-in latest">
+            <Input
+              id="req-move-until"
+              type="date"
+              value={state.moveInUntil}
+              min={state.moveInFrom || undefined}
+              onChange={(event) => {
+                setState({ ...state, moveInUntil: event.target.value })
+                if (errors.moveInWindow) setErrors((prev) => ({ ...prev, moveInWindow: undefined }))
+              }}
+            />
+          </Field>
+        </div>
       </div>
     </OnboardingShell>
   )
 }
 
-function RequirementSection({
-  title,
-  hint,
+function Field({
+  label,
+  error,
   children,
-  error = false,
 }: {
-  title: string
-  hint: string
+  label: ReactNode
+  error?: string
   children: ReactNode
-  error?: boolean
 }) {
   return (
-    <section className="grid gap-4 border-t border-hairline px-5 py-5 first:border-t-0 md:grid-cols-[200px_minmax(0,1fr)] md:gap-6 md:px-6">
-      <div>
-        <h2 className="text-[15px] font-semibold text-ink">{title}</h2>
-        <p className={`mt-1 text-[13px] leading-6 ${error ? 'text-bad' : 'text-ink-muted'}`}>{hint}</p>
-      </div>
-      <div>{children}</div>
-    </section>
-  )
-}
-
-function SummaryRow({ label, value }: { label: string; value: string }) {
-  return (
-    <div className="flex items-start justify-between gap-4 border-t border-hairline pt-3 first:border-t-0 first:pt-0">
-      <span className="data-label">{label}</span>
-      <span className="text-right text-[14px] text-ink">{value}</span>
+    <div>
+      <p className="mb-1.5 text-[14px] font-medium text-ink">{label}</p>
+      {children}
+      {error ? <p className="mt-1.5 text-[13px] text-bad">{error}</p> : null}
     </div>
   )
-}
-
-function mobilitySummary(state: LocalState): string {
-  if (state.hasBike && state.hasCar) return 'Transit, bike, and car'
-  if (state.hasBike) return 'Transit and bike'
-  if (state.hasCar) return 'Transit and car'
-  return 'Transit and walking'
-}
-
-function modeLabel(mode: Mode): string {
-  if (mode === 'wg') return 'WG room'
-  if (mode === 'flat') return 'Whole flat'
-  return 'WG room or flat'
 }

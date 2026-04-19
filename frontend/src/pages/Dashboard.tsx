@@ -1,11 +1,11 @@
 import clsx from 'clsx'
-import { useCallback, useEffect, useRef, useState, type ReactNode } from 'react'
+import { useCallback, useEffect, useRef, useState } from 'react'
 import { useLocation, useNavigate } from 'react-router-dom'
 import { AppTabs } from '../components/AppTabs'
 import { ListingDrawer } from '../components/ListingDrawer'
 import { ListingList } from '../components/ListingList'
 import { ListingMap } from '../components/ListingMap'
-import { Button, Card, StatusPill, type StatusPillTone } from '../components/ui'
+import { Button, StatusPill, type StatusPillTone } from '../components/ui'
 import { formatGermanDate } from '../lib/date'
 import {
   ApiError,
@@ -44,37 +44,25 @@ function huntToUiStatus(hunt: Hunt | null): UiStatus {
   return 'idle'
 }
 
-function formatDate(value: string | null): string {
-  return formatGermanDate(value)
-}
-
-function formatSchedule(profile: SearchProfile): string {
-  return `Every ${profile.rescanIntervalMinutes} min`
-}
-
-function formatMode(profile: SearchProfile): string {
-  if (profile.mode === 'both') return 'WG room or flat'
-  if (profile.mode === 'flat') return 'Whole flat'
-  return 'WG room'
-}
-
-function formatBudget(profile: SearchProfile): string {
-  return profile.priceMaxEur !== null ? `Up to ${profile.priceMaxEur} EUR` : 'Flexible'
-}
-
 function huntIdForUsername(username: string): string {
   return `user:${encodeURIComponent(username)}`
 }
 
-function topScore(listings: Listing[]): string {
+function topScorePct(listings: Listing[]): string {
   const scored = listings.map((listing) => listing.score).filter((score): score is number => score !== null)
   if (scored.length === 0) return '—'
   return `${Math.round(Math.max(...scored) * 100)}%`
 }
 
-function summaryCount(listings: Listing[]): string {
-  const scored = listings.filter((listing) => listing.score !== null)
-  return scored.length > 0 ? `${scored.length} reviewed` : 'No results yet'
+function moveInLabel(profile: SearchProfile): string {
+  if (profile.moveInFrom) return formatGermanDate(profile.moveInFrom)
+  return 'Flexible'
+}
+
+function moveInNote(profile: SearchProfile): string {
+  if (profile.moveInUntil) return `Until ${formatGermanDate(profile.moveInUntil)}`
+  if (profile.moveInFrom) return 'Open-ended'
+  return 'No earliest date'
 }
 
 export default function Dashboard() {
@@ -232,25 +220,6 @@ export default function Dashboard() {
     }
   }
 
-  const onRestart = async () => {
-    if (!username || !profile) return
-    setErrorMessage(null)
-    setUiStatus('starting')
-    try {
-      if (hunt && (hunt.status === 'running' || hunt.status === 'pending')) {
-        await stopHunt(hunt.id)
-      }
-      const nextHunt = await createHunt(username, { schedule: profile.schedule })
-      localStorage.setItem(LS_HUNT_ID, nextHunt.id)
-      setOpenListing(null)
-      setViewMode('list')
-      applyHunt(nextHunt)
-    } catch (error) {
-      setErrorMessage(error instanceof ApiError ? error.message : String(error))
-      setUiStatus('error')
-    }
-  }
-
   const onLogout = () => {
     localStorage.removeItem(LS_HUNT_ID)
     setOpenListing(null)
@@ -295,281 +264,177 @@ export default function Dashboard() {
 
   return (
     <div className="min-h-screen bg-canvas">
-      <div className="app-shell space-y-8">
-        <div className="flex flex-wrap items-center justify-between gap-4 border-b border-hairline pb-4">
+      <div className="app-shell space-y-6">
+        <header className="flex flex-wrap items-start justify-between gap-4">
           <div>
-            <p className="section-kicker text-accent">Sherlock Homes</p>
-            <p className="mt-1 text-[14px] text-ink-muted">Matches, profile, and live updates</p>
+            <p className="brand-wordmark">Sherlock Homes</p>
+            <p className="mt-1 max-w-xl text-[14px] text-ink-muted">
+              A smarter search for places in Munich that fit your lifestyle.
+            </p>
           </div>
-          <div className="flex flex-wrap items-center justify-end gap-3">
+          <div className="flex flex-wrap items-center justify-end gap-2">
             <AppTabs
               current="/dashboard"
               tabs={[
                 { label: 'Dashboard', href: '/dashboard' },
-                { label: 'Timeline', href: '/timeline' },
                 { label: 'Profile', href: '/profile' },
               ]}
             />
-            <Button variant="secondary" size="sm" onClick={onLogout}>
+            <button
+              type="button"
+              onClick={onLogout}
+              className="rounded-full border border-hairline bg-surface px-4 py-2 text-[13px] font-medium text-ink transition-colors hover:border-ink"
+            >
               Log out
-            </Button>
+            </button>
           </div>
-        </div>
+        </header>
 
-        <header className="page-frame overflow-hidden">
-          <div className="grid gap-8 lg:grid-cols-[minmax(0,1fr)_320px]">
-            <div className="border-b border-hairline px-6 py-8 lg:border-b-0 lg:border-r lg:px-8">
+        <section className="page-frame overflow-hidden">
+          <div className="flex flex-col gap-6 px-6 py-8 sm:px-8 lg:flex-row lg:items-start lg:justify-between lg:px-10">
+            <div className="min-w-0 flex-1">
               <div className="flex flex-wrap items-center gap-3">
-                <p className="section-kicker text-accent">Dashboard</p>
+                <h1 className="page-title">Your search</h1>
                 <StatusPill tone={statusPillTone(uiStatus)}>{statusLabel(uiStatus)}</StatusPill>
               </div>
-              <h1 className="page-title mt-4">{username}&apos;s search</h1>
-              <p className="body-copy mt-4 max-w-3xl">
-                See fresh matches, compare the trade-offs, and keep your shortlist moving with confidence.
+              <p className="body-copy mt-3 max-w-2xl">
+                Fresh matches and trade-offs to keep your shortlist moving.
               </p>
-
-              <dl className="mt-6 grid gap-4 sm:grid-cols-2 xl:grid-cols-4">
-                <HeaderFact label="Budget" value={formatBudget(profile)} />
-                <HeaderFact label="Search" value={formatMode(profile)} />
-                <HeaderFact
-                  label="Anchors"
-                  value={profile.mainLocations.length > 0 ? `${profile.mainLocations.length} places` : 'None yet'}
-                />
-                <HeaderFact label="Rescan" value={formatSchedule(profile)} />
-              </dl>
             </div>
-
-            <div className="px-6 py-6 lg:px-8">
-              <div className="space-y-4">
-                <ControlRow
-                  label="Search"
-                  value={hunt ? `Run ${hunt.id}` : 'Ready to start'}
-                  action={
-                    <div className="flex flex-wrap justify-end gap-2">
-                      {isActive ? (
-                        <Button variant="destructive" size="sm" onClick={() => void onStop()} disabled={isStopping}>
-                          {isStopping ? 'Stopping…' : 'Stop'}
-                        </Button>
-                      ) : (
-                        <Button
-                          variant="primary"
-                          size="sm"
-                          onClick={() => void (hunt ? onRestart() : onStart())}
-                          disabled={isStarting}
-                        >
-                          {isStarting ? 'Starting…' : hunt ? 'Restart' : 'Start'}
-                        </Button>
-                      )}
-                    </div>
-                  }
-                />
-                {errorMessage ? (
-                  <p className="rounded border border-bad/30 bg-bad/5 px-4 py-3 text-[13px] leading-6 text-bad">
-                    {errorMessage}
-                  </p>
-                ) : null}
-              </div>
+            <div className="shrink-0">
+              {isActive ? (
+                <Button
+                  variant="secondary"
+                  shape="pill"
+                  onClick={() => void onStop()}
+                  disabled={isStopping}
+                  iconLeft={<StopIcon />}
+                >
+                  {isStopping ? 'Stopping…' : 'Stop'}
+                </Button>
+              ) : (
+                <Button
+                  variant="primary"
+                  onClick={() => void onStart()}
+                  disabled={isStarting}
+                  iconLeft={<PlayIcon />}
+                >
+                  {isStarting ? 'Starting…' : hunt ? 'Resume' : 'Start search'}
+                </Button>
+              )}
             </div>
           </div>
 
           <div className="grid border-t border-hairline sm:grid-cols-3">
-            <StatStrip label="Listings" value={String(listings.length)} note={summaryCount(listings)} />
-            <StatStrip label="Best fit" value={topScore(listings)} note="Top match right now" />
-            <StatStrip
-              label="Move-in"
-              value={formatDate(profile.moveInFrom)}
-              note={profile.moveInUntil ? `Until ${formatDate(profile.moveInUntil)}` : 'Open-ended'}
-            />
+            <Stat label="Listings" value={String(listings.length)} />
+            <Stat label="Best fit" value={topScorePct(listings)} />
+            <Stat label="Move-in" value={moveInLabel(profile)} note={moveInNote(profile)} />
           </div>
-        </header>
 
-        {hunt === null ? (
-          <section className="grid gap-8 lg:grid-cols-[minmax(0,1fr)_320px]">
-            <Card className="panel p-8">
-              <p className="section-kicker text-accent">Ready when you are</p>
-              <h2 className="section-title mt-4">Your search is set.</h2>
-              <p className="body-copy mt-4 max-w-2xl">
-                Start a fresh search when you are ready. New matches and updates will appear here automatically.
+          {errorMessage ? (
+            <div className="border-t border-hairline px-6 py-4 sm:px-8 lg:px-10">
+              <p className="rounded-card border border-bad/30 bg-bad/5 px-4 py-3 text-[13px] leading-6 text-bad">
+                {errorMessage}
               </p>
-              <div className="mt-6 flex flex-wrap gap-3">
-                <Button variant="primary" onClick={() => void onStart()}>
-                  Start search
-                </Button>
-              </div>
-
-              <ol className="mt-8 divide-y divide-hairline border-t border-hairline">
-                <LaunchStep
-                  number="01"
-                  title="Collect listings"
-                  detail="Gather fresh places that match the basics of your search."
-                />
-                <LaunchStep
-                  number="02"
-                  title="Rank the fit"
-                  detail="Budget, commute, timing, and preferences help sort the best options to the top."
-                />
-                <LaunchStep
-                  number="03"
-                  title="Review your shortlist"
-                  detail="Open any place for the details, highlights, and the original listing."
-                />
-              </ol>
-            </Card>
-
-            <Card className="panel-muted p-6">
-              <p className="section-kicker">Search brief</p>
-              <div className="mt-5 space-y-3">
-                <BriefRow label="Budget" value={formatBudget(profile)} />
-                <BriefRow label="Search" value={formatMode(profile)} />
-                <BriefRow label="Rescan" value={formatSchedule(profile)} />
-                <BriefRow label="Preferences" value={`${profile.preferences.length} weighted signals`} />
-              </div>
-              <div className="mt-6 border-t border-hairline pt-4">
-                <p className="data-label">Places</p>
-                {profile.mainLocations.length > 0 ? (
-                  <ul className="mt-3 space-y-2 text-[14px] leading-6 text-ink">
-                    {profile.mainLocations.map((location) => (
-                      <li key={location.placeId}>
-                        {location.label}
-                        {location.maxCommuteMinutes !== null ? (
-                          <span className="text-ink-muted"> · up to {location.maxCommuteMinutes} min</span>
-                        ) : null}
-                      </li>
-                    ))}
-                  </ul>
-                ) : (
-                  <p className="mt-3 text-[14px] leading-6 text-ink-muted">No commute anchors saved yet.</p>
-                )}
-              </div>
-            </Card>
-          </section>
-        ) : (
-          <section className="page-frame overflow-hidden">
-            <div className="flex flex-wrap items-end justify-between gap-4 border-b border-hairline px-6 py-5">
-              <div>
-                <p className="section-kicker text-accent">Ranked results</p>
-                <h2 className="section-title mt-2">Best matches</h2>
-              </div>
-              <div className="flex items-center gap-3">
-                <p className="text-[13px] text-ink-muted">
-                  {listings.length} collected · {summaryCount(listings)}
-                </p>
-                <div className="flex overflow-hidden rounded border border-hairline">
-                  <button
-                    type="button"
-                    onClick={() => setViewMode('list')}
-                    className={clsx(
-                      'h-8 px-3 text-[12px] font-medium transition-colors',
-                      viewMode === 'list' ? 'bg-surface-raised text-ink' : 'bg-transparent text-ink-muted hover:text-ink',
-                    )}
-                  >
-                    List
-                  </button>
-                  <button
-                    type="button"
-                    onClick={() => setViewMode('map')}
-                    className={clsx(
-                      'h-8 border-l border-hairline px-3 text-[12px] font-medium transition-colors',
-                      viewMode === 'map' ? 'bg-surface-raised text-ink' : 'bg-transparent text-ink-muted hover:text-ink',
-                    )}
-                  >
-                    Map
-                  </button>
-                </div>
-              </div>
             </div>
-            {viewMode === 'list' ? (
-              <div className="max-h-[820px] overflow-y-auto">
-                <ListingList listings={listings} onOpen={(listing) => setOpenListing(listing)} />
-              </div>
-            ) : (
-              <div className="p-4">
-                <ListingMap listings={listings} onOpen={(listing) => setOpenListing(listing)} />
-              </div>
-            )}
-          </section>
-        )}
+          ) : null}
+        </section>
 
+        <section className="page-frame overflow-hidden">
+          <div className="flex flex-wrap items-end justify-between gap-4 border-b border-hairline px-6 py-5 sm:px-8 lg:px-10">
+            <h2 className="text-[30px] font-semibold text-ink">Best matches</h2>
+            <ViewToggle value={viewMode} onChange={setViewMode} />
+          </div>
+          {viewMode === 'list' ? (
+            <div className="max-h-[820px] overflow-y-auto">
+              <ListingList listings={listings} onOpen={(listing) => setOpenListing(listing)} />
+            </div>
+          ) : (
+            <div className="p-4">
+              <ListingMap listings={listings} onOpen={(listing) => setOpenListing(listing)} />
+            </div>
+          )}
+        </section>
       </div>
       <ListingDrawer open={openListing !== null} listing={openListing} onClose={() => setOpenListing(null)} />
     </div>
   )
 }
 
-function HeaderFact({ label, value }: { label: string; value: string }) {
-  return (
-    <div>
-      <dt className="data-label">{label}</dt>
-      <dd className="mt-1 text-[15px] text-ink">{value}</dd>
-    </div>
-  )
-}
-
-function ControlRow({
-  label,
-  value,
-  action,
-}: {
-  label: string
-  value: string
-  action: ReactNode
-}) {
-  return (
-    <div className="rounded border border-hairline bg-surface-raised px-4 py-4">
-      <div className="flex items-start justify-between gap-4">
-        <div>
-          <p className="data-label">{label}</p>
-          <p className="mt-1 text-[14px] leading-6 text-ink">{value}</p>
-        </div>
-        <div className="shrink-0">{action}</div>
-      </div>
-    </div>
-  )
-}
-
-function StatStrip({
+function Stat({
   label,
   value,
   note,
 }: {
   label: string
   value: string
-  note: string
+  note?: string
 }) {
   return (
-    <div className="border-t border-hairline px-5 py-4 first:border-t-0 sm:border-t-0 sm:border-l first:sm:border-l-0">
+    <div className="border-t border-hairline px-6 py-5 first:border-t-0 sm:border-t-0 sm:border-l first:sm:border-l-0 sm:px-8 lg:px-10">
       <p className="data-label">{label}</p>
-      <p className="mt-2 text-[24px] font-semibold text-ink">{value}</p>
-      <p className="mt-1 text-[13px] text-ink-muted">{note}</p>
+      <p className="mt-2 text-[34px] font-semibold leading-none text-ink">{value}</p>
+      {note ? <p className="mt-2 text-[13px] text-ink-muted">{note}</p> : null}
     </div>
   )
 }
 
-function LaunchStep({
-  number,
-  title,
-  detail,
+function ViewToggle({
+  value,
+  onChange,
 }: {
-  number: string
-  title: string
-  detail: string
+  value: 'list' | 'map'
+  onChange: (next: 'list' | 'map') => void
 }) {
   return (
-    <li className="grid gap-3 py-4 md:grid-cols-[52px_minmax(0,1fr)]">
-      <span className="font-mono text-[12px] text-ink-muted">{number}</span>
-      <div>
-        <p className="text-[15px] font-medium text-ink">{title}</p>
-        <p className="mt-1 text-[14px] leading-6 text-ink-muted">{detail}</p>
-      </div>
-    </li>
+    <div role="tablist" aria-label="View mode" className="inline-flex rounded-full bg-surface-raised p-1">
+      <ViewToggleButton active={value === 'list'} onClick={() => onChange('list')}>
+        List
+      </ViewToggleButton>
+      <ViewToggleButton active={value === 'map'} onClick={() => onChange('map')}>
+        Map
+      </ViewToggleButton>
+    </div>
   )
 }
 
-function BriefRow({ label, value }: { label: string; value: string }) {
+function ViewToggleButton({
+  active,
+  onClick,
+  children,
+}: {
+  active: boolean
+  onClick: () => void
+  children: string
+}) {
   return (
-    <div className="flex items-start justify-between gap-4 border-t border-hairline pt-3 first:border-t-0 first:pt-0">
-      <span className="data-label">{label}</span>
-      <span className="text-right text-[14px] text-ink">{value}</span>
-    </div>
+    <button
+      type="button"
+      role="tab"
+      aria-selected={active}
+      onClick={onClick}
+      className={clsx(
+        'rounded-full px-4 py-1.5 text-[13px] font-medium transition-colors',
+        active ? 'bg-surface text-ink shadow-sm' : 'text-ink-muted hover:text-ink',
+      )}
+    >
+      {children}
+    </button>
+  )
+}
+
+function StopIcon() {
+  return (
+    <svg viewBox="0 0 16 16" width="12" height="12" fill="none" stroke="currentColor" strokeWidth="1.6" strokeLinejoin="round">
+      <rect x="3.5" y="3.5" width="9" height="9" rx="1.5" />
+    </svg>
+  )
+}
+
+function PlayIcon() {
+  return (
+    <svg viewBox="0 0 16 16" width="12" height="12" fill="currentColor">
+      <path d="M5 3.5l8 4.5-8 4.5z" />
+    </svg>
   )
 }

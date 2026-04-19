@@ -1,8 +1,8 @@
 import clsx from 'clsx'
-import { useEffect, useMemo, useState, type KeyboardEvent, type ReactNode, type SVGProps } from 'react'
+import { useEffect, useState, type KeyboardEvent, type ReactNode, type SVGProps } from 'react'
 import { useNavigate } from 'react-router-dom'
 import { OnboardingShell } from '../components/OnboardingShell'
-import { Card, WeightSlider } from '../components/ui'
+import { WeightSlider } from '../components/ui'
 import { ApiError, getSearchProfile, putSearchProfile } from '../lib/api'
 import { onboardingSteps } from '../lib/onboarding'
 import { useSession } from '../lib/session'
@@ -17,7 +17,6 @@ type PreferenceItem = {
 type PreferenceGroup = {
   id: string
   title: string
-  intro: string
   items: PreferenceItem[]
 }
 
@@ -25,7 +24,6 @@ const GROUPS: PreferenceGroup[] = [
   {
     id: 'neighbourhood',
     title: 'Neighbourhood',
-    intro: 'Use this when the surrounding area changes whether you would actually take the room.',
     items: [
       { key: 'supermarket', label: 'Supermarket nearby', detail: 'Daily errands should stay easy without crossing town.' },
       { key: 'gym', label: 'Gym nearby', detail: 'Useful when training is part of the weekly routine.' },
@@ -42,7 +40,6 @@ const GROUPS: PreferenceGroup[] = [
   {
     id: 'place-features',
     title: 'Place features',
-    intro: 'Use these when the space itself should noticeably affect which places rise to the top.',
     items: [
       { key: 'furnished', label: 'Furnished', detail: 'Important if you want to move in with minimal setup.' },
       { key: 'balcony', label: 'Balcony', detail: 'Useful if outdoor private space matters.' },
@@ -57,7 +54,6 @@ const GROUPS: PreferenceGroup[] = [
   {
     id: 'living-style',
     title: 'Living style',
-    intro: 'Use these when the people and household feel matter as much as the room itself.',
     items: [
       { key: 'pet_friendly', label: 'Pet-friendly', detail: 'Relevant if pets need to be welcome.' },
       { key: 'non_smoking', label: 'Non-smoking', detail: 'Use this when smoking rules should strongly affect ranking.' },
@@ -129,7 +125,6 @@ export default function OnboardingPreferences() {
   const progressSteps = onboardingSteps({
     canAccessRequirements: Boolean(username),
     canAccessPreferences: Boolean(username),
-    canAccessDashboard: hydrated && profile !== null,
   })
 
   useEffect(() => {
@@ -161,27 +156,6 @@ export default function OnboardingPreferences() {
       cancelled = true
     }
   }, [isReady, username, navigate])
-
-  const selectedPreferences = useMemo(
-    () =>
-      GROUPS.flatMap((group) =>
-        group.items
-          .filter((item) => selected.has(item.key))
-          .map((item) => ({ ...item, weight: selected.get(item.key) ?? DEFAULT_WEIGHT })),
-      ),
-    [selected],
-  )
-
-  const selectedByGroup = useMemo(
-    () =>
-      GROUPS.map((group) => ({
-        ...group,
-        items: group.items
-          .filter((item) => selected.has(item.key))
-          .map((item) => ({ ...item, weight: selected.get(item.key) ?? DEFAULT_WEIGHT })),
-      })).filter((group) => group.items.length > 0),
-    [selected],
-  )
 
   const toggle = (key: string) => {
     setSelected((prev) => {
@@ -270,93 +244,19 @@ export default function OnboardingPreferences() {
       step={3}
       eyebrow="Preferences"
       title="Set your preferences"
-      hideIntro
+      description="Optional. Pick what should nudge results to the top."
       onBack={() => navigate('/onboarding/requirements')}
       onNext={() => void handleNext()}
       busy={busy}
       nextLabel="Save and view matches"
       footer={footer}
       progressSteps={progressSteps}
-      aside={
-        <Card className="panel p-6">
-          <p className="section-kicker">Selected now</p>
-          <p className="mt-4 text-[28px] font-semibold text-ink">{selectedPreferences.length}</p>
-          <p className="mt-1 text-[14px] leading-6 text-ink-muted">
-            preferences shaping your results.
-          </p>
-          {selectedPreferences.length > 0 ? (
-            <div className="mt-5 space-y-5">
-              {selectedByGroup.map((group) => (
-                <div key={group.id} className="border-t border-hairline pt-4 first:border-t-0 first:pt-0">
-                  <p className="data-label">{group.title}</p>
-                  <div className="mt-3 flex flex-wrap gap-2">
-                    {group.items.map((item) => (
-                      <span
-                        key={item.key}
-                        className="inline-flex items-center gap-2 rounded-full border border-hairline bg-surface-raised px-3 py-1.5 text-[13px] text-ink"
-                      >
-                        <span>{item.label}</span>
-                        <span className="text-[11px] uppercase tracking-[0.12em] text-ink-muted">
-                          {weightShortLabel(item.weight)}
-                        </span>
-                      </span>
-                    ))}
-                  </div>
-                </div>
-              ))}
-            </div>
-          ) : (
-            <p className="mt-4 text-[13px] leading-6 text-ink-muted">
-              Leaving this empty is valid. Use it only when specific details should move a listing up or down.
-            </p>
-          )}
-        </Card>
-      }
     >
-      <div>
-        <div className="mb-6 max-w-3xl">
-          <p className="section-kicker text-accent">Preferences</p>
-          <h1 className="page-title mt-3">Set your preferences</h1>
-          <p className="body-copy mt-4">
-            Only choose preferences that should change the order of otherwise similar places. Use the weight slider to decide what matters a little and what matters a lot.
-          </p>
-        </div>
-
-        <div className="overflow-hidden rounded-card border border-hairline bg-surface">
-        {/* <section className="border-b border-hairline px-5 py-5 md:px-6">
-          <div className="grid gap-4 md:grid-cols-[200px_minmax(0,1fr)] md:gap-6">
-            <div>
-              <h2 className="text-[15px] font-semibold text-ink">Quick starting points</h2>
-              <p className="mt-1 text-[13px] leading-6 text-ink-muted">
-                Presets add a few related preferences. You can still edit each one after applying them.
-              </p>
-            </div>
-            <div className="space-y-3">
-              {PRESETS.map((preset) => (
-                <button
-                  key={preset.label}
-                  type="button"
-                  onClick={() => applyPreset(preset.keys)}
-                  className="flex w-full items-start justify-between gap-4 rounded border border-hairline bg-surface-raised px-4 py-3 text-left transition-colors hover:border-ink hover:bg-surface"
-                >
-                  <span>
-                    <span className="block text-[14px] font-medium text-ink">{preset.label}</span>
-                    <span className="mt-1 block text-[13px] leading-6 text-ink-muted">{preset.detail}</span>
-                  </span>
-                  <span className="data-label">Apply</span>
-                </button>
-              ))}
-            </div>
-          </div>
-        </section> */}
-
+      <div className="space-y-8">
         {GROUPS.map((group) => (
-          <section key={group.id} className="border-t border-hairline px-5 py-5 first:border-t-0 md:px-6">
-            <div>
-              <h2 className="text-[15px] font-semibold text-ink">{group.title}</h2>
-              <p className="mt-1 max-w-2xl text-[13px] leading-6 text-ink-muted">{group.intro}</p>
-            </div>
-            <div className="mt-4 grid gap-4 sm:grid-cols-2">
+          <section key={group.id}>
+            <h2 className="text-[22px] font-semibold text-ink">{group.title}</h2>
+            <div className="mt-4 grid gap-3 sm:grid-cols-2 lg:grid-cols-3">
               {group.items.map((item) => {
                 const weight = selected.get(item.key)
                 const isSelected = weight !== undefined
@@ -374,7 +274,6 @@ export default function OnboardingPreferences() {
             </div>
           </section>
         ))}
-        </div>
       </div>
     </OnboardingShell>
   )
@@ -410,57 +309,33 @@ function PreferenceCard({
       onClick={onToggle}
       onKeyDown={handleKeyDown}
       className={clsx(
-        'rounded-card border p-4 transition-colors duration-150 ease-out focus:outline-none focus:ring-2 focus:ring-accent focus:ring-offset-2 focus:ring-offset-canvas',
+        'rounded-card border px-4 py-3 transition-colors duration-150 ease-out focus:outline-none focus:ring-2 focus:ring-accent focus:ring-offset-2 focus:ring-offset-canvas',
         selected
-          ? 'border-accent bg-[#f3e5d6]'
-          : 'border-hairline bg-surface-raised hover:border-[#cdbca9] hover:bg-surface',
+          ? 'border-accent bg-accent-muted'
+          : 'border-hairline bg-surface hover:border-ink/30',
       )}
     >
-      <div className="flex min-w-0 items-start justify-between gap-3">
-        <div className="min-w-0 flex-1">
-          <div className="flex min-w-0 items-start justify-between gap-3">
-            <div className="min-w-0">
-              <h3 className="text-[17px] font-medium leading-6 text-ink break-words">{item.label}</h3>
-              <p className="mt-0.5 text-[12px] tracking-[0.08em] text-ink-muted">
-                {selected ? weightLabel(weight) : 'Optional'}
-              </p>
-            </div>
-            <span
-              className={clsx(
-                'shrink-0 rounded-full border px-2 py-1 text-[10px] uppercase tracking-[0.16em]',
-                selected
-                  ? 'border-accent bg-surface text-accent'
-                  : 'border-hairline bg-canvas text-ink-muted',
-              )}
-            >
-              {selected ? 'On' : 'Off'}
-            </span>
-          </div>
-          <div className="mt-4 flex items-center gap-3">
-            <span
-              className={clsx(
-                'flex h-11 w-11 shrink-0 items-center justify-center rounded-full border',
-                selected
-                  ? 'border-accent bg-surface text-accent'
-                  : 'border-hairline bg-surface text-ink-muted',
-              )}
-              aria-hidden
-            >
-              <Icon className="h-5 w-5" />
-            </span>
-            <div className="min-w-0 text-[13px] leading-5 text-ink-muted">
-              {selected ? 'Affects ranking' : shortPreferenceCopy(item.key)}
-            </div>
-          </div>
-        </div>
+      <div className="flex min-w-0 items-center gap-3">
+        <span
+          className={clsx(
+            'flex h-10 w-10 shrink-0 items-center justify-center rounded-full',
+            selected ? 'bg-surface text-accent' : 'bg-surface-raised text-ink-muted',
+          )}
+          aria-hidden
+        >
+          <Icon className="h-5 w-5" />
+        </span>
+        <span className="min-w-0 truncate text-[15px] font-medium text-ink">
+          {item.label}
+        </span>
       </div>
       {selected ? (
         <div
-          className="mt-5 rounded border border-hairline bg-surface px-4 py-4"
+          className="mt-3 rounded border border-hairline bg-surface px-3 py-3"
           onClick={(event) => event.stopPropagation()}
           onMouseDown={(event) => event.stopPropagation()}
         >
-          <div className="flex flex-col gap-1 sm:flex-row sm:items-center sm:justify-between sm:gap-3">
+          <div className="flex items-center justify-between gap-3">
             <label htmlFor={sliderId} className="data-label">
               Importance
             </label>
@@ -471,50 +346,12 @@ function PreferenceCard({
             ariaLabel={`Importance of ${item.label}`}
             value={weight}
             onChange={onWeightChange}
-            className="mt-3"
+            className="mt-2"
           />
         </div>
       ) : null}
     </div>
   )
-}
-
-function weightShortLabel(weight: number): string {
-  if (weight >= 5) return 'Core'
-  if (weight >= 4) return 'High'
-  if (weight <= 2) return 'Light'
-  return 'Mid'
-}
-
-function shortPreferenceCopy(key: string): string {
-  const copy: Record<string, string> = {
-    supermarket: 'Daily errands',
-    gym: 'Training nearby',
-    park: 'Outdoor space',
-    cafe: 'Cafe culture',
-    bars: 'Night out',
-    library: 'Quiet study',
-    coworking: 'Work base',
-    nightlife: 'Lively area',
-    green_space: 'More green',
-    quiet_area: 'Less noise',
-    furnished: 'Move-in ready',
-    balcony: 'Private outdoor',
-    washing_machine: 'Laundry at home',
-    dishwasher: 'Easier sharing',
-    garden: 'Shared garden',
-    elevator: 'Step-free access',
-    bike_storage: 'Bike-friendly',
-    parking: 'Car access',
-    pet_friendly: 'Pets welcome',
-    non_smoking: 'Smoke-free',
-    lgbt_friendly: 'Safe fit',
-    student_household: 'Student flatshare',
-    couples_ok: 'Couple-friendly',
-    english_speaking: 'Easy language fit',
-  }
-
-  return copy[key] ?? 'Useful signal'
 }
 
 function iconProps(props: SVGProps<SVGSVGElement>) {

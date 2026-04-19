@@ -3,6 +3,7 @@ import { useNavigate } from 'react-router-dom'
 import { AppTabs } from '../components/AppTabs'
 import { Button, Card, Input, Select } from '../components/ui'
 import { ApiError, getSearchProfile, updateUser } from '../lib/api'
+import { formatGermanDate } from '../lib/date'
 import { useSession } from '../lib/session'
 import type { Gender, SearchProfile } from '../types'
 
@@ -108,104 +109,109 @@ export default function Profile() {
 
   return (
     <div className="min-h-screen bg-canvas">
-      <div className="app-shell space-y-8">
-        <div className="flex flex-wrap items-center justify-between gap-4 border-b border-hairline pb-4">
+      <div className="app-shell space-y-6">
+        <header className="flex flex-wrap items-start justify-between gap-4">
           <div>
-            <p className="section-kicker text-accent">Sherlock Homes</p>
-            <p className="mt-1 text-[14px] text-ink-muted">Profile and saved search</p>
+            <p className="brand-wordmark">Sherlock Homes</p>
+            <p className="mt-1 max-w-xl text-[14px] text-ink-muted">
+              A smarter search for places in Munich that fit your lifestyle.
+            </p>
           </div>
-          <div className="flex flex-wrap items-center justify-end gap-3">
+          <div className="flex flex-wrap items-center justify-end gap-2">
             <AppTabs
               current="/profile"
               tabs={[
                 { label: 'Dashboard', href: '/dashboard' },
-                { label: 'Timeline', href: '/timeline' },
                 { label: 'Profile', href: '/profile' },
               ]}
             />
-            <Button variant="secondary" size="sm" onClick={handleLogout}>
+            <button
+              type="button"
+              onClick={handleLogout}
+              className="rounded-full border border-hairline bg-surface px-4 py-2 text-[13px] font-medium text-ink transition-colors hover:border-ink"
+            >
               Log out
-            </Button>
-          </div>
-        </div>
-
-        <header className="page-frame overflow-hidden">
-          <div className="px-6 py-8 lg:px-8">
-            <p className="section-kicker text-accent">Profile</p>
-            <h1 className="page-title mt-4">Your profile</h1>
-            <p className="body-copy mt-4 max-w-3xl">
-              Update the personal details tied to your saved search. Your search settings stay in the next steps.
-            </p>
+            </button>
           </div>
         </header>
 
-        <section className="grid gap-8 lg:grid-cols-[minmax(0,1fr)_320px]">
-          <div className="overflow-hidden rounded-card border border-hairline bg-surface">
-            <FieldRow label="Username" hint="This stays the same so you can find your saved search again.">
-              <div className="rounded border border-hairline bg-surface-raised px-3 py-3 text-[15px] text-ink">
-                {user.username}
-              </div>
-            </FieldRow>
-
-            <FieldRow label="Age" hint={errors.age ?? 'Helpful when listings mention a preferred age range.'} error={Boolean(errors.age)}>
-              <Input
-                type="number"
-                min={16}
-                max={99}
-                step={1}
-                value={ageInput}
-                onChange={(event) => {
-                  setAgeInput(event.target.value)
-                  if (errors.age) setErrors((prev) => ({ ...prev, age: undefined }))
-                }}
-              />
-            </FieldRow>
-
-            <FieldRow
-              label="Notification email"
-              hint={errors.notificationEmail ?? 'Optional for future updates and alerts.'}
-              error={Boolean(errors.notificationEmail)}
-            >
-              <Input
-                type="email"
-                value={notificationEmailInput}
-                onChange={(event) => {
-                  setNotificationEmailInput(event.target.value)
-                  if (errors.notificationEmail) setErrors((prev) => ({ ...prev, notificationEmail: undefined }))
-                }}
-                aria-invalid={Boolean(errors.notificationEmail)}
-                placeholder="you@example.com"
-              />
-            </FieldRow>
-
-            <FieldRow label="Gender" hint={errors.gender ?? 'Used when a listing mentions a preferred fit.'} error={Boolean(errors.gender)}>
-              <Select
-                id="profile-gender"
-                value={gender}
-                onChange={(event) => {
-                  setGender(event.target.value as Gender | '')
-                  if (errors.gender) setErrors((prev) => ({ ...prev, gender: undefined }))
-                }}
-                aria-invalid={Boolean(errors.gender)}
-              >
-                <option value="" disabled>
-                  Select…
-                </option>
-                {GENDER_OPTIONS.map((option) => (
-                  <option key={option.value} value={option.value}>
-                    {option.label}
-                  </option>
-                ))}
-              </Select>
-            </FieldRow>
-
-            <div className="flex flex-wrap items-center justify-between gap-3 border-t border-hairline px-5 py-5 md:px-6">
-              <p className="text-[13px] text-ink-muted">Created {new Date(user.createdAt).toLocaleDateString()}</p>
-              <Button variant="primary" onClick={() => void handleSave()} disabled={busy}>
-                {busy ? 'Saving…' : 'Save changes'}
-              </Button>
+        <section className="grid gap-6 lg:grid-cols-[minmax(0,1fr)_320px]">
+          <div className="page-frame overflow-hidden">
+            <div className="px-6 py-6 sm:px-8">
+              <p className="section-kicker text-accent">Profile</p>
             </div>
-            {footer ? <div className="px-5 pb-5 md:px-6">{footer}</div> : null}
+            <div className="space-y-5 border-t border-hairline px-6 py-6 sm:px-8">
+              <Field label="Username" hint="Stays the same so you can find your saved search again.">
+                <div className="rounded border border-accent/40 bg-accent-muted/40 px-3 py-2.5 text-[15px] text-ink">
+                  {user.username}
+                </div>
+              </Field>
+
+              <Field label="Age" error={errors.age}>
+                <Input
+                  type="number"
+                  min={16}
+                  max={99}
+                  step={1}
+                  value={ageInput}
+                  onChange={(event) => {
+                    setAgeInput(event.target.value)
+                    if (errors.age) setErrors((prev) => ({ ...prev, age: undefined }))
+                  }}
+                />
+              </Field>
+
+              <Field
+                label={
+                  <>
+                    Email <span className="font-normal text-ink-muted">(optional)</span>
+                  </>
+                }
+                error={errors.notificationEmail}
+              >
+                <Input
+                  type="email"
+                  value={notificationEmailInput}
+                  onChange={(event) => {
+                    setNotificationEmailInput(event.target.value)
+                    if (errors.notificationEmail) setErrors((prev) => ({ ...prev, notificationEmail: undefined }))
+                  }}
+                  aria-invalid={Boolean(errors.notificationEmail)}
+                  placeholder="you@example.com"
+                />
+              </Field>
+
+              <Field label="Gender" error={errors.gender}>
+                <Select
+                  id="profile-gender"
+                  value={gender}
+                  onChange={(event) => {
+                    setGender(event.target.value as Gender | '')
+                    if (errors.gender) setErrors((prev) => ({ ...prev, gender: undefined }))
+                  }}
+                  aria-invalid={Boolean(errors.gender)}
+                >
+                  <option value="" disabled>
+                    Select…
+                  </option>
+                  {GENDER_OPTIONS.map((option) => (
+                    <option key={option.value} value={option.value}>
+                      {option.label}
+                    </option>
+                  ))}
+                </Select>
+              </Field>
+            </div>
+
+            <div className="border-t border-hairline px-6 py-5 sm:px-8">
+              {footer ? <div className="mb-4">{footer}</div> : null}
+              <div className="flex flex-wrap items-center justify-between gap-3">
+                <p className="text-[13px] text-ink-muted">Created {formatGermanDate(user.createdAt)}</p>
+                <Button variant="primary" onClick={() => void handleSave()} disabled={busy}>
+                  {busy ? 'Saving…' : 'Save changes'}
+                </Button>
+              </div>
+            </div>
           </div>
 
           <div className="space-y-6">
@@ -214,25 +220,42 @@ export default function Profile() {
               <div className="mt-5 space-y-4">
                 <JumpRow
                   title="Requirements"
-                  detail={profile ? 'Budget, key destinations, and search mode.' : 'Finish your profile first to set up the search.'}
                   disabled={!profile}
                   onClick={() => navigate('/onboarding/requirements')}
                 />
                 <JumpRow
                   title="Preferences"
-                  detail={profile ? 'Details that help sort similar places.' : 'Set your requirements first so preferences stay useful.'}
                   disabled={!profile}
                   onClick={() => navigate('/onboarding/preferences')}
                 />
               </div>
             </Card>
 
-            <Card className="panel-muted p-6">
+            <Card className="panel p-6">
               <p className="section-kicker">Current brief</p>
               <div className="mt-5 space-y-3">
-                <BriefRow label="Budget" value={profile ? (profile.priceMaxEur !== null ? `${profile.priceMaxEur} EUR` : 'Flexible') : 'Not saved'} />
-                <BriefRow label="Anchors" value={profile ? `${profile.mainLocations.length} places` : 'Not saved'} />
-                <BriefRow label="Preferences" value={profile ? `${profile.preferences.length} weighted` : 'Not saved'} />
+                <BriefRow
+                  label="Budget"
+                  value={
+                    profile
+                      ? profile.priceMaxEur !== null
+                        ? `${profile.priceMaxEur} EUR`
+                        : 'Flexible'
+                      : 'Not saved'
+                  }
+                />
+                <BriefRow
+                  label="Anchors"
+                  value={
+                    profile
+                      ? `${profile.mainLocations.length} ${profile.mainLocations.length === 1 ? 'place' : 'places'}`
+                      : 'Not saved'
+                  }
+                />
+                <BriefRow
+                  label="Preferences"
+                  value={profile ? `${profile.preferences.length} weighted` : 'Not saved'}
+                />
               </div>
             </Card>
           </div>
@@ -242,45 +265,42 @@ export default function Profile() {
   )
 }
 
-function FieldRow({
+function Field({
   label,
   hint,
-  error = false,
+  error,
   children,
 }: {
-  label: string
-  hint: string
-  error?: boolean
+  label: ReactNode
+  hint?: string
+  error?: string
   children: ReactNode
 }) {
   return (
-    <section className="grid gap-3 border-t border-hairline px-5 py-5 first:border-t-0 md:grid-cols-[190px_minmax(0,1fr)] md:gap-6 md:px-6">
-      <div>
-        <h2 className="text-[15px] font-semibold text-ink">{label}</h2>
-        <p className={`mt-1 text-[13px] leading-6 ${error ? 'text-bad' : 'text-ink-muted'}`}>{hint}</p>
-      </div>
-      <div>{children}</div>
-    </section>
+    <div>
+      <p className="mb-1.5 text-[14px] font-medium text-ink">{label}</p>
+      {children}
+      {error ? (
+        <p className="mt-1.5 text-[13px] text-bad">{error}</p>
+      ) : hint ? (
+        <p className="mt-1.5 text-[13px] text-ink-muted">{hint}</p>
+      ) : null}
+    </div>
   )
 }
 
 function JumpRow({
   title,
-  detail,
   disabled,
   onClick,
 }: {
   title: string
-  detail: string
   disabled: boolean
   onClick: () => void
 }) {
   return (
-    <div className="flex items-start justify-between gap-4 border-t border-hairline pt-4 first:border-t-0 first:pt-0">
-      <div>
-        <p className="text-[15px] font-medium text-ink">{title}</p>
-        <p className="mt-1 text-[13px] leading-6 text-ink-muted">{detail}</p>
-      </div>
+    <div className="flex items-center justify-between gap-4 border-t border-hairline pt-4 first:border-t-0 first:pt-0">
+      <p className="text-[18px] font-semibold text-ink">{title}</p>
       <Button variant="secondary" size="sm" onClick={onClick} disabled={disabled}>
         Edit
       </Button>
@@ -290,7 +310,7 @@ function JumpRow({
 
 function BriefRow({ label, value }: { label: string; value: string }) {
   return (
-    <div className="flex items-start justify-between gap-4 border-t border-hairline pt-3 first:border-t-0 first:pt-0">
+    <div className="flex items-center justify-between gap-4 border-t border-hairline pt-3 first:border-t-0 first:pt-0">
       <span className="data-label">{label}</span>
       <span className="text-right text-[14px] text-ink">{value}</span>
     </div>

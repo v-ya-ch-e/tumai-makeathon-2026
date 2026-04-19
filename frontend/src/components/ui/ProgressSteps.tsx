@@ -2,11 +2,10 @@ import clsx from 'clsx'
 import type { ReactElement, ReactNode } from 'react'
 import { Link } from 'react-router-dom'
 
-const DEFAULT_LABELS: [string, string, string, string] = [
+const DEFAULT_LABELS: [string, string, string] = [
   'Profile',
   'Requirements',
   'Preferences',
-  'Dashboard',
 ]
 
 export type ProgressStepLink = {
@@ -17,13 +16,13 @@ export type ProgressStepLink = {
 
 export type ProgressStepsProps = {
   current: 1 | 2 | 3 | 'dashboard'
-  labels?: [string, string, string, string]
-  steps?: [ProgressStepLink, ProgressStepLink, ProgressStepLink, ProgressStepLink]
+  labels?: [string, string, string]
+  steps?: [ProgressStepLink, ProgressStepLink, ProgressStepLink, ProgressStepLink?]
   className?: string
 }
 
 function isActive(current: ProgressStepsProps['current'], stepIndex: number): boolean {
-  if (current === 'dashboard') return stepIndex === 3
+  if (current === 'dashboard') return false
   return current === (stepIndex + 1) as 1 | 2 | 3
 }
 
@@ -34,51 +33,44 @@ export function ProgressSteps({
   className,
 }: ProgressStepsProps): ReactElement {
   const parts: ReactNode[] = []
-  for (let i = 0; i < 4; i += 1) {
-    const num = String(i + 1).padStart(2, '0')
+  for (let i = 0; i < 3; i += 1) {
     const active = isActive(current, i)
     const step = steps?.[i]
     const label = step?.label ?? labels[i]
     const interactive = Boolean(step?.href) && !step?.disabled
-    const textClassName = clsx(
-      'font-sans text-[13px]',
-      active ? 'font-semibold text-ink' : 'font-normal text-ink-muted',
+    const labelClassName = clsx(
+      'font-mono text-[11px] uppercase tracking-[0.22em]',
+      active ? 'text-accent' : 'text-ink-muted',
       interactive ? 'transition-colors group-hover:text-ink' : null,
       step?.disabled ? 'opacity-50' : null,
     )
     if (i > 0) {
       parts.push(
-        <span key={`sep-${i}`} className="text-ink-muted/70">
-          ·
+        <span key={`sep-${i}`} className="text-ink-muted/60" aria-hidden>
+          —
         </span>,
       )
     }
-    const content = (
-      <>
-        <span
-          className={clsx(
-            'font-mono text-[13px]',
-            active ? 'font-semibold text-ink' : 'font-normal text-ink-muted',
-            interactive ? 'transition-colors group-hover:text-ink' : null,
-            step?.disabled ? 'opacity-50' : null,
-          )}
-        >
-          {num}
-        </span>
-        <span className={textClassName}>{label}</span>
-      </>
-    )
     parts.push(
       interactive ? (
-        <Link key={`step-${i}`} to={step?.href ?? '#'} className="group inline-flex items-baseline gap-1.5">
-          {content}
+        <Link key={`step-${i}`} to={step?.href ?? '#'} className={clsx('group inline-flex items-baseline', labelClassName)}>
+          {label}
         </Link>
       ) : (
-        <span key={`step-${i}`} className="inline-flex items-baseline gap-1.5">
-          {content}
+        <span key={`step-${i}`} className={labelClassName}>
+          {label}
         </span>
       ),
     )
   }
-  return <p className={clsx('flex flex-nowrap items-center gap-2 overflow-x-auto whitespace-nowrap text-[13px]', className)}>{parts}</p>
+  return (
+    <p
+      className={clsx(
+        'flex flex-nowrap items-center gap-3 overflow-x-auto whitespace-nowrap',
+        className,
+      )}
+    >
+      {parts}
+    </p>
+  )
 }

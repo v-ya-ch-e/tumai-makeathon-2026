@@ -4,44 +4,33 @@
 
 :root {
   /* Sherlock Homes brand palette */
-  --canvas: #f4f1ea;
-  --surface: rgba(249, 245, 238, 0.9);
-  --surface-raised: #e7ddcf;
-  --hairline: rgba(31, 36, 48, 0.12);
+  --canvas: #f5f3f0;
+  --surface: #ffffff;
+  --surface-raised: #f1efea;
+  --hairline: rgba(31, 36, 48, 0.1);
 
   /* Text */
   --ink: #1f2430;
   --ink-muted: #5b6675;
 
   /* Accent */
-  --accent: #6e2c3a;
-  --accent-muted: #d9c7b4;
+  --accent: #1f7a4d;
+  --accent-muted: #d9eae0;
 
   /* Signal */
-  --good: #56745f;
+  --good: #1f7a4d;
   --warn: #b08d57;
   --bad: #8d4250;
 }
 
 html {
   min-height: 100%;
-  background:
-    radial-gradient(circle at top left, rgba(176, 141, 87, 0.18), transparent 28%),
-    linear-gradient(180deg, #f8f4ed 0%, var(--canvas) 42%, #efe7da 100%);
+  background: var(--canvas);
 }
 
 body {
   min-height: 100vh;
-  background:
-    linear-gradient(135deg, rgba(255, 255, 255, 0.18), transparent 45%),
-    repeating-linear-gradient(
-      90deg,
-      rgba(31, 36, 48, 0.015) 0,
-      rgba(31, 36, 48, 0.015) 1px,
-      transparent 1px,
-      transparent 24px
-    ),
-    linear-gradient(180deg, rgba(110, 44, 58, 0.03), transparent 28%);
+  background: var(--canvas);
   color: var(--ink);
   font-family: Manrope, ui-sans-serif, system-ui, sans-serif;
   font-size: 15px;
@@ -80,19 +69,14 @@ body {
 
   .page-frame {
     @apply rounded-card border border-hairline bg-surface;
-    box-shadow: 0 18px 60px rgba(31, 36, 48, 0.08);
-    backdrop-filter: blur(14px);
   }
 
   .panel {
     @apply rounded-card border border-hairline bg-surface;
-    box-shadow: 0 14px 40px rgba(31, 36, 48, 0.05);
-    backdrop-filter: blur(14px);
   }
 
   .panel-muted {
-    @apply rounded-card border border-hairline bg-surface-raised;
-    box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.35);
+    @apply rounded-card border border-hairline bg-surface;
   }
 
   .section-kicker {

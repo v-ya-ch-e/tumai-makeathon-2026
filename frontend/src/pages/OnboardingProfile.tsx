@@ -1,8 +1,8 @@
 import clsx from 'clsx'
-import { useMemo, useState, type ReactNode } from 'react'
+import { useState, type ReactNode, type SVGProps } from 'react'
 import { useNavigate } from 'react-router-dom'
 import { OnboardingShell } from '../components/OnboardingShell'
-import { Card, Input, Select } from '../components/ui'
+import { Input, Select } from '../components/ui'
 import { ApiError, createUser, getUser } from '../lib/api'
 import { onboardingSteps } from '../lib/onboarding'
 import { useSession } from '../lib/session'
@@ -41,8 +41,6 @@ export default function OnboardingProfile() {
   const [busy, setBusy] = useState(false)
   const [footer, setFooter] = useState<ReactNode>(null)
   const [errors, setErrors] = useState<FieldErrors>({})
-
-  const usernamePreview = useMemo(() => usernameInput.trim() || 'your-name', [usernameInput])
 
   const switchMode = (nextMode: Mode) => {
     if (nextMode === mode || busy) return
@@ -141,11 +139,11 @@ export default function OnboardingProfile() {
   return (
     <OnboardingShell
       step={1}
-      eyebrow={createMode ? 'Profile' : 'Resume'}
+      eyebrow="Profile"
       title={createMode ? 'Create your profile' : 'Welcome back'}
       description={
         createMode
-          ? 'Tell us what matters to you. Sherlock Homes searches WG-Gesucht, ranks the best fits, and keeps them in one clear shortlist.'
+          ? 'Tell us about yourself to find the best options.'
           : 'Use the same username you created earlier to reopen your saved search.'
       }
       onNext={() => void (createMode ? handleCreate() : handleSignIn())}
@@ -156,71 +154,31 @@ export default function OnboardingProfile() {
       progressSteps={onboardingSteps({
         canAccessRequirements: false,
         canAccessPreferences: false,
-        canAccessDashboard: false,
       })}
-      aside={
-        createMode ? (
-          <div className="space-y-4">
-            <Card className="panel-muted p-6">
-              <p className="section-kicker">Saved profile</p>
-              <p className="mt-4 text-[24px] font-semibold text-ink">{usernamePreview}</p>
-              <dl className="mt-5 space-y-3">
-                <PreviewRow label="Age" value={ageInput || 'Not set'} />
-                <PreviewRow
-                  label="Gender"
-                  value={gender ? GENDER_OPTIONS.find((option) => option.value === gender)?.label ?? 'Not set' : 'Not set'}
-                />
-              </dl>
-            </Card>
-            <Card className="panel p-6">
-              <p className="text-[15px] font-semibold text-ink">What Sherlock Homes does</p>
-              <ul className="mt-3 space-y-2 text-[14px] leading-6 text-ink-muted">
-                <li>Finds relevant WG-Gesucht listings for your budget and preferred area.</li>
-                <li>Ranks them by fit, including commute, timing, and the preferences you choose.</li>
-                <li>Keeps your shortlist fresh automatically, so you only review the strongest options.</li>
-              </ul>
-            </Card>
-          </div>
-        ) : (
-          <Card className="panel p-6">
-            <p className="text-[15px] font-semibold text-ink">Resume note</p>
-            <p className="mt-3 text-[14px] leading-6 text-ink-muted">
-              Use the same username you used before on this device. If you do not have one yet, create a profile first.
-            </p>
-          </Card>
-        )
-      }
+      intro={createMode ? <FeatureStrip /> : null}
     >
       <div className="space-y-6">
         <ModeTabs mode={mode} onChange={switchMode} disabled={busy} />
 
-        <div className="overflow-hidden rounded-card border border-hairline bg-surface-raised">
-          {createMode ? (
-            <>
-              <FieldRow
-                label="Username"
-                hint="Choose a short name you will recognize when you return."
-                error={errors.username}
-              >
-                <Input
-                  id="onboarding-username"
-                  value={usernameInput}
-                  onChange={(event) => {
-                    setUsernameInput(event.target.value)
-                    if (errors.username) setErrors((prev) => ({ ...prev, username: undefined }))
-                  }}
-                  autoComplete="username"
-                  maxLength={40}
-                  aria-invalid={Boolean(errors.username)}
-                  placeholder="Enter your username here"
-                />
-              </FieldRow>
+        {createMode ? (
+          <div className="space-y-5">
+            <Field label="Username" error={errors.username}>
+              <Input
+                id="onboarding-username"
+                value={usernameInput}
+                onChange={(event) => {
+                  setUsernameInput(event.target.value)
+                  if (errors.username) setErrors((prev) => ({ ...prev, username: undefined }))
+                }}
+                autoComplete="username"
+                maxLength={40}
+                aria-invalid={Boolean(errors.username)}
+                placeholder="e.g. alex_b"
+              />
+            </Field>
 
-              <FieldRow
-                label="Age"
-                hint="Helpful when listings mention a preferred age range."
-                error={errors.age}
-              >
+            <div className="grid gap-5 md:grid-cols-2">
+              <Field label="Age" error={errors.age}>
                 <Input
                   id="onboarding-age"
                   type="number"
@@ -233,36 +191,11 @@ export default function OnboardingProfile() {
                     if (errors.age) setErrors((prev) => ({ ...prev, age: undefined }))
                   }}
                   aria-invalid={Boolean(errors.age)}
-                  placeholder="Enter your age here"
+                  placeholder="28"
                 />
-              </FieldRow>
+              </Field>
 
-              <FieldRow
-                label="Notification email"
-                hint="Optional for future updates and alerts."
-                error={errors.notificationEmail}
-              >
-                <Input
-                  id="onboarding-notification-email"
-                  type="email"
-                  value={notificationEmailInput}
-                  onChange={(event) => {
-                    setNotificationEmailInput(event.target.value)
-                    if (errors.notificationEmail) {
-                      setErrors((prev) => ({ ...prev, notificationEmail: undefined }))
-                    }
-                  }}
-                  autoComplete="email"
-                  aria-invalid={Boolean(errors.notificationEmail)}
-                  placeholder="Enter your email here"
-                />
-              </FieldRow>
-
-              <FieldRow
-                label="Gender"
-                hint="Used when a listing mentions a preferred fit."
-                error={errors.gender}
-              >
+              <Field label="Gender" error={errors.gender}>
                 <Select
                   id="onboarding-gender"
                   value={gender}
@@ -281,37 +214,57 @@ export default function OnboardingProfile() {
                     </option>
                   ))}
                 </Select>
-              </FieldRow>
-            </>
-          ) : (
-            <FieldRow
-              label="Username"
-              hint="Use the same username you created earlier."
-              error={errors.signInUsername}
+              </Field>
+            </div>
+
+            <Field
+              label={
+                <>
+                  Email <span className="font-normal text-ink-muted">(optional)</span>
+                </>
+              }
+              error={errors.notificationEmail}
             >
               <Input
-                id="signin-username"
-                value={signInUsername}
+                id="onboarding-notification-email"
+                type="email"
+                value={notificationEmailInput}
                 onChange={(event) => {
-                  setSignInUsername(event.target.value)
-                  if (errors.signInUsername) {
-                    setErrors((prev) => ({ ...prev, signInUsername: undefined }))
+                  setNotificationEmailInput(event.target.value)
+                  if (errors.notificationEmail) {
+                    setErrors((prev) => ({ ...prev, notificationEmail: undefined }))
                   }
                 }}
-                autoComplete="username"
-                maxLength={40}
-                aria-invalid={Boolean(errors.signInUsername)}
-                placeholder="Enter your username here"
-                onKeyDown={(event) => {
-                  if (event.key === 'Enter' && !busy) {
-                    event.preventDefault()
-                    void handleSignIn()
-                  }
-                }}
+                autoComplete="email"
+                aria-invalid={Boolean(errors.notificationEmail)}
+                placeholder="you@example.com"
               />
-            </FieldRow>
-          )}
-        </div>
+            </Field>
+          </div>
+        ) : (
+          <Field label="Username" error={errors.signInUsername}>
+            <Input
+              id="signin-username"
+              value={signInUsername}
+              onChange={(event) => {
+                setSignInUsername(event.target.value)
+                if (errors.signInUsername) {
+                  setErrors((prev) => ({ ...prev, signInUsername: undefined }))
+                }
+              }}
+              autoComplete="username"
+              maxLength={40}
+              aria-invalid={Boolean(errors.signInUsername)}
+              placeholder="Enter your username"
+              onKeyDown={(event) => {
+                if (event.key === 'Enter' && !busy) {
+                  event.preventDefault()
+                  void handleSignIn()
+                }
+              }}
+            />
+          </Field>
+        )}
       </div>
     </OnboardingShell>
   )
@@ -327,7 +280,11 @@ function ModeTabs({
   disabled: boolean
 }) {
   return (
-    <div role="tablist" aria-label="Account mode" className="inline-flex rounded border border-hairline bg-surface-raised p-1">
+    <div
+      role="tablist"
+      aria-label="Account mode"
+      className="inline-flex rounded-full bg-surface-raised p-1"
+    >
       <ModeTabButton active={mode === 'create'} disabled={disabled} onClick={() => onChange('create')}>
         Create profile
       </ModeTabButton>
@@ -357,8 +314,8 @@ function ModeTabButton({
       disabled={disabled}
       onClick={onClick}
       className={clsx(
-        'rounded px-3 py-2 text-[14px] font-medium transition-colors duration-150 ease-out',
-        active ? 'bg-surface text-ink' : 'text-ink-muted hover:text-ink',
+        'rounded-full px-4 py-2 text-[14px] font-medium transition-colors duration-150 ease-out',
+        active ? 'bg-surface text-ink shadow-sm' : 'text-ink-muted hover:text-ink',
       )}
     >
       {children}
@@ -366,33 +323,118 @@ function ModeTabButton({
   )
 }
 
-function FieldRow({
+function Field({
   label,
-  hint,
   error,
   children,
 }: {
-  label: string
-  hint: string
+  label: ReactNode
   error?: string
   children: ReactNode
 }) {
   return (
-    <section className="grid gap-3 border-t border-hairline px-5 py-5 first:border-t-0 md:grid-cols-[190px_minmax(0,1fr)] md:gap-6 md:px-6">
-      <div>
-        <h2 className="text-[15px] font-semibold text-ink">{label}</h2>
-        <p className={clsx('mt-1 text-[13px] leading-6', error ? 'text-bad' : 'text-ink-muted')}>{error ?? hint}</p>
-      </div>
-      <div>{children}</div>
-    </section>
+    <div>
+      <p className="mb-1.5 text-[14px] font-medium text-ink">{label}</p>
+      {children}
+      {error ? <p className="mt-1.5 text-[13px] text-bad">{error}</p> : null}
+    </div>
   )
 }
 
-function PreviewRow({ label, value }: { label: string; value: string }) {
+function FeatureStrip() {
   return (
-    <div className="flex items-start justify-between gap-4 border-t border-hairline pt-3 first:border-t-0 first:pt-0">
-      <span className="data-label">{label}</span>
-      <span className="text-right text-[14px] text-ink">{value}</span>
+    <div className="grid gap-4 sm:grid-cols-3">
+      <FeatureCard
+        icon={<SearchIcon />}
+        title="Find"
+        body="Listings that match your budget and area."
+      />
+      <FeatureCard
+        icon={<ListCheckIcon />}
+        title="Rank"
+        body="Best-fit results surface first."
+      />
+      <FeatureCard
+        icon={<SparkleIcon />}
+        title="Refresh"
+        body="Your shortlist stays up to date."
+      />
     </div>
+  )
+}
+
+function FeatureCard({
+  icon,
+  title,
+  body,
+}: {
+  icon: ReactNode
+  title: string
+  body: string
+}) {
+  return (
+    <div className="flex items-start gap-3 rounded-card border border-hairline bg-surface px-4 py-4">
+      <span
+        aria-hidden
+        className="flex h-9 w-9 shrink-0 items-center justify-center rounded-full bg-accent-muted text-accent"
+      >
+        {icon}
+      </span>
+      <div>
+        <p className="text-[15px] font-semibold text-ink">{title}</p>
+        <p className="mt-0.5 text-[13px] leading-5 text-ink-muted">{body}</p>
+      </div>
+    </div>
+  )
+}
+
+function iconProps(props: SVGProps<SVGSVGElement>) {
+  return {
+    viewBox: '0 0 24 24',
+    width: 18,
+    height: 18,
+    fill: 'none',
+    stroke: 'currentColor',
+    strokeWidth: 1.7,
+    strokeLinecap: 'round' as const,
+    strokeLinejoin: 'round' as const,
+    ...props,
+  }
+}
+
+function SearchIcon(props: SVGProps<SVGSVGElement>) {
+  return (
+    <svg {...iconProps(props)}>
+      <circle cx="11" cy="11" r="6" />
+      <path d="M20 20l-3.5-3.5" />
+    </svg>
+  )
+}
+
+function ListCheckIcon(props: SVGProps<SVGSVGElement>) {
+  return (
+    <svg {...iconProps(props)}>
+      <path d="M9 6h11" />
+      <path d="M9 12h11" />
+      <path d="M9 18h11" />
+      <path d="M4 6l1.5 1.5L7 6" />
+      <path d="M4 12l1.5 1.5L7 12" />
+      <path d="M4 18l1.5 1.5L7 18" />
+    </svg>
+  )
+}
+
+function SparkleIcon(props: SVGProps<SVGSVGElement>) {
+  return (
+    <svg {...iconProps(props)}>
+      <path d="M12 4v4" />
+      <path d="M12 16v4" />
+      <path d="M4 12h4" />
+      <path d="M16 12h4" />
+      <path d="M7 7l2 2" />
+      <path d="M15 15l2 2" />
+      <path d="M17 7l-2 2" />
+      <path d="M9 15l-2 2" />
+    </svg>
   )
 }
