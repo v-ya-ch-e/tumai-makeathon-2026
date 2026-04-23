@@ -73,3 +73,4 @@ wg_state.json
 *.ca-bundle
 *.crt
 *.key
+AWS_IP.txt
